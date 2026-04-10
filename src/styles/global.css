@@ -1,0 +1,389 @@
+/* ============================================
+   TITAN AI DESIGN SYSTEM
+   Takeoff Copilot — Construction AI Operations
+   
+   Colors: Black / Off-white / Titan Orange-Red
+   Fonts: Bebas Neue (display) + Outfit (body) + JetBrains Mono (data)
+   Motifs: "//" separators, ticker-tape angles, military precision
+   ============================================ */
+
+:root {
+  /* —— TITAN CORE PALETTE —— */
+  --titan-black: #0A0A0A;
+  --titan-dark: #111111;
+  --titan-card: #161616;
+  --titan-surface: #1A1A1A;
+  --titan-border: #222222;
+  --titan-border-light: #333333;
+  --titan-muted: #444444;
+  
+  --titan-red: #E8372C;
+  --titan-red-dim: #B82A22;
+  --titan-red-glow: rgba(232, 55, 44, 0.15);
+  --titan-red-bright: #FF4438;
+  
+  --titan-white: #F5F5F0;
+  --titan-offwhite: #E8E8E3;
+  --titan-text: #CCCCCC;
+  --titan-text-dim: #888888;
+  --titan-text-muted: #555555;
+  
+  --titan-green: #2ECC71;
+  --titan-green-bg: rgba(46, 204, 113, 0.1);
+  --titan-yellow: #F1C40F;
+  --titan-yellow-bg: rgba(241, 196, 15, 0.1);
+  --titan-red-bg: rgba(232, 55, 44, 0.1);
+  --titan-blue: #3498DB;
+  
+  /* —— TYPOGRAPHY —— */
+  --font-display: 'Bebas Neue', Impact, sans-serif;
+  --font-body: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  
+  /* —— SPACING —— */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+  
+  /* —— MOTION —— */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 300ms;
+  --duration-slow: 500ms;
+  
+  /* —— ANGLES (ticker tape motif) —— */
+  --angle-sm: 1.5deg;
+  --angle-md: 3deg;
+}
+
+/* —— RESET & BASE —— */
+*, *::before, *::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--titan-black);
+  color: var(--titan-text);
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+::selection {
+  background: var(--titan-red);
+  color: var(--titan-white);
+}
+
+/* —— SCROLLBAR —— */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--titan-dark);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--titan-border-light);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--titan-muted);
+}
+
+/* —— TYPOGRAPHY SYSTEM —— */
+h1, h2, h3, h4, h5 {
+  font-family: var(--font-display);
+  color: var(--titan-white);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  line-height: 1.1;
+}
+
+h1 { font-size: 3rem; }
+h2 { font-size: 2.25rem; }
+h3 { font-size: 1.5rem; }
+h4 { font-size: 1.25rem; }
+
+.text-red { color: var(--titan-red); }
+.text-dim { color: var(--titan-text-dim); }
+.text-muted { color: var(--titan-text-muted); }
+.text-mono { font-family: var(--font-mono); }
+
+/* —— "//" SEPARATOR MOTIF —— */
+.titan-separator {
+  color: var(--titan-red);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  margin: 0 6px;
+  opacity: 0.7;
+}
+
+.titan-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 500;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+}
+
+/* —— BUTTONS —— */
+.btn {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 0.8rem;
+  letter-spacing: 0.5px;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-primary {
+  background: var(--titan-red);
+  color: var(--titan-white);
+}
+.btn-primary:hover {
+  background: var(--titan-red-bright);
+  box-shadow: 0 0 20px var(--titan-red-glow);
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--titan-text);
+  border: 1px solid var(--titan-border-light);
+}
+.btn-secondary:hover {
+  border-color: var(--titan-red);
+  color: var(--titan-red);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--titan-text-dim);
+  padding: 8px 14px;
+}
+.btn-ghost:hover {
+  color: var(--titan-white);
+  background: var(--titan-surface);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* —— CARDS —— */
+.card {
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border);
+  border-radius: 3px;
+  padding: var(--space-lg);
+  transition: border-color var(--duration-normal) var(--ease-out);
+}
+.card:hover {
+  border-color: var(--titan-border-light);
+}
+.card-highlight {
+  border-left: 3px solid var(--titan-red);
+}
+
+/* —— BADGE / TAG —— */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.badge-high {
+  background: var(--titan-green-bg);
+  color: var(--titan-green);
+  border: 1px solid rgba(46, 204, 113, 0.2);
+}
+.badge-medium {
+  background: var(--titan-yellow-bg);
+  color: var(--titan-yellow);
+  border: 1px solid rgba(241, 196, 15, 0.2);
+}
+.badge-low {
+  background: var(--titan-red-bg);
+  color: var(--titan-red);
+  border: 1px solid rgba(232, 55, 44, 0.2);
+}
+
+/* —— TABLE —— */
+.titan-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.titan-table thead {
+  background: var(--titan-dark);
+  border-bottom: 2px solid var(--titan-red);
+}
+.titan-table th {
+  padding: 10px 14px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--titan-red);
+  white-space: nowrap;
+}
+.titan-table td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--titan-border);
+  color: var(--titan-text);
+}
+.titan-table tbody tr:nth-child(even) {
+  background: rgba(255,255,255,0.015);
+}
+.titan-table tbody tr:hover {
+  background: var(--titan-red-glow);
+}
+
+/* —— INPUT —— */
+.input {
+  background: var(--titan-dark);
+  border: 1px solid var(--titan-border);
+  border-radius: 2px;
+  color: var(--titan-text);
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  padding: 10px 14px;
+  width: 100%;
+  transition: border-color var(--duration-fast);
+  outline: none;
+}
+.input:focus {
+  border-color: var(--titan-red);
+  box-shadow: 0 0 0 1px var(--titan-red-glow);
+}
+.input::placeholder {
+  color: var(--titan-text-muted);
+}
+
+textarea.input {
+  resize: vertical;
+  min-height: 120px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+/* —— STAT CARD —— */
+.stat-card {
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border);
+  border-radius: 3px;
+  padding: var(--space-lg) var(--space-xl);
+  text-align: center;
+}
+.stat-card .stat-value {
+  font-family: var(--font-display);
+  font-size: 2.5rem;
+  color: var(--titan-white);
+  line-height: 1;
+}
+.stat-card .stat-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  margin-top: 6px;
+}
+
+/* —— ANIMATIONS —— */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes slideInLeft {
+  from { opacity: 0; transform: translateX(-16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+.animate-in {
+  animation: fadeInUp var(--duration-slow) var(--ease-out) both;
+}
+.animate-fade {
+  animation: fadeIn var(--duration-normal) var(--ease-out) both;
+}
+
+/* —— TICKER TAPE ACCENT —— */
+.ticker-accent {
+  position: relative;
+  overflow: hidden;
+}
+.ticker-accent::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--titan-red), transparent);
+}
+
+/* —— LOADING SPINNER —— */
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--titan-border);
+  border-top-color: var(--titan-red);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* —— RESPONSIVE —— */
+@media (max-width: 768px) {
+  h1 { font-size: 2rem; }
+  h2 { font-size: 1.5rem; }
+  h3 { font-size: 1.25rem; }
+  
+  .card { padding: var(--space-md); }
+}
