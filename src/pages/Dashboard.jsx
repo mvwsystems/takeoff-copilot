@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers } from 'lucide-react'
-import { SYSTEM_PROMPT } from '../utils/prompts'
+import { SYSTEM_PROMPT, SCREENING_PROMPT } from '../utils/prompts'
 import './Dashboard.css'
 
 export default function Dashboard() {
@@ -15,6 +15,8 @@ export default function Dashboard() {
   const [processingAll, setProcessingAll] = useState(false)
   const [pdfLoading, setPdfLoading] = useState(false)
   const [pdfProgress, setPdfProgress] = useState('')
+  const [screenings, setScreenings] = useState({})
+  const [screeningSheet, setScreeningSheet] = useState(null) // idx of sheet currently being screened
   const [apiKey, setApiKey] = useState(localStorage.getItem('tc_api_key') || '')
   const [showKeyInput, setShowKeyInput] = useState(!localStorage.getItem('tc_api_key'))
   const fileInputRef = useRef(null)
@@ -107,12 +109,108 @@ export default function Dashboard() {
     const newResults = { ...results }
     delete newResults[idx]
     setResults(newResults)
+    const newScreenings = { ...screenings }
+    delete newScreenings[idx]
+    setScreenings(newScreenings)
     if (activeImage >= idx && activeImage > 0) setActiveImage(activeImage - 1)
   }
 
-  const analyzeSheet = async (idx) => {
+  const callApi = async (img, prompt, maxTokens = 4096) => {
+    let base64Data = img.base64
+    let mType = img.mediaType
+
+    if (base64Data.length > 5 * 1024 * 1024) {
+      const resizeCanvas = document.createElement('canvas')
+      const resizeCtx = resizeCanvas.getContext('2d')
+      const tempImg = new Image()
+      await new Promise((resolve, reject) => {
+        tempImg.onload = resolve
+        tempImg.onerror = reject
+        tempImg.src = img.preview
+      })
+      const maxDim = 2000
+      let w = tempImg.width, h = tempImg.height
+      if (w > maxDim || h > maxDim) {
+        const ratio = Math.min(maxDim / w, maxDim / h)
+        w = Math.round(w * ratio)
+        h = Math.round(h * ratio)
+      }
+      resizeCanvas.width = w
+      resizeCanvas.height = h
+      resizeCtx.drawImage(tempImg, 0, 0, w, h)
+      const resizedUrl = resizeCanvas.toDataURL('image/jpeg', 0.85)
+      base64Data = resizedUrl.split(',')[1]
+      mType = 'image/jpeg'
+    }
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: maxTokens,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image', source: { type: 'base64', media_type: mType, data: base64Data } }
+          ]
+        }]
+      })
+    })
+
+    if (!response.ok) {
+      const errBody = await response.text()
+      throw new Error(`API ${response.status}: ${errBody.substring(0, 200)}`)
+    }
+
+    const data = await response.json()
+    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error))
+    const text = data.content.map(b => b.type === 'text' ? b.text : '').join('')
+    let parsed
+    try {
+      parsed = JSON.parse(text.replace(/```json\s?|```/g, '').trim())
+    } catch {
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (jsonMatch) parsed = JSON.parse(jsonMatch[0])
+      else throw new Error('Could not parse response as JSON')
+    }
+    return parsed
+  }
+
+  const screenSheet = async (idx) => {
     const img = images[idx]
     if (!img || !apiKey) {
+      if (!apiKey) setShowKeyInput(true)
+      return
+    }
+    setScreeningSheet(idx)
+    setError(null)
+
+    try {
+      const parsed = await callApi(img, SCREENING_PROMPT + '\n\nGrade this construction plan sheet. Respond ONLY with the JSON object, no other text.', 512)
+      const screening = parsed.plan_screening || parsed
+      setScreenings(prev => ({ ...prev, [idx]: screening }))
+
+      if (screening.grade !== 'C') {
+        await analyzeSheet(idx, true)
+      }
+    } catch (err) {
+      console.error('Screening error:', err)
+      setError(`Screening failed for sheet ${idx + 1}: ${err.message}`)
+    } finally {
+      setScreeningSheet(null)
+    }
+  }
+
+  const analyzeSheet = async (idx, skipApiKeyCheck = false) => {
+    const img = images[idx]
+    if (!img || (!apiKey && !skipApiKeyCheck)) {
       if (!apiKey) setShowKeyInput(true)
       return
     }
@@ -121,72 +219,10 @@ export default function Dashboard() {
     setError(null)
 
     try {
-      let base64Data = img.base64
-      let mType = img.mediaType
-
-      if (base64Data.length > 5 * 1024 * 1024) {
-        const resizeCanvas = document.createElement('canvas')
-        const resizeCtx = resizeCanvas.getContext('2d')
-        const tempImg = new Image()
-        await new Promise((resolve, reject) => {
-          tempImg.onload = resolve
-          tempImg.onerror = reject
-          tempImg.src = img.preview
-        })
-        const maxDim = 2000
-        let w = tempImg.width, h = tempImg.height
-        if (w > maxDim || h > maxDim) {
-          const ratio = Math.min(maxDim / w, maxDim / h)
-          w = Math.round(w * ratio)
-          h = Math.round(h * ratio)
-        }
-        resizeCanvas.width = w
-        resizeCanvas.height = h
-        resizeCtx.drawImage(tempImg, 0, 0, w, h)
-        const resizedUrl = resizeCanvas.toDataURL('image/jpeg', 0.85)
-        base64Data = resizedUrl.split(',')[1]
-        mType = 'image/jpeg'
-      }
-
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 4096,
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'text', text: SYSTEM_PROMPT + '\n\n---\n\nAnalyze this construction plan sheet and produce a complete quantity takeoff. Extract every identifiable item. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.' },
-              { type: 'image', source: { type: 'base64', media_type: mType, data: base64Data } }
-            ]
-          }]
-        })
-      })
-
-      if (!response.ok) {
-        const errBody = await response.text()
-        throw new Error(`API ${response.status}: ${errBody.substring(0, 200)}`)
-      }
-
-      const data = await response.json()
-      if (data.error) throw new Error(data.error.message || JSON.stringify(data.error))
-
-      const text = data.content.map(b => b.type === 'text' ? b.text : '').join('')
-      let parsed
-      try {
-        parsed = JSON.parse(text.replace(/```json\s?|```/g, '').trim())
-      } catch {
-        const jsonMatch = text.match(/\{[\s\S]*\}/)
-        if (jsonMatch) parsed = JSON.parse(jsonMatch[0])
-        else throw new Error('Could not parse response as JSON')
-      }
-
+      const parsed = await callApi(
+        img,
+        SYSTEM_PROMPT + '\n\n---\n\nAnalyze this construction plan sheet and produce a complete quantity takeoff. Extract every identifiable item. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.'
+      )
       setResults(prev => ({ ...prev, [idx]: parsed }))
       setActiveImage(idx)
       setActiveTab('takeoff')
@@ -310,8 +346,14 @@ export default function Dashboard() {
                 <div className="sheet-status">
                   {results[i] ? (
                     <span className="text-green">✓ {results[i].items.length} items</span>
+                  ) : screeningSheet === i ? (
+                    <span className="text-dim">Screening...</span>
                   ) : loadingSheet === i ? (
                     <span className="text-red">Analyzing...</span>
+                  ) : screenings[i]?.grade === 'C' ? (
+                    <span className="text-red">Grade C — declined</span>
+                  ) : screenings[i] ? (
+                    <span className="text-dim">Grade {screenings[i].grade} — analyzing</span>
                   ) : 'Not analyzed'}
                 </div>
               </div>
@@ -360,14 +402,21 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="sheet-header-actions">
-                {!results[activeImage] && (
-                  <button className="btn btn-primary" onClick={() => analyzeSheet(activeImage)} disabled={loading}>
-                    {loadingSheet === activeImage ? 'Analyzing...' : 'Analyze Sheet'}
+                {!results[activeImage] && screenings[activeImage]?.grade !== 'C' && (
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => screenings[activeImage] ? analyzeSheet(activeImage) : screenSheet(activeImage)}
+                    disabled={loading || screeningSheet === activeImage}
+                  >
+                    {screeningSheet === activeImage ? 'Screening...' : loadingSheet === activeImage ? 'Analyzing...' : 'Analyze Sheet'}
                   </button>
                 )}
                 {results[activeImage] && (
                   <>
-                    <button className="btn btn-ghost" onClick={() => { const r = { ...results }; delete r[activeImage]; setResults(r) }}>
+                    <button className="btn btn-ghost" onClick={() => {
+                      const r = { ...results }; delete r[activeImage]; setResults(r)
+                      const s = { ...screenings }; delete s[activeImage]; setScreenings(s)
+                    }}>
                       <RotateCcw size={14} /> Re-analyze
                     </button>
                     <button className="btn btn-secondary" onClick={() => exportCSV(false)}>
@@ -400,7 +449,16 @@ export default function Dashboard() {
 
             {/* TAB CONTENT */}
             <div className="tab-content">
-              {/* LOADING */}
+              {/* LOADING — SCREENING */}
+              {screeningSheet === activeImage && (
+                <div className="loading-state">
+                  <div className="spinner" />
+                  <p>Screening plan quality...</p>
+                  <span className="text-muted" style={{ fontSize: '0.75rem' }}>Evaluating callout quality, scale, and plan complexity</span>
+                </div>
+              )}
+
+              {/* LOADING — ANALYSIS */}
               {loadingSheet === activeImage && (
                 <div className="loading-state">
                   <div className="spinner" />
@@ -409,17 +467,61 @@ export default function Dashboard() {
                 </div>
               )}
 
+              {/* GRADE C DECLINE */}
+              {screenings[activeImage]?.grade === 'C' && !results[activeImage] && screeningSheet !== activeImage && (
+                <div className="grade-c-decline animate-fade">
+                  <div className="grade-c-icon">C</div>
+                  <h3>Plan Grade C — Analysis Declined</h3>
+                  <p className="grade-c-reason">{screenings[activeImage].grade_rationale}</p>
+                  <div className="grade-c-detail">
+                    <p>
+                      Based on our calibration data, dense or poorly-labeled plan sets produce AI takeoffs with less than 50% accuracy — unreliable for pricing. Submitting a Grade C output for bid would expose you to significant change order risk.
+                    </p>
+                    <p style={{ marginTop: 10 }}>
+                      <strong>What to submit instead:</strong> Single-story pad site plans with labeled pipe profiles, explicit size and material callouts, a visible scale bar, and a complete title block. Clean Pape-Dawson style plans routinely score 100% accuracy.
+                    </p>
+                  </div>
+                  <div className="grade-c-actions">
+                    <button className="btn btn-ghost" onClick={() => {
+                      const s = { ...screenings }; delete s[activeImage]; setScreenings(s)
+                    }}>
+                      <RotateCcw size={14} /> Try Different Sheet
+                    </button>
+                    <button className="btn btn-secondary" onClick={() => analyzeSheet(activeImage)} disabled={loading}>
+                      Run Anyway (not recommended)
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* ERROR */}
-              {error && loadingSheet !== activeImage && (
+              {error && loadingSheet !== activeImage && screeningSheet !== activeImage && (
                 <div className="error-bar">
                   <strong>Error:</strong> {error}
-                  <button className="btn btn-primary" style={{ marginLeft: 12 }} onClick={() => { setError(null); analyzeSheet(activeImage) }}>Retry</button>
+                  <button className="btn btn-primary" style={{ marginLeft: 12 }} onClick={() => { setError(null); screenSheet(activeImage) }}>Retry</button>
                 </div>
               )}
 
               {/* TAKEOFF TAB */}
               {activeTab === 'takeoff' && result && (
                 <div className="takeoff-content animate-fade">
+                  {/* PLAN GRADE BANNER */}
+                  {(screenings[activeImage] || result.plan_screening) && (() => {
+                    const sc = screenings[activeImage] || result.plan_screening
+                    const gradeClass = sc.grade === 'A' ? 'grade-banner-a' : sc.grade === 'B' ? 'grade-banner-b' : 'grade-banner-c'
+                    return (
+                      <div className={`grade-banner ${gradeClass}`}>
+                        <div className="grade-banner-left">
+                          <span className="grade-badge">{sc.grade}</span>
+                          <div>
+                            <div className="grade-banner-label">{sc.grade_label}</div>
+                            <div className="grade-banner-accuracy">Expected accuracy: {sc.expected_accuracy_range}</div>
+                          </div>
+                        </div>
+                        <div className="grade-banner-rationale">{sc.grade_rationale}</div>
+                      </div>
+                    )
+                  })()}
                   {result.sheet_info && (
                     <div className="sheet-meta-bar">
                       {[['Project', result.sheet_info.project_name], ['Sheet', result.sheet_info.sheet_number], ['Title', result.sheet_info.sheet_title], ['Scale', result.sheet_info.scale], ['Engineer', result.sheet_info.engineer]]
@@ -533,7 +635,7 @@ export default function Dashboard() {
               )}
 
               {/* EMPTY STATES */}
-              {activeTab === 'takeoff' && !result && loadingSheet !== activeImage && (
+              {activeTab === 'takeoff' && !result && loadingSheet !== activeImage && screeningSheet !== activeImage && screenings[activeImage]?.grade !== 'C' && (
                 <div className="loading-state">
                   <ChevronRight size={32} style={{ opacity: 0.2 }} />
                   <p>Click "Analyze Sheet" to run the AI takeoff</p>

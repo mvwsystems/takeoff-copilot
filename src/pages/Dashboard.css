@@ -353,6 +353,131 @@
   animation: fadeInUp var(--duration-normal) var(--ease-out) both;
 }
 
+/* —— PLAN GRADE BANNER —— */
+.grade-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  padding: 12px 16px;
+  border-radius: 3px;
+  margin-bottom: var(--space-md);
+  border: 1px solid;
+}
+.grade-banner-a {
+  background: rgba(34, 197, 94, 0.06);
+  border-color: rgba(34, 197, 94, 0.2);
+}
+.grade-banner-b {
+  background: rgba(234, 179, 8, 0.06);
+  border-color: rgba(234, 179, 8, 0.2);
+}
+.grade-banner-c {
+  background: rgba(232, 55, 44, 0.06);
+  border-color: rgba(232, 55, 44, 0.2);
+}
+.grade-banner-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.grade-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+.grade-banner-a .grade-badge { background: rgba(34, 197, 94, 0.15); color: var(--titan-green); }
+.grade-banner-b .grade-badge { background: rgba(234, 179, 8, 0.15); color: var(--titan-yellow); }
+.grade-banner-c .grade-badge { background: rgba(232, 55, 44, 0.15); color: var(--titan-red); }
+.grade-banner-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.grade-banner-a .grade-banner-label { color: var(--titan-green); }
+.grade-banner-b .grade-banner-label { color: var(--titan-yellow); }
+.grade-banner-c .grade-banner-label { color: var(--titan-red); }
+.grade-banner-accuracy {
+  font-size: 0.68rem;
+  color: var(--titan-text-muted);
+  font-family: var(--font-mono);
+  margin-top: 2px;
+}
+.grade-banner-rationale {
+  font-size: 0.76rem;
+  color: var(--titan-text-dim);
+  line-height: 1.6;
+  max-width: 600px;
+}
+
+/* —— GRADE C DECLINE —— */
+.grade-c-decline {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--space-2xl) var(--space-xl);
+  max-width: 600px;
+  margin: 0 auto;
+  height: 100%;
+}
+.grade-c-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(232, 55, 44, 0.1);
+  border: 1px solid rgba(232, 55, 44, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--titan-red);
+  margin-bottom: var(--space-lg);
+}
+.grade-c-decline h3 {
+  color: var(--titan-white);
+  font-size: 1.05rem;
+  margin-bottom: var(--space-md);
+}
+.grade-c-reason {
+  color: var(--titan-red);
+  font-size: 0.82rem;
+  line-height: 1.65;
+  margin-bottom: var(--space-lg);
+  padding: 12px 16px;
+  background: rgba(232, 55, 44, 0.06);
+  border: 1px solid rgba(232, 55, 44, 0.15);
+  border-radius: 3px;
+  text-align: left;
+}
+.grade-c-detail {
+  font-size: 0.8rem;
+  color: var(--titan-text-dim);
+  line-height: 1.7;
+  text-align: left;
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border);
+  border-radius: 3px;
+  padding: 16px;
+  margin-bottom: var(--space-lg);
+}
+.grade-c-detail strong { color: var(--titan-white); }
+.grade-c-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
 /* RESPONSIVE */
 @media (max-width: 768px) {
   .sidebar { width: 180px; }
