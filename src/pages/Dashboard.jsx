@@ -380,31 +380,315 @@ export default function Dashboard() {
     setProcessingAll(false)
   }
 
+  const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`
+
+  const buildRiskFlagsForExport = (result, geo) => {
+    const lines = []
+    const rm = result?.risk_and_misses
+    // geotech
+    if (geo?.flags) {
+      const gf = geo.flags
+      if (gf.dewatering_required)       lines.push(['GEOTECH', 'WARN', 'Dewatering Required',          gf.dewatering_note || ''])
+      if (gf.rock_excavation_required)  lines.push(['GEOTECH', 'WARN', 'Rock Excavation Required',      gf.rock_note || ''])
+      if (gf.lime_stabilization_required) lines.push(['GEOTECH', 'WARN', 'Lime Stabilization Required', gf.lime_note || ''])
+      if (gf.select_fill_required)      lines.push(['GEOTECH', 'WARN', 'Imported Select Fill Required', gf.select_fill_note || ''])
+      if (gf.spoil_removal_required)    lines.push(['GEOTECH', 'WARN', 'Spoil Haul-Off Required',       gf.spoil_note || ''])
+    }
+    if (rm?.geotech?.geotech_flags) lines.push(['GEOTECH', 'INFO', 'AI Geotech Note', rm.geotech.geotech_flags])
+    // scope gaps
+    const CHECKS = [
+      ['trench safety', 'Trench Safety (OSHA >5 ft)', 'Required on trenches deeper than 5 ft. Often excluded.'],
+      ['erosion control', 'Erosion Control / SWPPP', 'Silt fence, rock dams, inlet protection. Required on permitted sites.'],
+      ['testing', 'Testing & Inspection', 'Mandrel, pressure, leakage, video, compaction. May be at contractor expense.'],
+      ['traffic control', 'Traffic Control', 'Required for ROW work. TCP, flaggers, signs — $5–15K depending on road class.'],
+      ['mobilization', 'Mobilization / Demobilization', 'Equipment move-in, site setup. Commonly omitted.'],
+      ['permits', 'Permit & Inspection Fees', 'City/county/TxDOT permits and tap fees.'],
+    ]
+    const allItems = result?.items || []
+    CHECKS.forEach(([key, label, hint]) => {
+      const inScope = allItems.some(it => (it.description + ' ' + (it.notes || '')).toLowerCase().includes(key))
+      const aiGap = (rm?.scope_gaps || []).find(s => s.item?.toLowerCase().includes(key.split(' ')[0]))
+      if (aiGap?.status === 'NOT APPLICABLE') return
+      lines.push(['SCOPE', inScope || aiGap?.status === 'OK' ? 'OK' : 'MISSING', label, inScope ? 'In scope' : aiGap?.note || hint])
+    })
+    // low confidence
+    allItems.filter(it => it.confidence === 'LOW').forEach(it => {
+      lines.push(['INFERRED', 'VERIFY', it.description, it.notes || ''])
+    })
+    return lines
+  }
+
   const exportCSV = (allSheets = false) => {
-    const headers = allSheets 
-      ? ['Sheet', 'Item No', 'Category', 'Description', 'Unit', 'Quantity', 'Confidence', 'Notes']
-      : ['Item No', 'Category', 'Description', 'Unit', 'Quantity', 'Confidence', 'Notes']
-    
-    const rows = []
+    const date = new Date().toISOString().split('T')[0]
     const entries = allSheets ? Object.entries(results) : [[activeImage, results[activeImage]]]
-    
-    entries.forEach(([idx, result]) => {
-      if (!result) return
-      result.items.forEach(item => {
-        const row = allSheets ? [images[idx]?.name || `Sheet ${+idx + 1}`] : []
-        row.push(item.item_no, item.category, `"${item.description.replace(/"/g, '""')}"`, item.unit, item.quantity, item.confidence, `"${(item.notes || '').replace(/"/g, '""')}"`)
-        rows.push(row)
+    const firstResult = entries[0]?.[1]
+    const sc = screenings[activeImage] || firstResult?.plan_screening
+    const si = firstResult?.sheet_info || {}
+
+    const lines = []
+    // header block
+    lines.push(['TITAN AI TAKEOFF REPORT'])
+    lines.push(['Generated:', date, '', 'takeoffcopilot.com'])
+    lines.push([])
+    lines.push(['Project:', q(si.project_name || '—')])
+    lines.push(['Engineer:', q(si.engineer || '—')])
+    if (geotechResult?.report_info?.engineer_firm) lines.push(['Geotech Firm:', q(geotechResult.report_info.engineer_firm)])
+    if (sc) lines.push(['Plan Grade:', `${sc.grade} — ${sc.grade_label}`, '', q(sc.grade_rationale)])
+    lines.push([])
+    // data
+    lines.push([allSheets ? 'Sheet' : '', 'Item No', 'Category', 'Description', 'Unit', 'Quantity', 'Confidence', 'Notes'].filter((_, i) => allSheets || i > 0))
+    entries.forEach(([idx, res]) => {
+      if (!res) return
+      res.items.forEach(item => {
+        const row = allSheets ? [images[+idx]?.name || `Sheet ${+idx + 1}`] : []
+        row.push(item.item_no, item.category, q(item.description), item.unit, item.quantity, item.confidence, q(item.notes || ''))
+        lines.push(row)
       })
     })
+    // risk flags footer
+    const flagRows = buildRiskFlagsForExport(firstResult, geotechResult)
+    if (flagRows.length > 0) {
+      lines.push([])
+      lines.push(['RISK FLAGS'])
+      lines.push(['Section', 'Status', 'Item', 'Note'])
+      flagRows.forEach(r => lines.push(r.map(q)))
+    }
 
-    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
-    const blob = new Blob([csv], { type: 'text/csv' })
+    const csv = lines.map(r => Array.isArray(r) ? r.join(',') : r).join('\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `takeoff_${allSheets ? 'all_sheets' : images[activeImage]?.name || 'sheet'}_${new Date().toISOString().split('T')[0]}.csv`
+    a.download = `takeoff_${allSheets ? 'all_sheets' : images[activeImage]?.name?.replace(/[^a-z0-9]/gi, '_') || 'sheet'}_${date}.csv`
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  const exportPDF = () => {
+    const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    const res = results[activeImage]
+    if (!res) return
+    const sc = screenings[activeImage] || res.plan_screening
+    const si = res.sheet_info || {}
+    const flagRows = buildRiskFlagsForExport(res, geotechResult)
+
+    const gradeColor = sc?.grade === 'A' ? '#2ECC71' : sc?.grade === 'B' ? '#F1C40F' : '#E8372C'
+    const confColor = c => c === 'HIGH' ? '#2ECC71' : c === 'MEDIUM' ? '#F1C40F' : '#E8372C'
+
+    const itemRows = res.items.map(item => `
+      <tr>
+        <td class="mono muted">${item.item_no}</td>
+        <td><span class="cat">${item.category}</span></td>
+        <td>${item.description}</td>
+        <td class="mono center">${item.unit}</td>
+        <td class="mono bold center">${item.quantity}</td>
+        <td class="center"><span class="conf" style="color:${confColor(item.confidence)};border-color:${confColor(item.confidence)}20">${item.confidence}</span></td>
+        <td class="small muted">${item.notes || ''}</td>
+      </tr>`).join('')
+
+    const riskSections = { GEOTECH: [], SCOPE: [], INFERRED: [] }
+    flagRows.forEach(([section, status, label, note]) => {
+      riskSections[section]?.push({ status, label, note })
+    })
+
+    const riskIcon = s => s === 'OK' ? '✓' : s === 'MISSING' || s === 'WARN' ? s === 'WARN' ? '▲' : '✗' : s === 'VERIFY' ? '?' : 'ℹ'
+    const riskColor = s => s === 'OK' ? '#2ECC71' : s === 'MISSING' ? '#E8372C' : s === 'WARN' ? '#F1C40F' : '#888888'
+
+    const renderRiskCol = (title, items, accent) => items.length === 0 ? '' : `
+      <div class="risk-col">
+        <div class="risk-col-head" style="color:${accent}">${title}</div>
+        ${items.map(f => `
+          <div class="risk-item">
+            <span class="risk-icon" style="color:${riskColor(f.status)}">${riskIcon(f.status)}</span>
+            <div>
+              <div class="risk-label" style="color:${riskColor(f.status)}">${f.label}</div>
+              <div class="risk-note">${f.note}</div>
+            </div>
+          </div>`).join('')}
+      </div>`
+
+    const geotechBlock = geotechResult ? `
+      <div class="section">
+        <div class="section-head">Geotech Data — ${geotechFileName || 'Report'}</div>
+        <div class="geo-grid">
+          ${[
+            ['Dominant Soil', geotechResult.lab_summary?.dominant_uscs],
+            ['Max PI', geotechResult.lab_summary?.pi_max],
+            ['GW Depth', geotechResult.summary?.shallowest_groundwater_ft != null ? `${geotechResult.summary.shallowest_groundwater_ft} ft` : null],
+            ['Rock', geotechResult.summary?.rock_encountered ? `${geotechResult.summary.shallowest_rock_ft ?? '?'} ft` : 'Not enc.'],
+            ['Backfill', geotechResult.summary?.backfill_suitability],
+          ].filter(([,v]) => v != null).map(([k,v]) => `
+            <div class="geo-cell">
+              <div class="geo-label">${k}</div>
+              <div class="geo-val" style="color:${k === 'Backfill' ? (v === 'SUITABLE' ? '#2ECC71' : v === 'MARGINAL' ? '#F1C40F' : '#E8372C') : '#F5F5F0'}">${v}</div>
+            </div>`).join('')}
+        </div>
+        ${geotechResult.summary?.backfill_notes ? `<p class="geo-note">${geotechResult.summary.backfill_notes}</p>` : ''}
+      </div>` : ''
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Titan AI Takeoff Report</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Outfit',sans-serif; background:#fff; color:#111; font-size:10pt; line-height:1.5; }
+  .page { max-width:1100px; margin:0 auto; padding:32px 40px; }
+
+  /* HEADER */
+  .report-header { display:flex; justify-content:space-between; align-items:flex-end; padding-bottom:16px; border-bottom:3px solid #E8372C; margin-bottom:20px; }
+  .brand { font-family:'Bebas Neue',sans-serif; font-size:28pt; letter-spacing:3px; color:#111; line-height:1; }
+  .brand span { color:#E8372C; }
+  .brand-sub { font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:2px; color:#888; text-transform:uppercase; margin-top:2px; }
+  .report-meta { text-align:right; font-size:8pt; color:#555; font-family:'JetBrains Mono',monospace; }
+  .report-meta strong { color:#111; }
+
+  /* PROJECT BLOCK */
+  .project-block { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:16px; }
+  .proj-cell { background:#f5f5f5; border-left:3px solid #E8372C; padding:8px 12px; }
+  .proj-label { font-size:7pt; letter-spacing:1.5px; text-transform:uppercase; color:#888; font-family:'JetBrains Mono',monospace; margin-bottom:2px; }
+  .proj-val { font-size:10pt; font-weight:600; color:#111; }
+
+  /* GRADE BADGE */
+  .grade-block { display:flex; align-items:center; gap:16px; padding:12px 16px; border:1px solid #ddd; border-left:4px solid ${gradeColor}; margin-bottom:20px; background:#fafafa; }
+  .grade-circle { width:44px; height:44px; border-radius:50%; border:2px solid ${gradeColor}; display:flex; align-items:center; justify-content:center; font-family:'Bebas Neue',sans-serif; font-size:20pt; color:${gradeColor}; flex-shrink:0; }
+  .grade-info-label { font-size:9pt; font-weight:700; color:${gradeColor}; }
+  .grade-info-sub { font-size:8pt; color:#555; font-family:'JetBrains Mono',monospace; }
+  .grade-rationale { font-size:9pt; color:#444; flex:1; line-height:1.5; border-left:1px solid #ddd; padding-left:16px; }
+
+  /* SECTION */
+  .section { margin-bottom:24px; }
+  .section-head { font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:600; letter-spacing:2px; text-transform:uppercase; color:#E8372C; padding:6px 0; border-bottom:1px solid #E8372C; margin-bottom:10px; }
+
+  /* TABLE */
+  table { width:100%; border-collapse:collapse; font-size:8.5pt; }
+  thead { background:#111; }
+  th { padding:6px 10px; text-align:left; font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:1px; text-transform:uppercase; color:#E8372C; white-space:nowrap; }
+  td { padding:6px 10px; border-bottom:1px solid #eee; vertical-align:top; }
+  tr:nth-child(even) td { background:#fafafa; }
+  .mono { font-family:'JetBrains Mono',monospace; }
+  .muted { color:#888; }
+  .bold { font-weight:700; }
+  .center { text-align:center; }
+  .small { font-size:7.5pt; color:#666; }
+  .cat { display:inline-block; font-family:'JetBrains Mono',monospace; font-size:7pt; background:#f0f0f0; border:1px solid #ddd; padding:1px 6px; border-radius:2px; color:#444; }
+  .conf { display:inline-block; font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:700; padding:1px 8px; border:1px solid; border-radius:2px; letter-spacing:0.5px; }
+
+  /* RISK FLAGS */
+  .risk-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:0; border:1px solid #ddd; }
+  .risk-col { border-right:1px solid #ddd; padding:12px; }
+  .risk-col:last-child { border-right:none; }
+  .risk-col-head { font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:700; letter-spacing:1px; text-transform:uppercase; padding-bottom:8px; margin-bottom:8px; border-bottom:1px solid #eee; }
+  .risk-item { display:flex; gap:8px; margin-bottom:8px; align-items:flex-start; }
+  .risk-icon { font-size:9pt; width:14px; flex-shrink:0; margin-top:1px; font-family:'JetBrains Mono',monospace; }
+  .risk-label { font-size:8.5pt; font-weight:600; line-height:1.3; }
+  .risk-note { font-size:7.5pt; color:#666; line-height:1.4; margin-top:1px; }
+
+  /* TOP RISKS */
+  .top-risk-block { background:#FFF8E1; border-left:4px solid #F1C40F; padding:10px 14px; margin-bottom:16px; font-size:9pt; color:#444; line-height:1.6; }
+  .top-risk-label { font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:#B8860B; margin-bottom:4px; }
+
+  /* GEOTECH */
+  .geo-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-bottom:10px; }
+  .geo-cell { background:#f5f5f5; padding:8px 10px; }
+  .geo-label { font-family:'JetBrains Mono',monospace; font-size:7pt; color:#888; letter-spacing:1px; text-transform:uppercase; margin-bottom:3px; }
+  .geo-val { font-size:10pt; font-weight:700; }
+  .geo-note { font-size:8.5pt; color:#555; line-height:1.5; background:#f9f9f9; padding:8px 12px; border-left:3px solid #ddd; }
+
+  /* FOOTER */
+  .report-footer { margin-top:32px; padding-top:12px; border-top:1px solid #ddd; display:flex; justify-content:space-between; font-size:7.5pt; color:#999; font-family:'JetBrains Mono',monospace; }
+
+  @media print {
+    body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    .page { padding:16px 20px; }
+    .no-print { display:none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="report-header">
+    <div>
+      <div class="brand">TITAN <span>AI</span></div>
+      <div class="brand-sub">Takeoff Copilot // Quantity Report</div>
+    </div>
+    <div class="report-meta">
+      <div><strong>${date}</strong></div>
+      <div>takeoffcopilot.com</div>
+      ${si.sheet_number ? `<div>Sheet ${si.sheet_number}</div>` : ''}
+    </div>
+  </div>
+
+  <div class="project-block">
+    <div class="proj-cell">
+      <div class="proj-label">Project</div>
+      <div class="proj-val">${si.project_name || '—'}</div>
+    </div>
+    <div class="proj-cell">
+      <div class="proj-label">Engineer</div>
+      <div class="proj-val">${si.engineer || '—'}</div>
+    </div>
+    <div class="proj-cell">
+      <div class="proj-label">Sheet Title</div>
+      <div class="proj-val">${si.sheet_title || images[activeImage]?.name || '—'}</div>
+    </div>
+  </div>
+
+  ${sc ? `
+  <div class="grade-block">
+    <div class="grade-circle">${sc.grade}</div>
+    <div>
+      <div class="grade-info-label">${sc.grade_label}</div>
+      <div class="grade-info-sub">Expected accuracy: ${sc.expected_accuracy_range}</div>
+    </div>
+    <div class="grade-rationale">${sc.grade_rationale}</div>
+  </div>` : ''}
+
+  ${res.risk_and_misses?.top_risks ? `
+  <div class="top-risk-block">
+    <div class="top-risk-label">Top Risks</div>
+    ${res.risk_and_misses.top_risks}
+  </div>` : ''}
+
+  <div class="section">
+    <div class="section-head">Quantity Takeoff — ${res.items.length} Items // ${res.summary?.high_confidence_count || 0} High // ${res.summary?.medium_confidence_count || 0} Medium // ${res.summary?.low_confidence_count || 0} Low</div>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Cat</th><th>Description</th><th>Unit</th><th>Qty</th><th>Conf</th><th>Notes</th></tr>
+      </thead>
+      <tbody>${itemRows}</tbody>
+    </table>
+  </div>
+
+  ${(flagRows.length > 0) ? `
+  <div class="section">
+    <div class="section-head">Risk Flags</div>
+    <div class="risk-grid">
+      ${renderRiskCol('Geotech Warnings', riskSections.GEOTECH, '#E8372C')}
+      ${renderRiskCol('Commonly Missed Scope', riskSections.SCOPE, '#B8860B')}
+      ${renderRiskCol('AI Inferred — Verify', riskSections.INFERRED, '#888')}
+    </div>
+  </div>` : ''}
+
+  ${geotechBlock}
+
+  <div class="report-footer">
+    <span>Generated by Titan AI Takeoff Copilot</span>
+    <span>This report is AI-generated. Verify all quantities before pricing.</span>
+    <span>${date}</span>
+  </div>
+
+</div>
+</body>
+</html>`
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const win = window.open(url, '_blank', 'width=1100,height=900')
+    win.onload = () => { URL.revokeObjectURL(url); win.focus(); win.print() }
   }
 
   const result = results[activeImage]
@@ -629,6 +913,9 @@ export default function Dashboard() {
                     </button>
                     <button className="btn btn-secondary" onClick={() => exportCSV(false)}>
                       <Download size={14} /> CSV
+                    </button>
+                    <button className="btn btn-primary" onClick={exportPDF}>
+                      <FileText size={14} /> PDF Report
                     </button>
                   </>
                 )}
