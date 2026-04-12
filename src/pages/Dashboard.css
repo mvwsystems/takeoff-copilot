@@ -353,6 +353,127 @@
   animation: fadeInUp var(--duration-normal) var(--ease-out) both;
 }
 
+/* —— RISK FLAGS —— */
+.risk-flags-section {
+  margin-top: var(--space-lg);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.risk-flags-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 16px;
+  background: rgba(234, 179, 8, 0.07);
+  border-bottom: 1px solid rgba(234, 179, 8, 0.2);
+}
+
+.risk-flags-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--titan-yellow);
+  letter-spacing: 0.3px;
+}
+
+.risk-flags-subtitle {
+  font-size: 0.72rem;
+  color: var(--titan-text-muted);
+}
+
+.risk-callout {
+  padding: 12px 16px;
+  background: rgba(234, 179, 8, 0.04);
+  border-bottom: 1px solid rgba(234, 179, 8, 0.12);
+}
+
+.risk-callout-label {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--titan-yellow);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 4px;
+  font-family: var(--font-mono);
+}
+
+.risk-callout p {
+  font-size: 0.8rem;
+  line-height: 1.65;
+  color: var(--titan-text-dim);
+}
+
+.risk-flags-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  border-top: none;
+}
+
+.risk-flags-col {
+  border-right: 1px solid var(--titan-border);
+}
+.risk-flags-col:last-child { border-right: none; }
+
+.risk-col-header {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--titan-border);
+  font-family: var(--font-mono);
+}
+.risk-col-header-geo   { color: var(--titan-red);    background: rgba(232,55,44,0.05); }
+.risk-col-header-scope { color: var(--titan-yellow);  background: rgba(234,179,8,0.05); }
+.risk-col-header-infer { color: var(--titan-text-dim); background: rgba(255,255,255,0.02); }
+
+.risk-flag-row {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--titan-border);
+  align-items: flex-start;
+}
+.risk-flag-row:last-child { border-bottom: none; }
+
+.risk-flag-icon {
+  font-size: 0.72rem;
+  width: 16px;
+  flex-shrink: 0;
+  padding-top: 1px;
+  font-family: var(--font-mono);
+}
+
+.risk-flag-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.3;
+  margin-bottom: 2px;
+}
+
+.risk-flag-note {
+  font-size: 0.72rem;
+  color: var(--titan-text-muted);
+  line-height: 1.5;
+}
+
+/* severity colours */
+.risk-flag-warn .risk-flag-icon,
+.risk-flag-warn .risk-flag-label { color: var(--titan-yellow); }
+
+.risk-flag-miss .risk-flag-icon,
+.risk-flag-miss .risk-flag-label { color: var(--titan-red); }
+
+.risk-flag-ok .risk-flag-icon,
+.risk-flag-ok .risk-flag-label { color: var(--titan-green); }
+
+.risk-flag-info .risk-flag-icon,
+.risk-flag-info .risk-flag-label { color: var(--titan-text-dim); }
+
+.risk-flag-infer .risk-flag-icon { color: var(--titan-text-muted); }
+.risk-flag-infer .risk-flag-label { color: var(--titan-text-dim); }
+
 /* —— PLAN GRADE BANNER —— */
 .grade-banner {
   display: flex;

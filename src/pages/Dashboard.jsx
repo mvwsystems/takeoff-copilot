@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers } from 'lucide-react'
-import { SYSTEM_PROMPT, SCREENING_PROMPT } from '../utils/prompts'
+import { SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import './Dashboard.css'
 
 export default function Dashboard() {
@@ -16,10 +16,15 @@ export default function Dashboard() {
   const [pdfLoading, setPdfLoading] = useState(false)
   const [pdfProgress, setPdfProgress] = useState('')
   const [screenings, setScreenings] = useState({})
-  const [screeningSheet, setScreeningSheet] = useState(null) // idx of sheet currently being screened
+  const [screeningSheet, setScreeningSheet] = useState(null)
+  const [geotechResult, setGeotechResult] = useState(null)
+  const [geotechLoading, setGeotechLoading] = useState(false)
+  const [geotechError, setGeotechError] = useState(null)
+  const [geotechFileName, setGeotechFileName] = useState(null)
   const [apiKey, setApiKey] = useState(localStorage.getItem('tc_api_key') || '')
   const [showKeyInput, setShowKeyInput] = useState(!localStorage.getItem('tc_api_key'))
   const fileInputRef = useRef(null)
+  const geotechInputRef = useRef(null)
 
   const saveApiKey = (key) => {
     setApiKey(key)
@@ -181,6 +186,138 @@ export default function Dashboard() {
       else throw new Error('Could not parse response as JSON')
     }
     return parsed
+  }
+
+  const callApiMulti = async (imgArray, prompt, maxTokens = 4096) => {
+    const imageBlocks = imgArray.map(img => ({
+      type: 'image',
+      source: { type: 'base64', media_type: img.mediaType, data: img.base64 }
+    }))
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: maxTokens,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            ...imageBlocks
+          ]
+        }]
+      })
+    })
+
+    if (!response.ok) {
+      const errBody = await response.text()
+      throw new Error(`API ${response.status}: ${errBody.substring(0, 200)}`)
+    }
+
+    const data = await response.json()
+    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error))
+    const text = data.content.map(b => b.type === 'text' ? b.text : '').join('')
+    let parsed
+    try {
+      parsed = JSON.parse(text.replace(/```json\s?|```/g, '').trim())
+    } catch {
+      const jsonMatch = text.match(/\{[\s\S]*\}/)
+      if (jsonMatch) parsed = JSON.parse(jsonMatch[0])
+      else throw new Error('Could not parse response as JSON')
+    }
+    return parsed
+  }
+
+  const pdfToImages = async (file, maxPages = 10) => {
+    const pdfjsLib = await loadPdfJs()
+    const arrayBuffer = await file.arrayBuffer()
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+    const totalPages = Math.min(pdf.numPages, maxPages)
+    const imgs = []
+    for (let i = 1; i <= totalPages; i++) {
+      const page = await pdf.getPage(i)
+      const viewport = page.getViewport({ scale: 1.5 })
+      const canvas = document.createElement('canvas')
+      canvas.width = viewport.width
+      canvas.height = viewport.height
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = '#FFFFFF'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      await page.render({ canvasContext: ctx, viewport }).promise
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+      imgs.push({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg', preview: dataUrl })
+    }
+    return imgs
+  }
+
+  const processGeotech = async (file) => {
+    if (!apiKey) { setShowKeyInput(true); return }
+    setGeotechLoading(true)
+    setGeotechError(null)
+    setGeotechFileName(file.name)
+    setGeotechResult(null)
+    try {
+      const pages = await pdfToImages(file, 12)
+      const result = await callApiMulti(
+        pages,
+        GEOTECH_PROMPT + '\n\nExtract all geotechnical data from these report pages. Respond ONLY with the JSON object, no other text.',
+        2048
+      )
+      setGeotechResult(result)
+    } catch (err) {
+      console.error('Geotech error:', err)
+      setGeotechError(err.message)
+    } finally {
+      setGeotechLoading(false)
+    }
+  }
+
+  const handleGeotechUpload = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    e.target.value = ''
+    processGeotech(file)
+  }
+
+  const geotechCrossRef = (geo, takeoffResults) => {
+    const flags = []
+    const allItems = Object.values(takeoffResults).flatMap(r => r?.items || [])
+    const descriptions = allItems.map(i => (i.description + ' ' + (i.notes || '')).toLowerCase())
+    const hasItem = (...keywords) => descriptions.some(d => keywords.some(k => d.includes(k)))
+
+    const { flags: f, summary: s } = geo
+    if (!f) return flags
+
+    if (f.dewatering_required) {
+      const inScope = hasItem('dewat')
+      flags.push({ severity: inScope ? 'OK' : 'MISS', label: 'Dewatering', note: f.dewatering_note || `Groundwater at ${s?.shallowest_groundwater_ft ?? '?'} ft`, inScope })
+    }
+    if (f.lime_stabilization_required) {
+      const inScope = hasItem('lime', 'stabiliz')
+      flags.push({ severity: inScope ? 'OK' : 'MISS', label: 'Lime Stabilization', note: f.lime_note || 'High-PI soils require subgrade treatment', inScope })
+    }
+    if (f.rock_excavation_required) {
+      const inScope = hasItem('rock', 'drill', 'blast', 'chip')
+      flags.push({ severity: inScope ? 'OK' : 'MISS', label: 'Rock Excavation', note: f.rock_note || `Rock at ${s?.shallowest_rock_ft ?? '?'} ft`, inScope })
+    }
+    if (f.select_fill_required) {
+      const inScope = hasItem('select fill', 'import', 'select backfill', 'borrow')
+      flags.push({ severity: inScope ? 'OK' : 'MISS', label: 'Imported Select Fill', note: f.select_fill_note || 'Native soils unsuitable for backfill', inScope })
+    }
+    if (f.spoil_removal_required) {
+      const inScope = hasItem('spoil', 'haul', 'disposal', 'truck')
+      flags.push({ severity: inScope ? 'OK' : 'MISS', label: 'Spoil Removal / Haul-Off', note: f.spoil_note || 'Unsuitable native soil must be hauled off site', inScope })
+    }
+    ;(f.other_flags || []).forEach(({ item, note }) => {
+      flags.push({ severity: 'INFO', label: item, note, inScope: null })
+    })
+    return flags
   }
 
   const screenSheet = async (idx) => {
@@ -362,6 +499,77 @@ export default function Dashboard() {
               </button>
             </div>
           ))}
+        </div>
+
+        {/* GEOTECH SECTION */}
+        <div className="sidebar-geotech">
+          <div className="sidebar-geotech-header">
+            <span className="sidebar-geotech-title">Geotech Report</span>
+          </div>
+          <div className="sidebar-geotech-body">
+            {!geotechResult && !geotechLoading && !geotechError && (
+              <div className="geotech-empty">
+                <FileText size={18} style={{ opacity: 0.25, marginBottom: 6 }} />
+                <span>Upload a geotech PDF to flag soil risks</span>
+              </div>
+            )}
+            {geotechLoading && (
+              <div className="geotech-loading">
+                <div className="spinner spinner-sm" />
+                <span>Reading report...</span>
+              </div>
+            )}
+            {geotechError && (
+              <div className="geotech-error">
+                <span>{geotechError}</span>
+                <button className="btn btn-ghost" style={{ fontSize: '0.65rem', marginTop: 4 }} onClick={() => setGeotechError(null)}>Dismiss</button>
+              </div>
+            )}
+            {geotechResult && !geotechLoading && (
+              <div className="geotech-loaded">
+                <div className="geotech-chip geotech-chip-ok">
+                  ✓ {geotechFileName?.replace(/\.pdf$/i, '') || 'Report loaded'}
+                </div>
+                <div className="geotech-mini-facts">
+                  {geotechResult.lab_summary?.dominant_uscs && (
+                    <div className="geotech-mini-row">
+                      <span>Soil class</span><strong>{geotechResult.lab_summary.dominant_uscs}</strong>
+                    </div>
+                  )}
+                  {geotechResult.lab_summary?.pi_max != null && (
+                    <div className="geotech-mini-row">
+                      <span>Max PI</span><strong>{geotechResult.lab_summary.pi_max}</strong>
+                    </div>
+                  )}
+                  {geotechResult.summary?.shallowest_groundwater_ft != null && (
+                    <div className="geotech-mini-row">
+                      <span>GW depth</span><strong>{geotechResult.summary.shallowest_groundwater_ft} ft</strong>
+                    </div>
+                  )}
+                  {geotechResult.summary?.rock_encountered != null && (
+                    <div className="geotech-mini-row">
+                      <span>Rock</span><strong>{geotechResult.summary.rock_encountered ? `${geotechResult.summary.shallowest_rock_ft ?? '?'} ft` : 'Not encountered'}</strong>
+                    </div>
+                  )}
+                  <div className="geotech-mini-row">
+                    <span>Backfill</span>
+                    <strong className={
+                      geotechResult.summary?.backfill_suitability === 'SUITABLE' ? 'text-green' :
+                      geotechResult.summary?.backfill_suitability === 'MARGINAL' ? 'text-yellow' : 'text-red'
+                    }>{geotechResult.summary?.backfill_suitability || '—'}</strong>
+                  </div>
+                </div>
+                <button className="btn btn-ghost" style={{ width: '100%', fontSize: '0.65rem', marginTop: 6 }} onClick={() => { setGeotechResult(null); setGeotechFileName(null) }}>
+                  × Remove
+                </button>
+              </div>
+            )}
+          </div>
+          <button className="btn btn-secondary" style={{ width: 'calc(100% - 16px)', margin: '0 8px 8px', fontSize: '0.72rem' }}
+            onClick={() => geotechInputRef.current?.click()} disabled={geotechLoading}>
+            <Upload size={12} /> {geotechResult ? 'Replace Geotech' : 'Upload Geotech PDF'}
+          </button>
+          <input ref={geotechInputRef} type="file" accept=".pdf,application/pdf" onChange={handleGeotechUpload} style={{ display: 'none' }} />
         </div>
 
         <div className="sidebar-footer">
@@ -557,6 +765,134 @@ export default function Dashboard() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* ── RISK FLAGS ── */}
+                  {(() => {
+                    const rm = result.risk_and_misses
+                    const lowItems = result.items.filter(it => it.confidence === 'LOW')
+
+                    // Build geotech flags from AI output + loaded report
+                    const geotechFlags = []
+                    if (rm?.geotech) {
+                      const g = rm.geotech
+                      if (g.groundwater_notes === 'YES') geotechFlags.push({ sev: 'WARN', label: 'Groundwater Present', note: 'Plans reference groundwater. Verify dewatering is in scope and budget.' })
+                      if (g.rock_excavation_required === true || (rm.scope_gaps || []).some(s => /rock/i.test(s.item) && s.status === 'MISSING')) geotechFlags.push({ sev: 'WARN', label: 'Rock / Hard Excavation', note: 'Rock conditions noted or cannot be ruled out. Rock removal line item may be missing.' })
+                      if (g.geotech_report_referenced === 'NO' || g.geotech_report_referenced === 'NOT SHOWN') geotechFlags.push({ sev: 'WARN', label: 'No Geotech Report on Plans', note: 'Ground conditions are unverified. Soil type, groundwater depth, and bearing capacity are unknown — all excavation costs are estimated blind.' })
+                      if (g.geotech_flags) geotechFlags.push({ sev: 'INFO', label: 'AI Geotech Observation', note: g.geotech_flags })
+                    }
+                    // Supplement with loaded geotech report
+                    if (geotechResult) {
+                      const gf = geotechResult.flags
+                      if (gf?.dewatering_required) geotechFlags.push({ sev: 'WARN', label: `Dewatering — GW at ${geotechResult.summary?.shallowest_groundwater_ft ?? '?'} ft`, note: gf.dewatering_note || 'Dewatering required per geotech report.' })
+                      if (gf?.rock_excavation_required) geotechFlags.push({ sev: 'WARN', label: `Rock at ${geotechResult.summary?.shallowest_rock_ft ?? '?'} ft`, note: gf.rock_note || 'Rock excavation required per geotech report.' })
+                      if (gf?.lime_stabilization_required) geotechFlags.push({ sev: 'WARN', label: 'Lime / Cement Stabilization Required', note: gf.lime_note || 'High-PI subgrade soils require treatment.' })
+                      if (gf?.select_fill_required) geotechFlags.push({ sev: 'WARN', label: 'Imported Select Fill Required', note: gf.select_fill_note || 'Native soils are unsuitable for structural backfill.' })
+                      if (gf?.spoil_removal_required) geotechFlags.push({ sev: 'WARN', label: 'Spoil Haul-Off Required', note: gf.spoil_note || 'Unsuitable excavated material must leave the site.' })
+                    }
+                    if (!geotechResult && !rm?.geotech) geotechFlags.push({ sev: 'INFO', label: 'No Geotech Data Loaded', note: 'Upload a geotech report in the sidebar to flag soil risks specific to this site.' })
+
+                    // Build scope gap flags from AI output
+                    const scopeGaps = []
+                    const ALWAYS_CHECK = [
+                      { key: 'trench_safety', label: 'Trench Safety (OSHA >5 ft)', hint: 'Required on any trench deeper than 5 ft. Often excluded from utility scopes and added as a change order.' },
+                      { key: 'erosion_control', label: 'Erosion Control / SWPPP', hint: 'SWPPP, silt fence, rock check dams, and inlet protection. Required on most permitted sites — commonly missed on fast bids.' },
+                      { key: 'testing', label: 'Testing & Inspection', hint: 'Mandrel, pressure, leakage, video inspection, and compaction testing. Some specs require third-party inspection at contractor expense.' },
+                      { key: 'traffic_control', label: 'Traffic Control', hint: 'TxDOT or city ROW work requires a stamped TCP. TC setup, flaggers, and signs can run $5–15K depending on road class.' },
+                      { key: 'mobilization', label: 'Mobilization / Demobilization', hint: 'Equipment move-in/out, site setup, temporary facilities. Commonly omitted when estimating pipe and fittings only.' },
+                      { key: 'permits', label: 'Permit & Inspection Fees', hint: 'City, county, or TxDOT construction permits. Tap fees and inspection deposits can be significant on utility work.' },
+                    ]
+                    const aiScopeGaps = rm?.scope_gaps || []
+                    ALWAYS_CHECK.forEach(({ key, label, hint }) => {
+                      const aiMatch = aiScopeGaps.find(s => s.item?.toLowerCase().includes(key.replace('_', ' ').split('/')[0]))
+                      const inScope = result.items.some(it =>
+                        (it.description + ' ' + (it.notes || '')).toLowerCase().includes(key.replace('_', ' '))
+                      )
+                      if (aiMatch?.status === 'OK' || inScope) {
+                        scopeGaps.push({ sev: 'OK', label, note: aiMatch?.note || 'Item appears to be in scope.' })
+                      } else if (aiMatch?.status === 'NOT APPLICABLE') {
+                        // skip
+                      } else {
+                        scopeGaps.push({ sev: 'MISS', label, note: aiMatch?.note || hint })
+                      }
+                    })
+                    // Add any AI-detected MISSING gaps not in the always-check list
+                    aiScopeGaps
+                      .filter(s => s.status === 'MISSING' || s.status === 'PARTIAL')
+                      .filter(s => !ALWAYS_CHECK.some(c => s.item?.toLowerCase().includes(c.key.replace('_', ' '))))
+                      .forEach(s => scopeGaps.push({ sev: s.status === 'PARTIAL' ? 'WARN' : 'MISS', label: s.item, note: s.note }))
+
+                    // Top risk summary
+                    const topRisks = rm?.top_risks
+
+                    const hasSomething = geotechFlags.length > 0 || scopeGaps.some(f => f.sev !== 'OK') || lowItems.length > 0 || topRisks
+
+                    if (!hasSomething) return null
+
+                    return (
+                      <div className="risk-flags-section">
+                        <div className="risk-flags-header">
+                          <span className="risk-flags-title">⚠ Risk Flags</span>
+                          <span className="risk-flags-subtitle">Items that turn a 60% accurate takeoff into a 100% useful one</span>
+                        </div>
+
+                        {/* TOP RISK CALLOUT */}
+                        {topRisks && (
+                          <div className="risk-callout">
+                            <div className="risk-callout-label">AI Top Risks</div>
+                            <p>{topRisks}</p>
+                          </div>
+                        )}
+
+                        <div className="risk-flags-grid">
+                          {/* GEOTECH COLUMN */}
+                          <div className="risk-flags-col">
+                            <div className="risk-col-header risk-col-header-geo">Geotech Warnings</div>
+                            {geotechFlags.map((f, i) => (
+                              <div key={i} className={`risk-flag-row risk-flag-${f.sev.toLowerCase()}`}>
+                                <span className="risk-flag-icon">{f.sev === 'WARN' ? '▲' : 'ℹ'}</span>
+                                <div>
+                                  <div className="risk-flag-label">{f.label}</div>
+                                  <div className="risk-flag-note">{f.note}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* SCOPE GAPS COLUMN */}
+                          <div className="risk-flags-col">
+                            <div className="risk-col-header risk-col-header-scope">Commonly Missed Scope</div>
+                            {scopeGaps.map((f, i) => (
+                              <div key={i} className={`risk-flag-row risk-flag-${f.sev.toLowerCase()}`}>
+                                <span className="risk-flag-icon">
+                                  {f.sev === 'OK' ? '✓' : f.sev === 'MISS' ? '✗' : '▲'}
+                                </span>
+                                <div>
+                                  <div className="risk-flag-label">{f.label}</div>
+                                  <div className="risk-flag-note">{f.note}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* AI INFERRED COLUMN */}
+                          {lowItems.length > 0 && (
+                            <div className="risk-flags-col">
+                              <div className="risk-col-header risk-col-header-infer">AI Inferred — Verify Before Pricing</div>
+                              {lowItems.map((item, i) => (
+                                <div key={i} className="risk-flag-row risk-flag-infer">
+                                  <span className="risk-flag-icon">?</span>
+                                  <div>
+                                    <div className="risk-flag-label">{item.description}</div>
+                                    <div className="risk-flag-note">{item.notes}</div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
               )}
 
@@ -631,6 +967,91 @@ export default function Dashboard() {
                         </div>
                       ))}
                   </div>
+
+                  {/* GEOTECH FLAGS PANEL */}
+                  {geotechResult ? (() => {
+                    const xref = geotechCrossRef(geotechResult, results)
+                    const geo = geotechResult
+                    return (
+                      <div className="card geotech-panel" style={{ marginTop: 16 }}>
+                        <div className="geotech-panel-header">
+                          <h4>Geotech Flags</h4>
+                          <span className="geotech-panel-source">{geotechFileName || 'Geotech Report'}</span>
+                        </div>
+
+                        {/* SOIL DATA GRID */}
+                        <div className="geotech-data-grid">
+                          {[
+                            ['Dominant Soil', geo.lab_summary?.dominant_uscs || '—'],
+                            ['Max PI', geo.lab_summary?.pi_max != null ? String(geo.lab_summary.pi_max) : '—'],
+                            ['PI Range', geo.lab_summary?.pi_min != null ? `${geo.lab_summary.pi_min}–${geo.lab_summary.pi_max}` : '—'],
+                            ['GW Depth', geo.summary?.shallowest_groundwater_ft != null ? `${geo.summary.shallowest_groundwater_ft} ft` : 'Not enc.'],
+                            ['Rock', geo.summary?.rock_encountered ? `${geo.summary.shallowest_rock_ft ?? '?'} ft` : 'Not enc.'],
+                            ['Backfill', geo.summary?.backfill_suitability || '—'],
+                          ].map(([label, val]) => (
+                            <div key={label} className="geotech-data-cell">
+                              <div className="geotech-data-label">{label}</div>
+                              <div className={`geotech-data-val ${
+                                label === 'Backfill' && val === 'SUITABLE' ? 'text-green' :
+                                label === 'Backfill' && val === 'MARGINAL' ? 'text-yellow' :
+                                label === 'Backfill' && val === 'UNSUITABLE' ? 'text-red' : ''
+                              }`}>{val}</div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* BACKFILL NOTE */}
+                        {geo.summary?.backfill_notes && (
+                          <p className="geotech-backfill-note">{geo.summary.backfill_notes}</p>
+                        )}
+
+                        {/* CROSS-REF FLAGS */}
+                        {xref.length > 0 && (
+                          <div className="geotech-xref">
+                            <div className="geotech-xref-title">Scope Cross-Reference</div>
+                            {xref.map((flag, i) => (
+                              <div key={i} className={`geotech-flag geotech-flag-${flag.severity.toLowerCase()}`}>
+                                <div className="geotech-flag-top">
+                                  <span className={`geotech-flag-badge geotech-flag-badge-${flag.severity.toLowerCase()}`}>
+                                    {flag.severity === 'OK' ? '✓ In Scope' : flag.severity === 'MISS' ? '✗ Missing' : 'ℹ Info'}
+                                  </span>
+                                  <span className="geotech-flag-label">{flag.label}</span>
+                                </div>
+                                <div className="geotech-flag-note">{flag.note}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* BORING SUMMARY */}
+                        {geo.borings?.length > 0 && (
+                          <div style={{ marginTop: 16 }}>
+                            <div className="geotech-xref-title">Boring Log Summary</div>
+                            <div className="geotech-boring-list">
+                              {geo.borings.map((b, i) => (
+                                <div key={i} className="geotech-boring-row">
+                                  <span className="geotech-boring-id">{b.boring_id}</span>
+                                  <span className="geotech-boring-layers">
+                                    {b.soil_layers?.map(l => l.uscs_class).filter(Boolean).join(', ') || '—'}
+                                  </span>
+                                  <span className="geotech-boring-gw">
+                                    {b.groundwater_depth_ft != null ? `GW @${b.groundwater_depth_ft}ft` : 'No GW'}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })() : (
+                    <div className="card geotech-panel-empty" style={{ marginTop: 16 }}>
+                      <div className="geotech-panel-empty-inner">
+                        <FileText size={20} style={{ opacity: 0.2 }} />
+                        <span>Upload a geotech report in the sidebar to flag soil risks and cross-reference against this takeoff</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
