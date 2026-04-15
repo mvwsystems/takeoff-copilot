@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers } from 'lucide-react'
+import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ExternalLink } from 'lucide-react'
 import { SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import './Dashboard.css'
 
@@ -23,8 +23,20 @@ export default function Dashboard() {
   const [geotechFileName, setGeotechFileName] = useState(null)
   const [apiKey, setApiKey] = useState(localStorage.getItem('tc_api_key') || '')
   const [showKeyInput, setShowKeyInput] = useState(!localStorage.getItem('tc_api_key'))
+  const [showOnboarding, setShowOnboarding] = useState(!localStorage.getItem('tc_onboarded'))
+  const [onboardKey, setOnboardKey] = useState('')
   const fileInputRef = useRef(null)
   const geotechInputRef = useRef(null)
+
+  const dismissOnboarding = (keyValue) => {
+    const key = keyValue || onboardKey
+    if (key.trim()) {
+      setApiKey(key.trim())
+      localStorage.setItem('tc_api_key', key.trim())
+    }
+    localStorage.setItem('tc_onboarded', '1')
+    setShowOnboarding(false)
+  }
 
   const saveApiKey = (key) => {
     setApiKey(key)
@@ -707,8 +719,90 @@ export default function Dashboard() {
 
   return (
     <div className="dashboard">
+      {/* ONBOARDING MODAL */}
+      {showOnboarding && (
+        <div className="modal-overlay">
+          <div className="modal card onboarding-modal" onClick={e => e.stopPropagation()}>
+            <div className="onboarding-header">
+              <div className="onboarding-logo">
+                <div style={{
+                  width: 44, height: 44, background: 'var(--titan-red)', color: 'var(--titan-white)',
+                  fontFamily: 'var(--font-display)', fontSize: '1.6rem',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  clipPath: 'polygon(0 0, 100% 0, 100% 85%, 85% 100%, 0 100%)'
+                }}>T</div>
+              </div>
+              <h3>Welcome to Takeoff Copilot</h3>
+              <p className="text-dim" style={{ fontSize: '0.82rem', marginTop: 6, lineHeight: 1.6 }}>
+                AI-powered quantity takeoffs from construction plan sheets. Upload a PDF or image, get a structured takeoff in under 60 seconds.
+              </p>
+            </div>
+
+            <div className="onboarding-steps">
+              <div className="onboarding-step">
+                <span className="onboarding-step-num">1</span>
+                <div>
+                  <div className="onboarding-step-title">Enter your Anthropic API key</div>
+                  <div className="onboarding-step-desc">The AI analysis runs on your key — no markup, no middleman. Your key is stored locally in your browser only.</div>
+                </div>
+              </div>
+              <div className="onboarding-step">
+                <span className="onboarding-step-num">2</span>
+                <div>
+                  <div className="onboarding-step-title">Upload a plan sheet</div>
+                  <div className="onboarding-step-desc">PDF or image. Clean single-story pad sites with labeled profiles work best (Grade A = 90–100% accuracy).</div>
+                </div>
+              </div>
+              <div className="onboarding-step">
+                <span className="onboarding-step-num">3</span>
+                <div>
+                  <div className="onboarding-step-title">Review the Risk Flags</div>
+                  <div className="onboarding-step-desc">Every takeoff includes geotech warnings, commonly missed scope, and AI-inferred items to verify before pricing.</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="onboarding-key-section">
+              <label className="titan-label" style={{ marginBottom: 6, display: 'block' }}>
+                Anthropic API Key
+              </label>
+              <input
+                type="password"
+                className="input"
+                placeholder="sk-ant-..."
+                value={onboardKey}
+                onChange={e => setOnboardKey(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && onboardKey.trim() && dismissOnboarding()}
+                autoFocus
+              />
+              <a
+                href="https://console.anthropic.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="onboarding-key-link"
+              >
+                <ExternalLink size={11} /> Get your key at console.anthropic.com
+              </a>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
+              <button className="btn btn-ghost" onClick={() => dismissOnboarding('')}>
+                Skip for now
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => dismissOnboarding()}
+                disabled={!onboardKey.trim()}
+              >
+                Save Key &amp; Get Started
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* API KEY MODAL */}
-      {showKeyInput && (
+      {showKeyInput && !showOnboarding && (
         <div className="modal-overlay" onClick={() => apiKey && setShowKeyInput(false)}>
           <div className="modal card" onClick={e => e.stopPropagation()}>
             <h3>API Configuration</h3>

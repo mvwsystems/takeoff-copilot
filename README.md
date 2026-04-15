@@ -6,6 +6,7 @@ AI-powered plan analysis for utility contractors. Upload construction plan sheet
 
 - **React 18** + **Vite** — Fast dev and build
 - **React Router** — Client-side routing
+- **Supabase** — Authentication (email/password)
 - **pdf.js** — Client-side PDF to image conversion
 - **Claude API** (Anthropic) — Vision-based plan analysis
 - **Netlify** — Deploy target
@@ -30,10 +31,28 @@ npm run build
 3. Build command: `npm run build`
 4. Publish directory: `dist`
 5. The `netlify.toml` handles SPA routing automatically
+6. **Add environment variables** in Netlify → Site Settings → Environment Variables:
+   - `VITE_SUPABASE_URL` — your Supabase project URL
+   - `VITE_SUPABASE_ANON_KEY` — your Supabase anon/public key
 
-## API Key
+## Environment Variables
 
-The app requires an Anthropic API key for plan analysis. Users enter their key in the dashboard — it's stored in localStorage and sent directly to the Anthropic API. No backend required for the analysis engine.
+Copy `.env.example` to `.env` and fill in your Supabase credentials:
+
+```bash
+cp .env.example .env
+```
+
+```
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key-here
+```
+
+Get these from [app.supabase.com](https://app.supabase.com) → Project Settings → API.
+
+## Anthropic API Key
+
+The app requires an Anthropic API key for plan analysis. Users enter their key on first login via the onboarding modal — it's stored in localStorage and sent directly to the Anthropic API. No backend required for the analysis engine. Get a key at [console.anthropic.com](https://console.anthropic.com).
 
 ## Project Structure
 

@@ -336,6 +336,87 @@
   font-size: 0.82rem;
 }
 
+/* —— ONBOARDING MODAL —— */
+.onboarding-modal {
+  width: 480px;
+  max-width: 95vw;
+}
+
+.onboarding-header {
+  text-align: center;
+  margin-bottom: var(--space-lg);
+}
+
+.onboarding-logo {
+  display: flex;
+  justify-content: center;
+  margin-bottom: var(--space-md);
+}
+
+.onboarding-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: var(--space-lg);
+  padding: 14px 16px;
+  background: var(--titan-dark);
+  border: 1px solid var(--titan-border);
+  border-radius: 3px;
+}
+
+.onboarding-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.onboarding-step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--titan-red);
+  color: var(--titan-white);
+  font-size: 0.7rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.onboarding-step-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--titan-white);
+  margin-bottom: 2px;
+}
+
+.onboarding-step-desc {
+  font-size: 0.75rem;
+  color: var(--titan-text-muted);
+  line-height: 1.5;
+}
+
+.onboarding-key-section {
+  margin-top: 4px;
+}
+
+.onboarding-key-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--titan-text-muted);
+  text-decoration: none;
+  margin-top: 6px;
+  transition: color var(--duration-fast);
+}
+.onboarding-key-link:hover {
+  color: var(--titan-red);
+}
+
 /* MODAL */
 .modal-overlay {
   position: fixed;

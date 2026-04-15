@@ -1,10 +1,18 @@
-import { Link, useLocation } from 'react-router-dom'
-import { LogIn, LayoutDashboard, Home } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { LogIn, LayoutDashboard, Home, LogOut } from 'lucide-react'
+import { useAuth } from '../utils/AuthContext'
 import './Navbar.css'
 
 export default function Navbar() {
   const location = useLocation()
+  const navigate = useNavigate()
+  const { user, signOut } = useAuth()
   const isDashboard = location.pathname === '/dashboard'
+
+  const handleSignOut = async () => {
+    await signOut()
+    navigate('/')
+  }
 
   return (
     <nav className="navbar">
@@ -30,10 +38,21 @@ export default function Navbar() {
               <span>Dashboard</span>
             </Link>
           )}
-          <Link to="/login" className="btn btn-secondary nav-login">
-            <LogIn size={15} />
-            <span>Login</span>
-          </Link>
+
+          {user ? (
+            <div className="nav-user">
+              <span className="nav-user-email">{user.email}</span>
+              <button className="btn btn-secondary nav-login" onClick={handleSignOut}>
+                <LogOut size={15} />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          ) : (
+            <Link to="/login" className="btn btn-secondary nav-login">
+              <LogIn size={15} />
+              <span>Login</span>
+            </Link>
+          )}
         </div>
       </div>
     </nav>
