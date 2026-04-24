@@ -1,19 +1,23 @@
 .landing {
   padding-top: 56px;
+  /* Luxury easing — exponential out: fast start, long graceful deceleration */
+  --ease-lux: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Silk ease — smooth in-out for hovers */
+  --ease-silk: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ============================================================
    SCROLL REVEAL SYSTEM
-   Elements with [data-reveal] start hidden and transition in
-   when IntersectionObserver adds .visible
+   Small distance (14px), long duration (0.9s), expo-out easing.
+   The combination reads as floating up — not jumping.
    ============================================================ */
 
 [data-reveal] {
   opacity: 0;
-  transform: translateY(28px);
+  transform: translateY(14px);
   transition:
-    opacity 0.65s var(--ease-out) var(--reveal-delay, 0ms),
-    transform 0.65s var(--ease-out) var(--reveal-delay, 0ms);
+    opacity  0.9s var(--ease-lux) var(--reveal-delay, 0ms),
+    transform 0.9s var(--ease-lux) var(--reveal-delay, 0ms);
 }
 
 [data-reveal].visible {
@@ -25,39 +29,33 @@
    KEYFRAMES
    ============================================================ */
 
+/* Used for hero children — same expo-out curve */
 @keyframes heroChildReveal {
-  from { opacity: 0; transform: translateY(22px); }
+  from { opacity: 0; transform: translateY(16px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes gridDrift {
-  from { background-position: 0 0; }
-  to   { background-position: 60px 60px; }
-}
-
-@keyframes badgePulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(232, 55, 44, 0); }
-  50%       { opacity: 0.5; box-shadow: 0 0 0 4px rgba(232, 55, 44, 0); }
-}
-
+/* Radial glow slow breath — composited: opacity + transform only */
 @keyframes glowBreath {
-  0%, 100% { opacity: 0.5; transform: translate(-50%, -50%) scale(1); }
-  50%       { opacity: 0.8; transform: translate(-50%, -50%) scale(1.08); }
+  0%, 100% { opacity: 0.6; transform: translate(-50%, -50%) scale(1); }
+  50%       { opacity: 1;   transform: translate(-50%, -50%) scale(1.1); }
 }
 
-@keyframes shimmer {
-  0%   { left: -100%; }
-  100% { left: 200%; }
+@keyframes glowBreathStill {
+  0%, 100% { opacity: 0.5; transform: translateX(-50%) scale(1); }
+  50%       { opacity: 0.9; transform: translateX(-50%) scale(1.08); }
 }
 
-@keyframes borderGrowDown {
-  from { height: 0; }
-  to   { height: 100%; }
+/* Badge dot — opacity only, no layout properties */
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
 }
 
-@keyframes labelSlide {
-  from { opacity: 0; transform: translateX(-12px); }
-  to   { opacity: 1; transform: translateX(0); }
+/* Shimmer sweep — composited transform */
+@keyframes shimmerSweep {
+  from { transform: skewX(-18deg) translateX(-200%); }
+  to   { transform: skewX(-18deg) translateX(400%); }
 }
 
 /* ============================================================
@@ -74,47 +72,49 @@
   overflow: hidden;
 }
 
+/* Static grid — no background-position animation (causes paint jank).
+   The mask fades it out at the edges for depth. */
 .hero-bg-grid {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(232, 55, 44, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(232, 55, 44, 0.04) 1px, transparent 1px);
+    linear-gradient(rgba(232, 55, 44, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(232, 55, 44, 0.035) 1px, transparent 1px);
   background-size: 60px 60px;
-  mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, black 20%, transparent 70%);
-  animation: gridDrift 14s linear infinite;
+  mask-image: radial-gradient(ellipse 65% 65% at 50% 40%, black 10%, transparent 75%);
+  pointer-events: none;
 }
 
-/* Ambient red glow behind hero content */
+/* Ambient glow — transform + opacity only = GPU composited */
 .hero-glow {
   position: absolute;
   top: 42%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 700px;
-  height: 500px;
-  background: radial-gradient(ellipse, rgba(232, 55, 44, 0.07) 0%, transparent 68%);
+  width: 800px;
+  height: 560px;
+  background: radial-gradient(ellipse, rgba(232, 55, 44, 0.065) 0%, transparent 65%);
   pointer-events: none;
-  animation: glowBreath 6s ease-in-out infinite;
+  animation: glowBreath 8s ease-in-out infinite;
 }
 
-/* Override the single animate-in on the parent — stagger children instead */
+/* Cancel the single fadeInUp on the wrapper — stagger children instead */
 .hero-content.animate-in {
   animation: none;
   opacity: 1;
   transform: none;
 }
 
+/* Each child floats up individually. Wider gaps = more breath between elements */
 .hero-content > * {
   opacity: 0;
-  transform: translateY(22px);
-  animation: heroChildReveal 0.75s var(--ease-out) forwards;
+  animation: heroChildReveal 1s var(--ease-lux) forwards;
 }
-.hero-content > *:nth-child(1) { animation-delay: 0.05s; }
-.hero-content > *:nth-child(2) { animation-delay: 0.20s; }
-.hero-content > *:nth-child(3) { animation-delay: 0.36s; }
-.hero-content > *:nth-child(4) { animation-delay: 0.52s; }
-.hero-content > *:nth-child(5) { animation-delay: 0.68s; }
+.hero-content > *:nth-child(1) { animation-delay: 0.08s; }   /* badge */
+.hero-content > *:nth-child(2) { animation-delay: 0.26s; }   /* title — give it room */
+.hero-content > *:nth-child(3) { animation-delay: 0.50s; }   /* subtitle */
+.hero-content > *:nth-child(4) { animation-delay: 0.70s; }   /* buttons */
+.hero-content > *:nth-child(5) { animation-delay: 0.88s; }   /* trust strip */
 
 .hero-content {
   position: relative;
@@ -149,7 +149,6 @@
   font-size: 0.85rem;
 }
 
-/* Hero angle transition element */
 .hero-angle {
   position: absolute;
   bottom: -2px;
@@ -169,7 +168,7 @@
   align-items: center;
   gap: 8px;
   background: rgba(232, 55, 44, 0.07);
-  border: 1px solid rgba(232, 55, 44, 0.22);
+  border: 1px solid rgba(232, 55, 44, 0.2);
   border-radius: 2px;
   padding: 5px 12px;
   font-family: var(--font-mono);
@@ -178,13 +177,13 @@
   text-transform: uppercase;
   color: var(--titan-red);
   margin-bottom: var(--space-lg);
-  transition: background 0.3s, border-color 0.3s, box-shadow 0.3s;
+  transition: background 0.5s var(--ease-silk), border-color 0.5s var(--ease-silk), box-shadow 0.5s var(--ease-silk);
 }
 
 .hero-badge:hover {
-  background: rgba(232, 55, 44, 0.12);
-  border-color: rgba(232, 55, 44, 0.45);
-  box-shadow: 0 0 16px rgba(232, 55, 44, 0.15);
+  background: rgba(232, 55, 44, 0.11);
+  border-color: rgba(232, 55, 44, 0.4);
+  box-shadow: 0 0 20px rgba(232, 55, 44, 0.12);
 }
 
 .hero-badge-dot {
@@ -193,7 +192,7 @@
   background: var(--titan-red);
   border-radius: 50%;
   flex-shrink: 0;
-  animation: badgePulse 2.2s ease-in-out infinite;
+  animation: dotPulse 2.6s ease-in-out infinite;
 }
 
 /* ============================================================
@@ -217,7 +216,7 @@
   text-transform: uppercase;
   color: var(--titan-text-muted);
   padding: 0 var(--space-sm);
-  transition: color 0.25s;
+  transition: color 0.4s var(--ease-silk);
 }
 
 .hero-trust-item:hover {
@@ -226,54 +225,58 @@
 
 .hero-trust-sep {
   color: var(--titan-red);
-  opacity: 0.45;
+  opacity: 0.4;
   font-size: 0.7rem;
 }
 
 /* ============================================================
-   BUTTONS — enhanced hover effects
-   Applied here to avoid modifying global.css
+   BUTTONS — smooth, weighted hover transitions
    ============================================================ */
 
-/* Primary button shimmer sweep */
 .btn-primary {
   position: relative;
   overflow: hidden;
+  /* Longer transition so the lift + glow land together gracefully */
+  transition: background 0.4s var(--ease-silk), box-shadow 0.4s var(--ease-silk), transform 0.4s var(--ease-lux) !important;
 }
 
+/* Shimmer — composited transform, not left/right */
 .btn-primary::after {
   content: '';
   position: absolute;
-  top: 0;
-  left: -100%;
+  inset: 0;
   width: 55%;
-  height: 100%;
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(255, 255, 255, 0.14),
+    rgba(255, 255, 255, 0.13),
     transparent
   );
-  transform: skewX(-18deg);
+  transform: skewX(-18deg) translateX(-200%);
   transition: none;
+  pointer-events: none;
 }
 
 .btn-primary:hover::after {
-  animation: shimmer 0.55s var(--ease-out) forwards;
+  animation: shimmerSweep 0.7s var(--ease-lux) forwards;
 }
 
 .btn-primary:hover {
   background: var(--titan-red-bright);
-  box-shadow: 0 0 28px rgba(232, 55, 44, 0.35), 0 4px 16px rgba(0,0,0,0.3);
-  transform: translateY(-2px);
+  box-shadow: 0 0 32px rgba(232, 55, 44, 0.3), 0 6px 20px rgba(0, 0, 0, 0.28);
+  transform: translateY(-2px) !important;
 }
 
-/* Secondary button — border glow + subtle fill */
+.btn-secondary {
+  transition: background 0.4s var(--ease-silk), border-color 0.4s var(--ease-silk),
+              color 0.4s var(--ease-silk), box-shadow 0.4s var(--ease-silk) !important;
+}
+
 .btn-secondary:hover {
   border-color: var(--titan-red);
   color: var(--titan-red);
   background: rgba(232, 55, 44, 0.04);
-  box-shadow: 0 0 18px rgba(232, 55, 44, 0.12), inset 0 0 14px rgba(232, 55, 44, 0.04);
+  box-shadow: 0 0 20px rgba(232, 55, 44, 0.1), inset 0 0 16px rgba(232, 55, 44, 0.04);
 }
 
 /* ============================================================
@@ -291,7 +294,7 @@
   position: relative;
 }
 
-/* Animated underline on titan-label after scroll reveal */
+/* Red underline extends in after the reveal completes */
 .section-header .titan-label::after {
   content: '';
   position: absolute;
@@ -301,10 +304,9 @@
   width: 0;
   height: 1px;
   background: var(--titan-red);
-  transition: width 0.5s var(--ease-out) 0.4s;
+  transition: width 0.6s var(--ease-lux) 0.5s;
 }
 
-[data-reveal].visible .section-header .titan-label::after,
 .section-header[data-reveal].visible .titan-label::after {
   width: 100%;
 }
@@ -338,24 +340,25 @@
 .feature-card {
   position: relative;
   overflow: hidden;
+  will-change: transform;
   transition:
-    transform 0.35s var(--ease-out),
-    border-color 0.35s,
-    box-shadow 0.35s;
+    transform   0.45s var(--ease-lux),
+    border-color 0.45s var(--ease-silk),
+    box-shadow  0.45s var(--ease-silk);
 }
 
-/* Top-border sweep on hover */
+/* Top-edge line sweeps in from left on hover */
 .feature-card::before {
   content: '';
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, var(--titan-red), var(--titan-red-bright));
+  height: 1px;
+  background: linear-gradient(90deg, var(--titan-red), rgba(232, 55, 44, 0.3));
   transform: scaleX(0);
   transform-origin: left center;
-  transition: transform 0.4s var(--ease-out);
+  transition: transform 0.55s var(--ease-lux);
 }
 
 .feature-card:hover::before {
@@ -363,14 +366,13 @@
 }
 
 .feature-card:hover {
-  transform: translateY(-6px);
-  border-color: rgba(232, 55, 44, 0.28);
+  transform: translateY(-5px);
+  border-color: rgba(232, 55, 44, 0.22);
   box-shadow:
-    0 16px 48px rgba(0, 0, 0, 0.45),
-    0 0 0 1px rgba(232, 55, 44, 0.1);
+    0 20px 56px rgba(0, 0, 0, 0.42),
+    0 0 0 1px rgba(232, 55, 44, 0.08);
 }
 
-/* Icon wrapper with transition */
 .feature-icon-wrap {
   margin-bottom: var(--space-md);
   display: inline-block;
@@ -381,22 +383,22 @@
   display: flex;
   align-items: center;
   transition:
-    color 0.25s,
-    filter 0.25s,
-    transform 0.35s var(--ease-out);
+    color     0.35s var(--ease-silk),
+    filter    0.35s var(--ease-silk),
+    transform 0.45s var(--ease-lux);
 }
 
 .feature-card:hover .feature-icon {
   color: var(--titan-red-bright);
-  filter: drop-shadow(0 0 10px rgba(232, 55, 44, 0.55));
-  transform: scale(1.18);
+  filter: drop-shadow(0 0 10px rgba(232, 55, 44, 0.5));
+  transform: scale(1.15);
 }
 
 .feature-title {
   font-family: var(--font-display);
   font-size: 1.1rem;
   margin-bottom: var(--space-sm);
-  transition: color 0.2s;
+  transition: color 0.35s var(--ease-silk);
 }
 
 .feature-card:hover .feature-title {
@@ -434,16 +436,17 @@
   align-items: flex-start;
   padding: var(--space-lg) var(--space-lg) var(--space-lg) var(--space-md);
   border-left: 2px solid var(--titan-border);
-  transition:
-    border-color 0.3s var(--ease-out),
-    background 0.3s,
-    transform 0.35s var(--ease-out);
   border-radius: 0 2px 2px 0;
+  will-change: transform;
+  transition:
+    border-color 0.45s var(--ease-silk),
+    background   0.45s var(--ease-silk),
+    transform    0.45s var(--ease-lux);
 }
 
 .step:hover {
   border-color: var(--titan-red);
-  background: rgba(232, 55, 44, 0.03);
+  background: rgba(232, 55, 44, 0.025);
   transform: translateX(5px);
 }
 
@@ -453,18 +456,18 @@
   color: var(--titan-red);
   min-width: 48px;
   line-height: 1;
-  transition: text-shadow 0.3s;
+  transition: text-shadow 0.45s var(--ease-silk);
 }
 
 .step:hover .step-num {
-  text-shadow: 0 0 24px rgba(232, 55, 44, 0.65);
+  text-shadow: 0 0 28px rgba(232, 55, 44, 0.55);
 }
 
 .step-content h4 {
   font-family: var(--font-display);
   font-size: 1.1rem;
   margin-bottom: 4px;
-  transition: color 0.2s;
+  transition: color 0.35s var(--ease-silk);
 }
 
 .step:hover .step-content h4 {
@@ -489,17 +492,17 @@
   overflow: hidden;
 }
 
-/* Slow ambient sweep across the section */
 .accuracy-section::before {
   content: '';
   position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
-  background: radial-gradient(ellipse at 50% 50%, rgba(232, 55, 44, 0.04) 0%, transparent 60%);
-  animation: glowBreath 8s ease-in-out infinite;
+  top: -60%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 800px;
+  height: 600px;
+  background: radial-gradient(ellipse, rgba(232, 55, 44, 0.045) 0%, transparent 65%);
   pointer-events: none;
+  animation: glowBreathStill 9s ease-in-out infinite;
 }
 
 .accuracy-inner {
@@ -552,42 +555,42 @@
   padding: 7px 16px;
   border-radius: 2px;
   border: 1px solid;
-  transition: transform 0.25s var(--ease-out), box-shadow 0.25s;
   cursor: default;
+  transition: transform 0.4s var(--ease-lux), box-shadow 0.4s var(--ease-silk);
 }
 
 .pill-high {
-  background: rgba(52, 211, 153, 0.08);
-  border-color: rgba(52, 211, 153, 0.3);
+  background: rgba(52, 211, 153, 0.07);
+  border-color: rgba(52, 211, 153, 0.25);
   color: #34d399;
 }
 .pill-high:hover {
-  transform: scale(1.05);
-  box-shadow: 0 0 18px rgba(52, 211, 153, 0.22);
+  transform: scale(1.06);
+  box-shadow: 0 0 22px rgba(52, 211, 153, 0.2);
 }
 
 .pill-medium {
-  background: rgba(251, 191, 36, 0.08);
-  border-color: rgba(251, 191, 36, 0.3);
+  background: rgba(251, 191, 36, 0.07);
+  border-color: rgba(251, 191, 36, 0.25);
   color: #fbbf24;
 }
 .pill-medium:hover {
-  transform: scale(1.05);
-  box-shadow: 0 0 18px rgba(251, 191, 36, 0.22);
+  transform: scale(1.06);
+  box-shadow: 0 0 22px rgba(251, 191, 36, 0.2);
 }
 
 .pill-low {
-  background: rgba(232, 55, 44, 0.08);
-  border-color: rgba(232, 55, 44, 0.3);
+  background: rgba(232, 55, 44, 0.07);
+  border-color: rgba(232, 55, 44, 0.25);
   color: var(--titan-red);
 }
 .pill-low:hover {
-  transform: scale(1.05);
-  box-shadow: 0 0 18px rgba(232, 55, 44, 0.22);
+  transform: scale(1.06);
+  box-shadow: 0 0 22px rgba(232, 55, 44, 0.2);
 }
 
 /* ============================================================
-   FAQ — smooth CSS expand via grid-template-rows
+   FAQ — CSS smooth expand (grid-template-rows trick)
    ============================================================ */
 
 .faq-section {
@@ -611,24 +614,26 @@
   border-radius: 2px;
   cursor: pointer;
   transition:
-    border-color 0.3s,
-    background 0.3s,
-    transform 0.25s var(--ease-out),
-    box-shadow 0.3s;
+    border-color     0.45s var(--ease-silk),
+    border-left-color 0.45s var(--ease-silk),
+    background       0.45s var(--ease-silk),
+    transform        0.35s var(--ease-lux),
+    box-shadow       0.45s var(--ease-silk);
 }
 
 .faq-item:hover {
-  border-color: rgba(232, 55, 44, 0.3);
-  border-left-color: rgba(232, 55, 44, 0.6);
-  background: rgba(232, 55, 44, 0.015);
+  border-color: rgba(232, 55, 44, 0.25);
+  border-left-color: rgba(232, 55, 44, 0.5);
+  background: rgba(232, 55, 44, 0.012);
   transform: translateX(2px);
 }
 
 .faq-item.open {
-  border-color: rgba(232, 55, 44, 0.35);
+  border-color: rgba(232, 55, 44, 0.3);
   border-left-color: var(--titan-red);
-  background: rgba(232, 55, 44, 0.025);
-  box-shadow: 0 4px 20px rgba(0,0,0,0.25), -2px 0 12px rgba(232, 55, 44, 0.08);
+  background: rgba(232, 55, 44, 0.022);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.22), -3px 0 16px rgba(232, 55, 44, 0.07);
+  transform: translateX(0);
 }
 
 .faq-question {
@@ -640,7 +645,7 @@
   font-weight: 500;
   color: var(--titan-text);
   user-select: none;
-  transition: color 0.2s;
+  transition: color 0.35s var(--ease-silk);
 }
 
 .faq-item:hover .faq-question,
@@ -651,7 +656,7 @@
 .faq-chevron {
   color: var(--titan-text-muted);
   flex-shrink: 0;
-  transition: transform 0.35s var(--ease-out), color 0.2s;
+  transition: transform 0.45s var(--ease-lux), color 0.35s var(--ease-silk);
 }
 
 .faq-item.open .faq-chevron {
@@ -659,11 +664,11 @@
   color: var(--titan-red);
 }
 
-/* CSS smooth expand — grid-template-rows trick */
+/* Smooth expand — grid-template-rows with slow luxury ease */
 .faq-body {
   display: grid;
   grid-template-rows: 0fr;
-  transition: grid-template-rows 0.38s var(--ease-out);
+  transition: grid-template-rows 0.5s var(--ease-lux);
 }
 
 .faq-item.open .faq-body {
@@ -695,18 +700,17 @@
   overflow: hidden;
 }
 
-/* Radial glow behind CTA */
 .cta::before {
   content: '';
   position: absolute;
-  bottom: -20%;
+  bottom: -30%;
   left: 50%;
   transform: translateX(-50%);
-  width: 600px;
-  height: 300px;
-  background: radial-gradient(ellipse, rgba(232, 55, 44, 0.08) 0%, transparent 70%);
+  width: 700px;
+  height: 360px;
+  background: radial-gradient(ellipse, rgba(232, 55, 44, 0.07) 0%, transparent 68%);
   pointer-events: none;
-  animation: glowBreath 7s ease-in-out infinite;
+  animation: glowBreathStill 8s ease-in-out infinite;
 }
 
 .cta-inner {
@@ -774,14 +778,25 @@
   .faq-question { font-size: 0.84rem; }
   .footer-inner { flex-direction: column; gap: var(--space-md); text-align: center; }
   .step:hover { transform: translateX(3px); }
+  .faq-item:hover { transform: translateX(1px); }
 }
 
+/* Fully disable motion for users who prefer it */
 @media (prefers-reduced-motion: reduce) {
-  [data-reveal] { transition: none; }
-  .hero-bg-grid { animation: none; }
-  .hero-glow { animation: none; }
-  .hero-badge-dot { animation: none; }
-  .hero-content > * { animation-duration: 0.01ms; }
-  .cta::before { animation: none; }
+  [data-reveal],
+  [data-reveal].visible {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .hero-content > * {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .hero-glow,
+  .hero-badge-dot,
+  .cta::before,
   .accuracy-section::before { animation: none; }
+  .faq-body { transition: none; }
 }
