@@ -399,6 +399,25 @@
   line-height: 1.5;
 }
 
+.onboarding-contact-section {
+  background: var(--titan-dark);
+  border: 1px solid var(--titan-border);
+  border-radius: 3px;
+  padding: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.onboarding-contact-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-sm);
+}
+
+.onboarding-contact-field {
+  display: flex;
+  flex-direction: column;
+}
+
 .onboarding-key-section {
   margin-top: 4px;
 }

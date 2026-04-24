@@ -1,0 +1,238 @@
+.admin-page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--space-2xl) var(--space-lg);
+  min-height: calc(100vh - 56px);
+}
+
+.admin-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--space-2xl);
+  padding-bottom: var(--space-lg);
+  border-bottom: 1px solid var(--titan-border);
+  flex-wrap: wrap;
+  gap: var(--space-md);
+}
+
+.admin-header h2 {
+  font-size: 2rem;
+  margin-bottom: 4px;
+}
+
+.admin-header-stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xl);
+}
+
+.admin-stat {
+  text-align: center;
+}
+
+.admin-stat-value {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 1.8rem;
+  color: var(--titan-white);
+  line-height: 1;
+}
+
+.admin-stat-label {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  margin-top: 4px;
+  display: block;
+}
+
+/* ── Table ── */
+
+.admin-table-wrap {
+  overflow-x: auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+}
+
+.admin-table thead {
+  background: var(--titan-dark);
+  border-bottom: 2px solid var(--titan-red);
+  position: sticky;
+  top: 56px;
+}
+
+.admin-table th {
+  padding: 10px 14px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-red);
+  white-space: nowrap;
+}
+
+.admin-row {
+  border-bottom: 1px solid var(--titan-border);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.admin-row:hover {
+  background: rgba(255,255,255,0.02);
+}
+
+.admin-row.admin-row-open {
+  background: rgba(232, 55, 44, 0.03);
+  border-bottom-color: transparent;
+}
+
+.admin-row td {
+  padding: 11px 14px;
+  color: var(--titan-text);
+  vertical-align: middle;
+}
+
+.admin-expand-cell {
+  width: 28px;
+  color: var(--titan-text-muted);
+}
+
+.admin-name {
+  font-weight: 500;
+  color: var(--titan-white) !important;
+  white-space: nowrap;
+}
+
+.admin-email {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--titan-text-dim) !important;
+}
+
+.admin-date {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--titan-text-muted) !important;
+  white-space: nowrap;
+}
+
+.admin-job-count {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  color: var(--titan-white);
+}
+
+/* ── Expanded jobs panel ── */
+
+.admin-jobs-row td {
+  padding: 0 !important;
+}
+
+.admin-jobs-panel {
+  background: var(--titan-dark);
+  border-left: 3px solid var(--titan-red);
+  border-bottom: 1px solid var(--titan-border);
+  padding: var(--space-md) var(--space-lg);
+}
+
+.admin-jobs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.admin-jobs-table th {
+  padding: 6px 12px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  border-bottom: 1px solid var(--titan-border);
+}
+
+.admin-jobs-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--titan-text);
+  vertical-align: middle;
+}
+
+.admin-jobs-table tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-filename {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--titan-text-dim);
+}
+
+/* ── Grade badges ── */
+
+.admin-grade {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 2px 9px;
+  border-radius: 2px;
+  border: 1px solid;
+}
+
+.admin-grade-a {
+  background: rgba(46, 204, 113, 0.1);
+  border-color: rgba(46, 204, 113, 0.3);
+  color: var(--titan-green);
+}
+
+.admin-grade-b {
+  background: rgba(241, 196, 15, 0.1);
+  border-color: rgba(241, 196, 15, 0.3);
+  color: var(--titan-yellow);
+}
+
+.admin-grade-c {
+  background: rgba(232, 55, 44, 0.1);
+  border-color: rgba(232, 55, 44, 0.3);
+  color: var(--titan-red);
+}
+
+.admin-grade-none {
+  color: var(--titan-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+/* ── Empty / loading / error states ── */
+
+.admin-empty,
+.admin-loading,
+.admin-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 40vh;
+  gap: var(--space-sm);
+  color: var(--titan-text-dim);
+  text-align: center;
+}
+
+.admin-loading {
+  flex-direction: row;
+  gap: var(--space-md);
+}

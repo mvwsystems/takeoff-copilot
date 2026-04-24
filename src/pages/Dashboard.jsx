@@ -1,9 +1,12 @@
 import { useState, useRef, useCallback } from 'react'
 import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ExternalLink } from 'lucide-react'
 import { SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
+import { supabase } from '../utils/supabase'
+import { useAuth } from '../utils/AuthContext'
 import './Dashboard.css'
 
 export default function Dashboard() {
+  const { user } = useAuth()
   const [images, setImages] = useState([])
   const [activeImage, setActiveImage] = useState(0)
   const [results, setResults] = useState({})
@@ -25,6 +28,9 @@ export default function Dashboard() {
   const [showKeyInput, setShowKeyInput] = useState(!localStorage.getItem('tc_api_key'))
   const [showOnboarding, setShowOnboarding] = useState(!localStorage.getItem('tc_onboarded'))
   const [onboardKey, setOnboardKey] = useState('')
+  const [onboardName, setOnboardName] = useState('')
+  const [onboardCompany, setOnboardCompany] = useState('')
+  const [onboardPhone, setOnboardPhone] = useState('')
   const fileInputRef = useRef(null)
   const geotechInputRef = useRef(null)
 
@@ -36,6 +42,19 @@ export default function Dashboard() {
     }
     localStorage.setItem('tc_onboarded', '1')
     setShowOnboarding(false)
+
+    // Save contact info to Supabase if the user filled it in
+    if (user && (onboardName.trim() || onboardCompany.trim())) {
+      supabase.from('profiles').upsert({
+        id: user.id,
+        email: user.email,
+        full_name: onboardName.trim() || null,
+        company: onboardCompany.trim() || null,
+        phone: onboardPhone.trim() || null,
+      }, { onConflict: 'id' }).then(({ error }) => {
+        if (error) console.warn('Profile save failed:', error.message)
+      })
+    }
   }
 
   const saveApiKey = (key) => {
@@ -375,6 +394,26 @@ export default function Dashboard() {
       setResults(prev => ({ ...prev, [idx]: parsed }))
       setActiveImage(idx)
       setActiveTab('takeoff')
+
+      // Fire-and-forget: log the completed job to Supabase for beta tracking
+      if (user) {
+        const rm = parsed?.risk_and_misses || {}
+        const riskCount = (rm.geotech_concerns?.length || 0) +
+                          (rm.missed_items?.length || 0) +
+                          (rm.bid_risk_items?.length || 0)
+        supabase.from('jobs').insert({
+          user_id: user.id,
+          plan_filename: images[idx]?.name || null,
+          geotech_filename: geotechFileName || null,
+          screening_grade: screenings[idx]?.grade || null,
+          screening_rationale: screenings[idx]?.rationale || null,
+          line_item_count: parsed?.takeoff?.length || 0,
+          risk_flag_count: riskCount,
+          result_json: parsed,
+        }).then(({ error }) => {
+          if (error) console.warn('Job log failed:', error.message)
+        })
+      }
     } catch (err) {
       console.error('Analysis error:', err)
       setError(`Sheet ${idx + 1}: ${err.message}`)
@@ -762,6 +801,44 @@ export default function Dashboard() {
               </div>
             </div>
 
+            <div className="onboarding-contact-section">
+              <div className="onboarding-section-label titan-label" style={{ marginBottom: 12, display: 'block' }}>
+                Your Contact Information
+              </div>
+              <div className="onboarding-contact-row">
+                <div className="onboarding-contact-field">
+                  <label className="titan-label" style={{ marginBottom: 5, display: 'block', fontSize: '0.6rem' }}>Full Name</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="John Smith"
+                    value={onboardName}
+                    onChange={e => setOnboardName(e.target.value)}
+                  />
+                </div>
+                <div className="onboarding-contact-field">
+                  <label className="titan-label" style={{ marginBottom: 5, display: 'block', fontSize: '0.6rem' }}>Company</label>
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Smith Utility Contractors"
+                    value={onboardCompany}
+                    onChange={e => setOnboardCompany(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <label className="titan-label" style={{ marginBottom: 5, display: 'block', fontSize: '0.6rem' }}>Phone Number</label>
+                <input
+                  type="tel"
+                  className="input"
+                  placeholder="(555) 000-0000"
+                  value={onboardPhone}
+                  onChange={e => setOnboardPhone(e.target.value)}
+                />
+              </div>
+            </div>
+
             <div className="onboarding-key-section">
               <label className="titan-label" style={{ marginBottom: 6, display: 'block' }}>
                 Anthropic API Key
@@ -773,7 +850,6 @@ export default function Dashboard() {
                 value={onboardKey}
                 onChange={e => setOnboardKey(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && onboardKey.trim() && dismissOnboarding()}
-                autoFocus
               />
               <a
                 href="https://console.anthropic.com"
@@ -794,7 +870,7 @@ export default function Dashboard() {
                 onClick={() => dismissOnboarding()}
                 disabled={!onboardKey.trim()}
               >
-                Save Key &amp; Get Started
+                Save &amp; Get Started
               </button>
             </div>
           </div>

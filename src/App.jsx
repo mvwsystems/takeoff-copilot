@@ -3,6 +3,7 @@ import Navbar from './components/Navbar'
 import LandingPage from './pages/LandingPage'
 import Dashboard from './pages/Dashboard'
 import LoginPage from './pages/LoginPage'
+import AdminPage from './pages/AdminPage'
 import { useAuth } from './utils/AuthContext'
 
 function ProtectedRoute({ children }) {
@@ -22,6 +23,11 @@ export default function App() {
         <Route path="/dashboard" element={
           <ProtectedRoute>
             <Dashboard />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin" element={
+          <ProtectedRoute>
+            <AdminPage />
           </ProtectedRoute>
         } />
       </Routes>
