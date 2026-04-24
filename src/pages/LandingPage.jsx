@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Upload, FileText, BarChart3, AlertTriangle, Layers, Users, ScanSearch, ChevronDown } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './LandingPage.css'
 
 const FAQS = [
@@ -30,26 +30,49 @@ const FAQS = [
   },
 ]
 
-function FAQ({ q, a }) {
+function FAQ({ q, a, index }) {
   const [open, setOpen] = useState(false)
   return (
-    <div className={`faq-item ${open ? 'open' : ''}`} onClick={() => setOpen(!open)}>
+    <div
+      className={`faq-item ${open ? 'open' : ''}`}
+      data-reveal
+      style={{ '--reveal-delay': `${index * 60}ms` }}
+      onClick={() => setOpen(!open)}
+    >
       <div className="faq-question">
         <span>{q}</span>
         <ChevronDown size={16} className="faq-chevron" />
       </div>
-      {open && <div className="faq-answer">{a}</div>}
+      <div className="faq-body">
+        <div className="faq-body-inner">
+          <div className="faq-answer">{a}</div>
+        </div>
+      </div>
     </div>
   )
 }
 
 export default function LandingPage() {
+  useEffect(() => {
+    const els = document.querySelectorAll('[data-reveal]')
+    if (!els.length) return
+    const io = new IntersectionObserver(
+      entries => entries.forEach(e => {
+        if (e.isIntersecting) { e.target.classList.add('visible'); io.unobserve(e.target) }
+      }),
+      { threshold: 0.08, rootMargin: '0px 0px -32px 0px' }
+    )
+    els.forEach(el => io.observe(el))
+    return () => io.disconnect()
+  }, [])
+
   return (
     <div className="landing">
 
       {/* HERO */}
       <section className="hero">
         <div className="hero-bg-grid" />
+        <div className="hero-glow" />
         <div className="hero-content animate-in">
           <div className="hero-badge">
             <span className="hero-badge-dot" />
@@ -94,7 +117,7 @@ export default function LandingPage() {
       {/* WHAT IT DOES */}
       <section className="features">
         <div className="features-inner">
-          <div className="section-header">
+          <div className="section-header" data-reveal>
             <span className="titan-label">Capabilities</span>
             <h2>What It Does</h2>
             <p className="section-sub">Six things Takeoff Copilot does on every uploaded job.</p>
@@ -132,8 +155,15 @@ export default function LandingPage() {
                 desc: 'The tool gives your team a faster starting point. Your estimator still makes the final call. Use it to speed up review, not skip review.'
               }
             ].map((f, i) => (
-              <div key={i} className="feature-card card" style={{ animationDelay: `${i * 80}ms` }}>
-                <div className="feature-icon">{f.icon}</div>
+              <div
+                key={i}
+                className="feature-card card"
+                data-reveal
+                style={{ '--reveal-delay': `${i * 80}ms` }}
+              >
+                <div className="feature-icon-wrap">
+                  <div className="feature-icon">{f.icon}</div>
+                </div>
                 <h4 className="feature-title">{f.title}</h4>
                 <p className="feature-desc">{f.desc}</p>
               </div>
@@ -145,7 +175,7 @@ export default function LandingPage() {
       {/* HOW IT WORKS */}
       <section className="how-it-works" id="how-it-works">
         <div className="how-inner">
-          <div className="section-header">
+          <div className="section-header" data-reveal>
             <span className="titan-label">Workflow</span>
             <h2>How It Works</h2>
           </div>
@@ -177,7 +207,12 @@ export default function LandingPage() {
                 desc: 'Your team reviews, adjusts, and decides what makes it into the bid. The tool does the first pass. The estimator stays in control.'
               }
             ].map((s, i) => (
-              <div key={i} className="step" style={{ animationDelay: `${i * 100}ms` }}>
+              <div
+                key={i}
+                className="step"
+                data-reveal
+                style={{ '--reveal-delay': `${i * 90}ms` }}
+              >
                 <div className="step-num">{s.num}</div>
                 <div className="step-content">
                   <h4>{s.title}</h4>
@@ -191,7 +226,7 @@ export default function LandingPage() {
 
       {/* ACCURACY / HONEST FRAMING */}
       <section className="accuracy-section">
-        <div className="accuracy-inner">
+        <div className="accuracy-inner" data-reveal>
           <div className="accuracy-label titan-label">On Accuracy</div>
           <h2 className="accuracy-headline">
             Not every plan set is equal.<br />
@@ -209,9 +244,19 @@ export default function LandingPage() {
             </p>
           </div>
           <div className="accuracy-pills">
-            <span className="accuracy-pill pill-high">High confidence — looks solid</span>
-            <span className="accuracy-pill pill-medium">Medium — verify before pricing</span>
-            <span className="accuracy-pill pill-low">Low — estimator must confirm</span>
+            {[
+              { cls: 'pill-high', label: 'High confidence — looks solid' },
+              { cls: 'pill-medium', label: 'Medium — verify before pricing' },
+              { cls: 'pill-low', label: 'Low — estimator must confirm' },
+            ].map((p, i) => (
+              <span
+                key={i}
+                className={`accuracy-pill ${p.cls}`}
+                style={{ '--reveal-delay': `${i * 100 + 200}ms` }}
+              >
+                {p.label}
+              </span>
+            ))}
           </div>
         </div>
       </section>
@@ -219,19 +264,19 @@ export default function LandingPage() {
       {/* FAQ */}
       <section className="faq-section">
         <div className="faq-inner">
-          <div className="section-header">
+          <div className="section-header" data-reveal>
             <span className="titan-label">Questions</span>
             <h2>Common Questions</h2>
           </div>
           <div className="faq-list">
-            {FAQS.map((f, i) => <FAQ key={i} {...f} />)}
+            {FAQS.map((f, i) => <FAQ key={i} index={i} {...f} />)}
           </div>
         </div>
       </section>
 
       {/* FINAL CTA */}
       <section className="cta">
-        <div className="cta-inner">
+        <div className="cta-inner" data-reveal>
           <span className="titan-label">Beta Program</span>
           <h2>
             Currently testing with<br />
