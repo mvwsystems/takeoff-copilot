@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ExternalLink } from 'lucide-react'
 import { SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import { supabase } from '../utils/supabase'
@@ -26,13 +26,27 @@ export default function Dashboard() {
   const [geotechFileName, setGeotechFileName] = useState(null)
   const [apiKey, setApiKey] = useState(localStorage.getItem('tc_api_key') || '')
   const [showKeyInput, setShowKeyInput] = useState(!localStorage.getItem('tc_api_key'))
-  const [showOnboarding, setShowOnboarding] = useState(!localStorage.getItem('tc_onboarded'))
+  // Show onboarding only if neither the "completed" flag nor an existing API key is present
+  const [showOnboarding, setShowOnboarding] = useState(
+    !localStorage.getItem('tc_onboarded') && !localStorage.getItem('tc_api_key')
+  )
   const [onboardKey, setOnboardKey] = useState('')
   const [onboardName, setOnboardName] = useState('')
   const [onboardCompany, setOnboardCompany] = useState('')
   const [onboardPhone, setOnboardPhone] = useState('')
   const fileInputRef = useRef(null)
   const geotechInputRef = useRef(null)
+
+  // If user already has a Supabase profile from a prior session, skip onboarding
+  useEffect(() => {
+    if (!user || !showOnboarding) return
+    supabase.from('profiles').select('id').eq('id', user.id).maybeSingle().then(({ data }) => {
+      if (data) {
+        localStorage.setItem('tc_onboarded', '1')
+        setShowOnboarding(false)
+      }
+    }).catch(() => {}) // table may not exist yet — fail silently
+  }, [user, showOnboarding])
 
   const dismissOnboarding = (keyValue) => {
     const key = keyValue || onboardKey
