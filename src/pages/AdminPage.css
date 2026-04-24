@@ -217,6 +217,26 @@
   font-size: 0.75rem;
 }
 
+.admin-rating {
+  font-size: 0.75rem;
+  color: var(--titan-yellow);
+  letter-spacing: 1px;
+}
+
+.admin-feedback-text {
+  font-size: 0.78rem;
+  color: var(--titan-text-dim);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.admin-feedback-comment {
+  margin-top: 4px;
+  color: var(--titan-text-muted);
+  font-style: italic;
+}
+
 /* ── Empty / loading / error states ── */
 
 .admin-empty,

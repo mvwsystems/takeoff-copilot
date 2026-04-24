@@ -108,6 +108,124 @@
 .sidebar-footer {
   padding: var(--space-sm);
   border-top: 1px solid var(--titan-border);
+  margin-top: auto;
+}
+
+/* —— JOB HISTORY —— */
+.sidebar-history {
+  border-top: 1px solid var(--titan-border);
+  overflow-y: auto;
+  max-height: 260px;
+  flex-shrink: 0;
+}
+
+.sidebar-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px 6px;
+}
+
+.sidebar-section-title {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+}
+
+.history-empty {
+  padding: 10px 12px;
+  font-size: 0.78rem;
+  color: var(--titan-text-muted);
+}
+
+.history-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.history-item:hover {
+  background: rgba(232, 55, 44, 0.04);
+  border-left-color: rgba(232, 55, 44, 0.4);
+}
+
+.history-item-active {
+  border-left-color: var(--titan-red) !important;
+  background: rgba(232, 55, 44, 0.06) !important;
+}
+
+.history-name {
+  font-size: 0.78rem;
+  color: var(--titan-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 3px;
+}
+
+.history-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--titan-text-muted);
+}
+
+.history-grade {
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-weight: 700;
+}
+.history-grade-a { background: rgba(46,204,113,0.12); color: var(--titan-green); }
+.history-grade-b { background: rgba(241,196,15,0.12); color: var(--titan-yellow); }
+.history-grade-c { background: rgba(232,55,44,0.12); color: var(--titan-red); }
+
+/* —— FEEDBACK —— */
+.feedback-submitted {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 1px;
+  color: var(--titan-green);
+  padding: 0 8px;
+}
+
+.feedback-modal {
+  width: 520px;
+}
+
+.feedback-stars {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.feedback-star {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.6rem;
+  color: var(--titan-border-light);
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.15s, transform 0.15s;
+}
+
+.feedback-star:hover,
+.feedback-star.active {
+  color: var(--titan-yellow);
+  transform: scale(1.1);
+}
+
+.feedback-star-label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 1px;
+  color: var(--titan-text-muted);
+  margin-left: 8px;
 }
 
 /* —— MAIN CONTENT —— */

@@ -23,6 +23,7 @@ export default function AdminPage() {
   const navigate = useNavigate()
   const [profiles, setProfiles] = useState([])
   const [jobs, setJobs] = useState([])
+  const [feedback, setFeedback] = useState([])
   const [fetching, setFetching] = useState(true)
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState({})
@@ -34,13 +35,15 @@ export default function AdminPage() {
 
     const load = async () => {
       setFetching(true)
-      const [{ data: p, error: pe }, { data: j, error: je }] = await Promise.all([
+      const [{ data: p, error: pe }, { data: j, error: je }, { data: f }] = await Promise.all([
         supabase.from('profiles').select('*').order('created_at', { ascending: false }),
         supabase.from('jobs').select('id, user_id, plan_filename, geotech_filename, screening_grade, line_item_count, risk_flag_count, created_at').order('created_at', { ascending: false }),
+        supabase.from('feedback').select('id, job_id, rating, corrections, comments, created_at').order('created_at', { ascending: false }),
       ])
       if (pe || je) setError((pe || je).message)
       setProfiles(p || [])
       setJobs(j || [])
+      setFeedback(f || [])
       setFetching(false)
     }
     load()
@@ -51,6 +54,16 @@ export default function AdminPage() {
     acc[j.user_id].push(j)
     return acc
   }, {})
+
+  const feedbackByJob = feedback.reduce((acc, f) => {
+    acc[f.job_id] = f
+    return acc
+  }, {})
+
+  const totalFeedback = feedback.length
+  const avgRating = feedback.length
+    ? (feedback.reduce((s, f) => s + (f.rating || 0), 0) / feedback.length).toFixed(1)
+    : '—'
 
   const exportCSV = () => {
     const BOM = '﻿'
@@ -115,6 +128,14 @@ export default function AdminPage() {
               {jobs.length && profiles.length ? (jobs.length / profiles.length).toFixed(1) : '—'}
             </span>
             <span className="admin-stat-label">Jobs/User</span>
+          </div>
+          <div className="admin-stat">
+            <span className="admin-stat-value">{totalFeedback}</span>
+            <span className="admin-stat-label">Feedback</span>
+          </div>
+          <div className="admin-stat">
+            <span className="admin-stat-value">{avgRating}</span>
+            <span className="admin-stat-label">Avg Rating</span>
           </div>
           <button className="btn btn-secondary" onClick={exportCSV} style={{ marginLeft: 16 }}>
             <Download size={14} /> Export CSV
@@ -182,30 +203,47 @@ export default function AdminPage() {
                                 <th>Plan File</th>
                                 <th>Geotech File</th>
                                 <th>Grade</th>
-                                <th>Line Items</th>
-                                <th>Risk Flags</th>
+                                <th>Items</th>
+                                <th>Flags</th>
+                                <th>Rating</th>
+                                <th>Contractor Notes</th>
                                 <th>Date</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {userJobs.map(j => (
-                                <tr key={j.id}>
-                                  <td>
-                                    {j.plan_filename
-                                      ? <span className="admin-filename"><FileText size={11} /> {j.plan_filename}</span>
-                                      : <span className="text-muted">—</span>}
-                                  </td>
-                                  <td>
-                                    {j.geotech_filename
-                                      ? <span className="admin-filename"><FileText size={11} /> {j.geotech_filename}</span>
-                                      : <span className="text-muted">—</span>}
-                                  </td>
-                                  <td><GradeBadge grade={j.screening_grade} /></td>
-                                  <td>{j.line_item_count ?? '—'}</td>
-                                  <td>{j.risk_flag_count ?? '—'}</td>
-                                  <td className="admin-date">{formatDate(j.created_at)}</td>
-                                </tr>
-                              ))}
+                              {userJobs.map(j => {
+                                const fb = feedbackByJob[j.id]
+                                return (
+                                  <tr key={j.id}>
+                                    <td>
+                                      {j.plan_filename
+                                        ? <span className="admin-filename"><FileText size={11} /> {j.plan_filename}</span>
+                                        : <span className="text-muted">—</span>}
+                                    </td>
+                                    <td>
+                                      {j.geotech_filename
+                                        ? <span className="admin-filename"><FileText size={11} /> {j.geotech_filename}</span>
+                                        : <span className="text-muted">—</span>}
+                                    </td>
+                                    <td><GradeBadge grade={j.screening_grade} /></td>
+                                    <td>{j.line_item_count ?? '—'}</td>
+                                    <td>{j.risk_flag_count ?? '—'}</td>
+                                    <td>
+                                      {fb ? (
+                                        <span className="admin-rating">
+                                          {'★'.repeat(fb.rating)}{'☆'.repeat(5 - fb.rating)}
+                                        </span>
+                                      ) : <span className="text-muted">—</span>}
+                                    </td>
+                                    <td style={{ maxWidth: 260 }}>
+                                      {fb?.corrections && <div className="admin-feedback-text">{fb.corrections}</div>}
+                                      {fb?.comments && <div className="admin-feedback-text admin-feedback-comment">{fb.comments}</div>}
+                                      {!fb && <span className="text-muted">—</span>}
+                                    </td>
+                                    <td className="admin-date">{formatDate(j.created_at)}</td>
+                                  </tr>
+                                )
+                              })}
                             </tbody>
                           </table>
                         </div>

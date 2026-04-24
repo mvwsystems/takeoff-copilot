@@ -34,6 +34,15 @@ export default function Dashboard() {
   const [onboardName, setOnboardName] = useState('')
   const [onboardCompany, setOnboardCompany] = useState('')
   const [onboardPhone, setOnboardPhone] = useState('')
+  const [jobHistory, setJobHistory] = useState([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [activeJobId, setActiveJobId] = useState(null)
+  const [feedbackModal, setFeedbackModal] = useState(null)
+  const [feedbackRating, setFeedbackRating] = useState(0)
+  const [feedbackComments, setFeedbackComments] = useState('')
+  const [feedbackCorrections, setFeedbackCorrections] = useState('')
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
+  const [feedbackDone, setFeedbackDone] = useState({})
   const fileInputRef = useRef(null)
   const geotechInputRef = useRef(null)
 
@@ -47,6 +56,57 @@ export default function Dashboard() {
       }
     }).catch(() => {}) // table may not exist yet — fail silently
   }, [user, showOnboarding])
+
+  const formatHistoryDate = (ts) => {
+    if (!ts) return ''
+    const diffDays = Math.floor((Date.now() - new Date(ts)) / 86400000)
+    if (diffDays === 0) return 'Today'
+    if (diffDays === 1) return 'Yesterday'
+    return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  }
+
+  const loadHistory = useCallback(async () => {
+    if (!user) return
+    setHistoryLoading(true)
+    const { data } = await supabase
+      .from('jobs')
+      .select('id, plan_filename, screening_grade, line_item_count, created_at, result_json')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false })
+      .limit(15)
+    setJobHistory(data || [])
+    setHistoryLoading(false)
+  }, [user])
+
+  useEffect(() => { loadHistory() }, [loadHistory])
+
+  const restoreJob = (job) => {
+    if (!job.result_json) return
+    setImages([{ name: job.plan_filename || 'Past Job', preview: null }])
+    setResults({ 0: job.result_json })
+    setScreenings(job.screening_grade ? { 0: { grade: job.screening_grade } } : {})
+    setActiveImage(0)
+    setActiveTab('takeoff')
+    setActiveJobId(job.id)
+  }
+
+  const submitFeedback = async () => {
+    if (!feedbackModal || !user || !feedbackRating) return
+    setFeedbackSubmitting(true)
+    const { error } = await supabase.from('feedback').insert({
+      job_id: feedbackModal.id,
+      user_id: user.id,
+      rating: feedbackRating,
+      comments: feedbackComments.trim() || null,
+      corrections: feedbackCorrections.trim() || null,
+    })
+    if (!error) setFeedbackDone(prev => ({ ...prev, [feedbackModal.id]: true }))
+    setFeedbackSubmitting(false)
+    setFeedbackModal(null)
+    setFeedbackRating(0)
+    setFeedbackComments('')
+    setFeedbackCorrections('')
+  }
 
   const dismissOnboarding = (keyValue) => {
     const key = keyValue || onboardKey
@@ -424,8 +484,10 @@ export default function Dashboard() {
           line_item_count: parsed?.takeoff?.length || 0,
           risk_flag_count: riskCount,
           result_json: parsed,
-        }).then(({ error }) => {
-          if (error) console.warn('Job log failed:', error.message)
+        }).select('id').then(({ data, error }) => {
+          if (error) { console.warn('Job log failed:', error.message); return }
+          if (data?.[0]?.id) setActiveJobId(data[0].id)
+          loadHistory()
         })
       }
     } catch (err) {
@@ -1040,6 +1102,34 @@ export default function Dashboard() {
           <input ref={geotechInputRef} type="file" accept=".pdf,application/pdf" onChange={handleGeotechUpload} style={{ display: 'none' }} />
         </div>
 
+        {/* JOB HISTORY */}
+        {user && (
+          <div className="sidebar-history">
+            <div className="sidebar-history-header">
+              <span className="sidebar-section-title">Recent Jobs</span>
+              {historyLoading && <div className="spinner spinner-sm" />}
+            </div>
+            {!historyLoading && jobHistory.length === 0 ? (
+              <div className="history-empty">No past jobs yet.</div>
+            ) : (
+              jobHistory.map(job => (
+                <div key={job.id} className={`history-item ${activeJobId === job.id ? 'history-item-active' : ''}`} onClick={() => restoreJob(job)}>
+                  <div className="history-name">{job.plan_filename || 'Untitled Job'}</div>
+                  <div className="history-meta">
+                    {job.screening_grade && (
+                      <span className={`history-grade history-grade-${job.screening_grade.toLowerCase()}`}>
+                        {job.screening_grade}
+                      </span>
+                    )}
+                    {job.line_item_count > 0 && <span>{job.line_item_count} items</span>}
+                    <span>{formatHistoryDate(job.created_at)}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+
         <div className="sidebar-footer">
           <button className="btn btn-ghost" style={{ width: '100%', fontSize: '0.7rem' }} onClick={() => setShowKeyInput(true)}>
             ⚙ API Settings
@@ -1101,6 +1191,13 @@ export default function Dashboard() {
                     <button className="btn btn-primary" onClick={exportPDF}>
                       <FileText size={14} /> PDF Report
                     </button>
+                    {activeJobId && (
+                      feedbackDone[activeJobId]
+                        ? <span className="feedback-submitted">✓ Feedback received</span>
+                        : <button className="btn btn-ghost" style={{ fontSize: '0.75rem' }} onClick={() => setFeedbackModal({ id: activeJobId })}>
+                            Rate Result
+                          </button>
+                    )}
                   </>
                 )}
                 {analyzedCount > 1 && (
@@ -1540,6 +1637,66 @@ export default function Dashboard() {
           </>
         )}
       </main>
+
+      {/* FEEDBACK MODAL */}
+      {feedbackModal && (
+        <div className="modal-overlay" onClick={() => setFeedbackModal(null)}>
+          <div className="modal card feedback-modal" onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <h3>Rate This Takeoff</h3>
+              <button className="btn btn-ghost" style={{ padding: '4px 8px' }} onClick={() => setFeedbackModal(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <p className="text-dim" style={{ fontSize: '0.82rem', marginBottom: 20, lineHeight: 1.6 }}>
+              Your feedback goes directly to our team and is used to improve accuracy. Be specific — exact quantities help most.
+            </p>
+
+            <div style={{ marginBottom: 18 }}>
+              <label className="titan-label" style={{ display: 'block', marginBottom: 10 }}>Overall Accuracy</label>
+              <div className="feedback-stars">
+                {[1, 2, 3, 4, 5].map(n => (
+                  <button key={n} className={`feedback-star ${feedbackRating >= n ? 'active' : ''}`} onClick={() => setFeedbackRating(n)}>★</button>
+                ))}
+                {feedbackRating > 0 && (
+                  <span className="feedback-star-label">
+                    {['', 'Way off', 'Mostly wrong', 'Roughly right', 'Good', 'Excellent'][feedbackRating]}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label className="titan-label" style={{ display: 'block', marginBottom: 6 }}>What Was Wrong or Missing</label>
+              <textarea
+                className="input"
+                rows={3}
+                placeholder={'e.g. Missed 6" force main on sheet 3, 8" PVC should be 450 LF not 380 LF'}
+                value={feedbackCorrections}
+                onChange={e => setFeedbackCorrections(e.target.value)}
+              />
+            </div>
+
+            <div style={{ marginBottom: 20 }}>
+              <label className="titan-label" style={{ display: 'block', marginBottom: 6 }}>Other Comments</label>
+              <textarea
+                className="input"
+                rows={2}
+                placeholder="Anything else — plan quality, tool behavior, suggestions..."
+                value={feedbackComments}
+                onChange={e => setFeedbackComments(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn btn-ghost" onClick={() => setFeedbackModal(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={submitFeedback} disabled={!feedbackRating || feedbackSubmitting}>
+                {feedbackSubmitting ? 'Submitting...' : 'Submit Feedback'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
