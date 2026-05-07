@@ -50,11 +50,12 @@
   --space-3xl: 64px;
   
   /* —— MOTION —— */
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-silk: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-  --duration-fast: 150ms;
-  --duration-normal: 300ms;
-  --duration-slow: 500ms;
+  --duration-fast: 220ms;
+  --duration-normal: 350ms;
+  --duration-slow: 550ms;
   
   /* —— ANGLES (ticker tape motif) —— */
   --angle-sm: 1.5deg;
@@ -150,7 +151,12 @@ h4 { font-size: 1.25rem; }
   border: none;
   border-radius: 2px;
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition:
+    background  0.3s var(--ease-silk),
+    color       0.3s var(--ease-silk),
+    border-color 0.3s var(--ease-silk),
+    box-shadow  0.35s var(--ease-silk),
+    transform   0.35s var(--ease-out);
   text-transform: uppercase;
   display: inline-flex;
   align-items: center;
@@ -163,7 +169,7 @@ h4 { font-size: 1.25rem; }
 }
 .btn-primary:hover {
   background: var(--titan-red-bright);
-  box-shadow: 0 0 20px var(--titan-red-glow);
+  box-shadow: 0 0 22px var(--titan-red-glow);
   transform: translateY(-1px);
 }
 

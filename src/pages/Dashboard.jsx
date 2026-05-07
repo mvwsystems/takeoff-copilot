@@ -1039,8 +1039,7 @@ export default function Dashboard() {
           <div className="sidebar-geotech-body">
             {!geotechResult && !geotechLoading && !geotechError && (
               <div className="geotech-empty">
-                <FileText size={18} style={{ opacity: 0.25, marginBottom: 6 }} />
-                <span>Upload a geotech PDF to flag soil risks</span>
+                <span>Upload your geotech PDF to flag soil risks</span>
               </div>
             )}
             {geotechLoading && (
