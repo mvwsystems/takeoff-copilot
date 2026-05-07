@@ -763,6 +763,15 @@
   gap: 8px;
 }
 
+.footer-brand-link {
+  text-decoration: none;
+  transition: color 0.25s;
+}
+
+.footer-brand-link:hover {
+  color: var(--titan-text-dim);
+}
+
 /* ============================================================
    RESPONSIVE
    ============================================================ */

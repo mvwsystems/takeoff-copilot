@@ -305,9 +305,9 @@ export default function LandingPage() {
           <div className="footer-brand">
             <span className="brand-name" style={{ fontSize: '0.9rem' }}>Takeoff Copilot</span>
             <span className="titan-separator">//</span>
-            <span className="titan-label">Powered by Titan AI</span>
+            <a href="https://6signal.co" target="_blank" rel="noopener noreferrer" className="titan-label footer-brand-link">Powered by 6 Signal</a>
           </div>
-          <div className="titan-label">&copy; {new Date().getFullYear()} Titan AI. All rights reserved.</div>
+          <div className="titan-label">&copy; {new Date().getFullYear()} 6 Signal. All rights reserved.</div>
         </div>
       </footer>
 

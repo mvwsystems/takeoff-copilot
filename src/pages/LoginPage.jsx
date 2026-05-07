@@ -33,6 +33,7 @@ export default function LoginPage() {
         <Auth
           supabaseClient={supabase}
           providers={[]}
+          redirectTo="https://takeoffcopilot.com/dashboard"
           appearance={{
             theme: ThemeSupa,
             variables: {
@@ -54,6 +55,8 @@ export default function LoginPage() {
                   inputPlaceholder: '#555555',
                   inputLabelText: '#888888',
                   messageText: '#CCCCCC',
+                  messageBackground: '#1A1A1A',
+                  messageBorder: '#333333',
                   messageTextDanger: '#E8372C',
                   anchorTextColor: '#E8372C',
                   anchorTextHoverColor: '#FF4438',
@@ -88,21 +91,35 @@ export default function LoginPage() {
             style: {
               button: { textTransform: 'uppercase', letterSpacing: '0.5px', fontWeight: '600' },
               anchor: { fontSize: '0.78rem' },
-              message: { fontSize: '0.78rem' },
+              message: {
+                fontSize: '0.82rem',
+                padding: '12px 14px',
+                border: '1px solid #333',
+                borderRadius: '2px',
+                background: '#1A1A1A',
+                color: '#CCCCCC',
+                lineHeight: '1.5',
+              },
               label: { textTransform: 'uppercase', letterSpacing: '1.5px' },
             },
           }}
           localization={{
             variables: {
               sign_in: { email_label: 'Email', password_label: 'Password', button_label: 'Sign In', link_text: 'Already have an account? Sign in' },
-              sign_up: { email_label: 'Email', password_label: 'Password', button_label: 'Create Account', link_text: "Don't have an account? Sign up" },
+              sign_up: {
+                email_label: 'Email',
+                password_label: 'Password',
+                button_label: 'Create Account',
+                link_text: "Don't have an account? Sign up",
+                confirmation_text: 'Check your email for a confirmation link from Takeoff Copilot.',
+              },
             },
           }}
         />
 
         <div className="login-footer">
           <span className="text-muted" style={{ fontSize: '0.72rem' }}>
-            Need access? <a href="mailto:matt@growwithtitan.com" style={{ color: 'var(--titan-red)' }}>Contact Titan AI</a>
+            Need access? <a href="mailto:matt@growwithtitan.com" style={{ color: 'var(--titan-red)' }}>Contact 6 Signal</a>
           </span>
         </div>
       </div>

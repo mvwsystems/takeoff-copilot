@@ -22,7 +22,7 @@ export default function Navbar() {
           <div className="brand-text">
             <span className="brand-name">Takeoff Copilot</span>
             <span className="brand-separator">//</span>
-            <span className="brand-sub">Titan AI</span>
+            <span className="brand-sub">6 SIGNAL</span>
           </div>
         </Link>
 
