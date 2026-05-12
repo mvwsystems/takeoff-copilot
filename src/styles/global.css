@@ -17,22 +17,23 @@
   --titan-border-light: #333333;
   --titan-muted: #444444;
   
-  --titan-red: #E8372C;
-  --titan-red-dim: #B82A22;
-  --titan-red-glow: rgba(232, 55, 44, 0.15);
-  --titan-red-bright: #FF4438;
-  
+  --titan-red: #C0FF00;
+  --titan-red-dim: #9ECC00;
+  --titan-red-glow: rgba(192, 255, 0, 0.22);
+  --titan-red-bright: #D4FF1A;
+  --titan-accent2: #E6FF00;
+
   --titan-white: #F5F5F0;
   --titan-offwhite: #E8E8E3;
   --titan-text: #CCCCCC;
   --titan-text-dim: #888888;
   --titan-text-muted: #555555;
-  
+
   --titan-green: #2ECC71;
   --titan-green-bg: rgba(46, 204, 113, 0.1);
   --titan-yellow: #F1C40F;
   --titan-yellow-bg: rgba(241, 196, 15, 0.1);
-  --titan-red-bg: rgba(232, 55, 44, 0.1);
+  --titan-red-bg: rgba(192, 255, 0, 0.1);
   --titan-blue: #3498DB;
   
   /* —— TYPOGRAPHY —— */
@@ -165,10 +166,10 @@ h4 { font-size: 1.25rem; }
 
 .btn-primary {
   background: var(--titan-red);
-  color: var(--titan-white);
+  color: #0A0A0A;
 }
 .btn-primary:hover {
-  background: var(--titan-red-bright);
+  background: var(--titan-accent2);
   box-shadow: 0 0 22px var(--titan-red-glow);
   transform: translateY(-1px);
 }

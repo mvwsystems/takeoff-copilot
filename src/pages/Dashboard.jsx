@@ -16,8 +16,6 @@ export default function Dashboard() {
   const [comparisonData, setComparisonData] = useState('')
   const [activeTab, setActiveTab] = useState('takeoff')
   const [processingAll, setProcessingAll] = useState(false)
-  const [pdfLoading, setPdfLoading] = useState(false)
-  const [pdfProgress, setPdfProgress] = useState('')
   const [screenings, setScreenings] = useState({})
   const [screeningSheet, setScreeningSheet] = useState(null)
   const [geotechResult, setGeotechResult] = useState(null)
@@ -137,82 +135,31 @@ export default function Dashboard() {
     setShowKeyInput(false)
   }
 
-  const loadPdfJs = useCallback(async () => {
-    if (window.pdfjsLib) return window.pdfjsLib
-    return new Promise((resolve, reject) => {
-      const script = document.createElement('script')
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
-      script.onload = () => {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-          'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-        resolve(window.pdfjsLib)
-      }
-      script.onerror = reject
-      document.head.appendChild(script)
-    })
-  }, [])
-
-  const convertPdfToImages = useCallback(async (file) => {
-    setPdfLoading(true)
-    setPdfProgress(`Loading ${file.name}...`)
-    try {
-      const pdfjsLib = await loadPdfJs()
-      const arrayBuffer = await file.arrayBuffer()
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
-      const totalPages = pdf.numPages
-      
-      for (let i = 1; i <= totalPages; i++) {
-        setPdfProgress(`Converting ${file.name}: ${i}/${totalPages}`)
-        const page = await pdf.getPage(i)
-        const scale = 1.5
-        const viewport = page.getViewport({ scale })
-        const canvas = document.createElement('canvas')
-        canvas.width = viewport.width
-        canvas.height = viewport.height
-        const ctx = canvas.getContext('2d')
-        ctx.fillStyle = '#FFFFFF'
-        ctx.fillRect(0, 0, canvas.width, canvas.height)
-        await page.render({ canvasContext: ctx, viewport }).promise
-        
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.88)
-        const base64 = dataUrl.split(',')[1]
-        setImages(prev => [...prev, {
-          name: `${file.name} — Page ${i}`,
-          base64,
-          mediaType: 'image/jpeg',
-          preview: dataUrl,
-        }])
-      }
-      setPdfProgress(`Done — ${totalPages} pages`)
-    } catch (err) {
-      setError(`PDF conversion failed: ${err.message}`)
-    } finally {
-      setPdfLoading(false)
-      setTimeout(() => setPdfProgress(''), 3000)
-    }
-  }, [loadPdfJs])
+  const readFileAsBase64 = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (ev) => resolve(ev.target.result.split(',')[1])
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
 
   const handleFileUpload = useCallback((e) => {
     const files = Array.from(e.target.files)
     files.forEach(file => {
-      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-        convertPdfToImages(file)
-      } else {
-        const reader = new FileReader()
-        reader.onload = (ev) => {
-          const base64 = ev.target.result.split(',')[1]
-          setImages(prev => [...prev, {
-            name: file.name,
-            base64,
-            mediaType: file.type || 'image/png',
-            preview: ev.target.result,
-          }])
-        }
-        reader.readAsDataURL(file)
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+      const reader = new FileReader()
+      reader.onload = (ev) => {
+        const base64 = ev.target.result.split(',')[1]
+        setImages(prev => [...prev, {
+          name: file.name,
+          base64,
+          mediaType: isPdf ? 'application/pdf' : (file.type || 'image/png'),
+          preview: isPdf ? null : ev.target.result,
+        }])
       }
+      reader.readAsDataURL(file)
     })
     e.target.value = ''
-  }, [convertPdfToImages])
+  }, [])
 
   const removeImage = (idx) => {
     setImages(prev => prev.filter((_, i) => i !== idx))
@@ -228,8 +175,9 @@ export default function Dashboard() {
   const callApi = async (img, prompt, maxTokens = 4096) => {
     let base64Data = img.base64
     let mType = img.mediaType
+    const isPdf = mType === 'application/pdf'
 
-    if (base64Data.length > 5 * 1024 * 1024) {
+    if (!isPdf && base64Data.length > 5 * 1024 * 1024) {
       const resizeCanvas = document.createElement('canvas')
       const resizeCtx = resizeCanvas.getContext('2d')
       const tempImg = new Image()
@@ -253,12 +201,17 @@ export default function Dashboard() {
       mType = 'image/jpeg'
     }
 
+    const fileBlock = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } }
+      : { type: 'image', source: { type: 'base64', media_type: mType, data: base64Data } }
+
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'pdfs-2024-09-25',
         'anthropic-dangerous-direct-browser-access': 'true'
       },
       body: JSON.stringify({
@@ -268,7 +221,7 @@ export default function Dashboard() {
           role: 'user',
           content: [
             { type: 'text', text: prompt },
-            { type: 'image', source: { type: 'base64', media_type: mType, data: base64Data } }
+            fileBlock
           ]
         }]
       })
@@ -339,28 +292,6 @@ export default function Dashboard() {
     return parsed
   }
 
-  const pdfToImages = async (file, maxPages = 10) => {
-    const pdfjsLib = await loadPdfJs()
-    const arrayBuffer = await file.arrayBuffer()
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
-    const totalPages = Math.min(pdf.numPages, maxPages)
-    const imgs = []
-    for (let i = 1; i <= totalPages; i++) {
-      const page = await pdf.getPage(i)
-      const viewport = page.getViewport({ scale: 1.5 })
-      const canvas = document.createElement('canvas')
-      canvas.width = viewport.width
-      canvas.height = viewport.height
-      const ctx = canvas.getContext('2d')
-      ctx.fillStyle = '#FFFFFF'
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
-      await page.render({ canvasContext: ctx, viewport }).promise
-      const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
-      imgs.push({ base64: dataUrl.split(',')[1], mediaType: 'image/jpeg', preview: dataUrl })
-    }
-    return imgs
-  }
-
   const processGeotech = async (file) => {
     if (!apiKey) { setShowKeyInput(true); return }
     setGeotechLoading(true)
@@ -368,10 +299,10 @@ export default function Dashboard() {
     setGeotechFileName(file.name)
     setGeotechResult(null)
     try {
-      const pages = await pdfToImages(file, 12)
-      const result = await callApiMulti(
-        pages,
-        GEOTECH_PROMPT + '\n\nExtract all geotechnical data from these report pages. Respond ONLY with the JSON object, no other text.',
+      const base64 = await readFileAsBase64(file)
+      const result = await callApi(
+        { base64, mediaType: 'application/pdf' },
+        GEOTECH_PROMPT + '\n\nExtract all geotechnical data from this report. Respond ONLY with the JSON object, no other text.',
         2048
       )
       setGeotechResult(result)
@@ -986,10 +917,6 @@ export default function Dashboard() {
             <Upload size={15} /> Upload Sheets
           </button>
           <input ref={fileInputRef} type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.pdf,application/pdf" multiple onChange={handleFileUpload} style={{ display: 'none' }} />
-          
-          {pdfLoading && (
-            <div className="pdf-progress">{pdfProgress}</div>
-          )}
           
           {images.length > 1 && (
             <button className="btn btn-secondary" style={{ width: '100%', marginTop: 6 }} onClick={analyzeAll} disabled={processingAll || loading}>
