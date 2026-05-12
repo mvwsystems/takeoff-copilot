@@ -3,6 +3,7 @@ import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye,
 import { SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
+import * as XLSX from 'xlsx'
 import './Dashboard.css'
 
 export default function Dashboard() {
@@ -41,8 +42,12 @@ export default function Dashboard() {
   const [feedbackCorrections, setFeedbackCorrections] = useState('')
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
   const [feedbackDone, setFeedbackDone] = useState({})
+  const [qaMode, setQaMode] = useState(false)
+  const [uploadedTakeoffName, setUploadedTakeoffName] = useState(null)
+  const [uploadedTakeoffData, setUploadedTakeoffData] = useState(null)
   const fileInputRef = useRef(null)
   const geotechInputRef = useRef(null)
+  const takeoffInputRef = useRef(null)
 
   // If user already has a Supabase profile from a prior session, skip onboarding
   useEffect(() => {
@@ -319,6 +324,26 @@ export default function Dashboard() {
     if (!file) return
     e.target.value = ''
     processGeotech(file)
+  }
+
+  const handleTakeoffUpload = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    e.target.value = ''
+    setUploadedTakeoffName(file.name)
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const workbook = XLSX.read(ev.target.result, { type: 'array' })
+        const sheet = workbook.Sheets[workbook.SheetNames[0]]
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' })
+        setUploadedTakeoffData(rows)
+      } catch (err) {
+        console.error('Takeoff parse error:', err)
+        setUploadedTakeoffData(null)
+      }
+    }
+    reader.readAsArrayBuffer(file)
   }
 
   const geotechCrossRef = (geo, takeoffResults) => {
@@ -1025,6 +1050,40 @@ export default function Dashboard() {
           </button>
           <input ref={geotechInputRef} type="file" accept=".pdf,application/pdf" onChange={handleGeotechUpload} style={{ display: 'none' }} />
         </div>
+
+        {/* QA TAKEOFF UPLOAD — only in QA Mode */}
+        {qaMode && (
+          <div className="sidebar-geotech">
+            <div className="sidebar-geotech-header">
+              <span className="sidebar-geotech-title">Completed Takeoff</span>
+            </div>
+            <div className="sidebar-geotech-body">
+              {uploadedTakeoffData && (
+                <div className="geotech-result-summary">
+                  <div className="geotech-result-name">{uploadedTakeoffName}</div>
+                  <div className="geotech-result-meta">{uploadedTakeoffData.length} rows parsed</div>
+                </div>
+              )}
+            </div>
+            <button
+              className="btn btn-secondary"
+              style={{ width: 'calc(100% - 16px)', margin: '0 8px 8px', fontSize: '0.72rem' }}
+              onClick={() => takeoffInputRef.current?.click()}
+            >
+              <Upload size={12} /> {uploadedTakeoffData ? 'Replace Takeoff' : 'Upload Completed Takeoff'}
+            </button>
+            <input
+              ref={takeoffInputRef}
+              type="file"
+              accept=".csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+              onChange={handleTakeoffUpload}
+              style={{ display: 'none' }}
+            />
+            <div style={{ padding: '0 8px 8px', fontSize: '0.68rem', color: 'var(--titan-text-muted)' }}>
+              Your completed takeoff (CSV or Excel)
+            </div>
+          </div>
+        )}
 
         {/* JOB HISTORY */}
         {user && (
