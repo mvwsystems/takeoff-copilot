@@ -18,7 +18,6 @@ export default function Navbar() {
     <nav className="navbar">
       <div className="navbar-inner">
         <Link to="/" className="navbar-brand">
-          <div className="brand-mark">T</div>
           <div className="brand-text">
             <span className="brand-name">Takeoff Copilot</span>
             <span className="brand-separator">//</span>
