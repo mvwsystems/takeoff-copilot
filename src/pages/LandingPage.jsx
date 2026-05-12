@@ -31,7 +31,7 @@ const FAQS = [
 ]
 
 function FAQ({ q, a, index }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(index === 0)
   return (
     <div
       className={`faq-item ${open ? 'open' : ''}`}
