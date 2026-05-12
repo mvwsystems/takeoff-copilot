@@ -30,13 +30,11 @@ const FAQS = [
   },
 ]
 
-function FAQ({ q, a, index }) {
+function FAQ({ q, a }) {
   const [open, setOpen] = useState(true)
   return (
     <div
       className={`faq-item ${open ? 'open' : ''}`}
-      data-reveal
-      style={{ '--reveal-delay': `${index * 60}ms` }}
       onClick={() => setOpen(!open)}
     >
       <div className="faq-question">
