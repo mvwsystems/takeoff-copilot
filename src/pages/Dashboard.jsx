@@ -42,7 +42,7 @@ export default function Dashboard() {
   const [feedbackCorrections, setFeedbackCorrections] = useState('')
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
   const [feedbackDone, setFeedbackDone] = useState({})
-  const [qaMode, setQaMode] = useState(false)
+  const [qaMode, setQaMode] = useState(true)
   const [uploadedTakeoffName, setUploadedTakeoffName] = useState(null)
   const [uploadedTakeoffData, setUploadedTakeoffData] = useState(null)
   const fileInputRef = useRef(null)
@@ -417,10 +417,11 @@ export default function Dashboard() {
     setError(null)
 
     try {
-      const parsed = await callApi(
-        img,
-        SYSTEM_PROMPT + '\n\n---\n\nAnalyze this construction plan sheet and produce a complete quantity takeoff. Extract every identifiable item. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.'
-      )
+      const modeContext = qaMode && uploadedTakeoffData
+        ? `\n\n---\n\nMODE: QA Mode. The estimator has already completed a takeoff. Your job is to analyze the plan sheet and cross-reference your findings against the estimator's submitted takeoff below. Flag any items the estimator may have missed, any quantities that appear significantly different from what you can read from the plans, and any line items in the estimator's takeoff that you cannot verify from the documents.\n\nESTIMATOR'S COMPLETED TAKEOFF (${uploadedTakeoffName}):\n${JSON.stringify(uploadedTakeoffData, null, 2)}\n\nAnalyze this construction plan sheet and produce a complete quantity takeoff, then cross-reference with the estimator's takeoff above. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.`
+        : `\n\n---\n\nMODE: Takeoff Mode. Analyze this construction plan sheet and produce a complete quantity takeoff. Extract every identifiable item. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.`
+
+      const parsed = await callApi(img, SYSTEM_PROMPT + modeContext)
       setResults(prev => ({ ...prev, [idx]: parsed }))
       setActiveImage(idx)
       setActiveTab('takeoff')
@@ -1122,6 +1123,22 @@ export default function Dashboard() {
 
       {/* MAIN */}
       <main className="main-content">
+        {/* MODE TOGGLE */}
+        <div className="mode-toggle-bar">
+          <button
+            className={`mode-toggle-btn ${!qaMode ? 'active' : ''}`}
+            onClick={() => setQaMode(false)}
+          >
+            Takeoff Mode
+          </button>
+          <button
+            className={`mode-toggle-btn ${qaMode ? 'active' : ''}`}
+            onClick={() => setQaMode(true)}
+          >
+            QA Mode
+          </button>
+        </div>
+
         {images.length === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">

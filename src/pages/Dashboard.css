@@ -228,6 +228,46 @@
   margin-left: 8px;
 }
 
+/* —— MODE TOGGLE —— */
+.mode-toggle-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 12px;
+  background: var(--titan-card);
+  border-bottom: 1px solid var(--titan-border);
+  flex-shrink: 0;
+}
+
+.mode-toggle-btn {
+  font-family: var(--font-body);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 5px 16px;
+  border: 1px solid var(--titan-border);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--titan-text-dim);
+  cursor: pointer;
+  transition:
+    background  0.25s var(--ease-silk),
+    color       0.25s var(--ease-silk),
+    border-color 0.25s var(--ease-silk);
+}
+
+.mode-toggle-btn:hover {
+  color: var(--titan-text);
+  border-color: var(--titan-border-light);
+}
+
+.mode-toggle-btn.active {
+  background: var(--titan-red);
+  color: #fff;
+  border-color: var(--titan-red);
+}
+
 /* —— MAIN CONTENT — light theme —— */
 .main-content {
   flex: 1;
