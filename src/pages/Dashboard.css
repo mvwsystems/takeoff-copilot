@@ -896,6 +896,24 @@
   padding: 16px 0 24px;
 }
 
+/* DOWNLOAD BAR */
+.qa-download-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--titan-surface);
+  border: 1px solid var(--titan-border);
+  border-radius: 6px;
+}
+.qa-download-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+  color: var(--titan-text-muted);
+}
+
 /* TOP ROW: EXEC SUMMARY + SCORE */
 .qa-top-row {
   display: flex;

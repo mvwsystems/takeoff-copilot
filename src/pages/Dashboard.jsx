@@ -785,6 +785,226 @@ export default function Dashboard() {
     win.onload = () => { URL.revokeObjectURL(url); win.focus(); win.print() }
   }
 
+  const exportQAPDF = () => {
+    const res = results[activeImage]
+    if (!res?.executive_risk_summary) return
+    const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+    const sc = screenings[activeImage] || res.plan_screening
+    const si = res.sheet_info || {}
+    const conf = res.estimator_confidence_score || {}
+
+    const gradeColor = sc?.grade === 'A' ? '#2ECC71' : sc?.grade === 'B' ? '#F1C40F' : '#E8372C'
+    const riskColor = r => r === 'HIGH' ? '#E8372C' : r === 'MEDIUM' ? '#F1C40F' : '#2ECC71'
+    const scoreColor = g => ({ A: '#2ECC71', B: '#84cc16', C: '#F1C40F', D: '#f97316', F: '#E8372C' }[g] || '#888')
+    const statusColor = s => s === 'CONFIRMED' ? '#2ECC71' : s === 'APPEARS HIGH' ? '#F1C40F' : s === 'UNVERIFIABLE' ? '#888' : '#E8372C'
+    const scopeColor = s => s === 'PRESENT' ? '#2ECC71' : s === 'MISSING' ? '#E8372C' : '#888'
+    const scopeIcon = s => s === 'PRESENT' ? '&#10003;' : s === 'MISSING' ? '&#10007;' : '?'
+
+    const highRiskRows = (res.high_risk_misses || []).map(m => `
+      <tr>
+        <td class="center"><span class="rbadge" style="background:${riskColor(m.risk_level)}18;color:${riskColor(m.risk_level)};border-color:${riskColor(m.risk_level)}50">${m.risk_level}</span></td>
+        <td class="bold">${m.item}</td>
+        <td class="mono muted">${m.estimator_quantity || '—'}</td>
+        <td class="mono">${m.plan_read_quantity || '—'}</td>
+        <td class="small muted">${m.note || ''}</td>
+      </tr>`).join('')
+
+    const recheckRows = (res.quantity_items_to_recheck || []).map(q => `
+      <tr>
+        <td class="center"><span class="rbadge" style="background:${statusColor(q.qa_status)}18;color:${statusColor(q.qa_status)};border-color:${statusColor(q.qa_status)}50;font-size:6.5pt;white-space:nowrap">${q.qa_status}</span></td>
+        <td>${q.item || ''}</td>
+        <td class="mono muted">${q.estimator_quantity || '—'}</td>
+        <td class="mono">${q.plan_read_quantity || '—'}</td>
+        <td class="small muted">${q.note || ''}</td>
+      </tr>`).join('')
+
+    const scopeRows = (res.scope_gaps || []).map(s => `
+      <div class="scope-row" style="border-left-color:${scopeColor(s.status)}">
+        <span class="scope-icon" style="color:${scopeColor(s.status)}">${scopeIcon(s.status)}</span>
+        <div>
+          <div class="scope-item">${s.item}${s.risk_level && s.status !== 'PRESENT' ? ` <span class="rbadge" style="background:${riskColor(s.risk_level)}18;color:${riskColor(s.risk_level)};border-color:${riskColor(s.risk_level)}50">${s.risk_level}</span>` : ''}</div>
+          <div class="scope-note">${s.note || ''}</div>
+        </div>
+      </div>`).join('')
+
+    const conflictRows = (res.geotech_and_plan_conflicts || []).map(c => `
+      <div class="conflict-row">
+        <div class="conflict-top">
+          <span class="rbadge" style="background:${riskColor(c.risk_level)}18;color:${riskColor(c.risk_level)};border-color:${riskColor(c.risk_level)}50">${c.risk_level}</span>
+          <strong>${c.conflict}</strong>
+        </div>
+        <div class="conflict-sub"><span class="muted">Geotech:</span> ${c.geotech_finding} &nbsp;|&nbsp; <span class="muted">Takeoff:</span> ${c.estimator_response}</div>
+        <div class="conflict-note">${c.note}</div>
+      </div>`).join('')
+
+    const questionRows = (res.clarification_questions || []).map(q => `
+      <div class="q-row">
+        <span class="rbadge" style="background:${riskColor(q.priority)}18;color:${riskColor(q.priority)};border-color:${riskColor(q.priority)}50;flex-shrink:0">${q.priority}</span>
+        <div>
+          <div class="q-text">${q.question}</div>
+          ${q.context ? `<div class="small muted">${q.context}</div>` : ''}
+        </div>
+      </div>`).join('')
+
+    const assumptionRows = (res.assumptions_needing_approval || []).map(a => `
+      <div class="assume-row">
+        <div class="assume-text">${a.assumption}</div>
+        <div class="small"><span class="muted">Risk:</span> ${a.risk_if_wrong}</div>
+        <div class="small" style="margin-top:2px"><span class="muted">Action:</span> ${a.recommended_action}</div>
+      </div>`).join('')
+
+    const bidNotes = (res.recommended_bid_notes || []).map(n => `<li>${n}</li>`).join('')
+
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>6 Signal QA Bid Risk Report</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Outfit',sans-serif; background:#fff; color:#111; font-size:10pt; line-height:1.5; }
+  .page { max-width:1100px; margin:0 auto; padding:32px 40px; }
+  .report-header { display:flex; justify-content:space-between; align-items:flex-end; padding-bottom:16px; border-bottom:3px solid #0057FF; margin-bottom:20px; }
+  .brand { font-family:'Bebas Neue',sans-serif; font-size:24pt; letter-spacing:3px; color:#111; line-height:1; }
+  .brand span { color:#0057FF; }
+  .brand-sub { font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:2px; color:#888; text-transform:uppercase; margin-top:2px; }
+  .qa-pill { display:inline-block; background:#0057FF; color:#fff; font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:2px; padding:2px 8px; border-radius:3px; margin-top:6px; }
+  .report-meta { text-align:right; font-size:8pt; color:#555; font-family:'JetBrains Mono',monospace; }
+  .report-meta strong { color:#111; }
+  .project-block { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:16px; }
+  .proj-cell { background:#f5f5f5; border-left:3px solid #0057FF; padding:8px 12px; }
+  .proj-label { font-size:7pt; letter-spacing:1.5px; text-transform:uppercase; color:#888; font-family:'JetBrains Mono',monospace; margin-bottom:2px; }
+  .proj-val { font-size:10pt; font-weight:600; color:#111; }
+  .grade-block { display:flex; align-items:center; gap:16px; padding:12px 16px; border:1px solid #ddd; border-left:4px solid ${gradeColor}; margin-bottom:16px; background:#fafafa; }
+  .grade-circle { width:44px; height:44px; border-radius:50%; border:2px solid ${gradeColor}; display:flex; align-items:center; justify-content:center; font-family:'Bebas Neue',sans-serif; font-size:20pt; color:${gradeColor}; flex-shrink:0; }
+  .grade-info-label { font-size:9pt; font-weight:700; color:${gradeColor}; }
+  .grade-info-sub { font-size:8pt; color:#555; font-family:'JetBrains Mono',monospace; }
+  .grade-rationale { font-size:9pt; color:#444; flex:1; line-height:1.5; border-left:1px solid #ddd; padding-left:16px; }
+  .top-row { display:grid; grid-template-columns:1fr 200px; gap:16px; margin-bottom:20px; }
+  .exec-card { background:#f0f4ff; border:1px solid #c7d9ff; padding:16px; border-left:4px solid #0057FF; }
+  .exec-title { font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:2px; text-transform:uppercase; color:#0057FF; margin-bottom:8px; font-weight:600; }
+  .exec-text { font-size:9.5pt; line-height:1.7; color:#222; }
+  .score-card { background:#f9f9f9; border:1px solid #e0e0e0; padding:16px; text-align:center; display:flex; flex-direction:column; align-items:center; }
+  .score-num { font-family:'Bebas Neue',sans-serif; font-size:52pt; line-height:1; color:${scoreColor(conf.grade)}; }
+  .score-grade { font-family:'JetBrains Mono',monospace; font-size:9pt; color:${scoreColor(conf.grade)}; font-weight:700; letter-spacing:2px; margin-top:2px; }
+  .score-lbl { font-family:'JetBrains Mono',monospace; font-size:7pt; color:#888; letter-spacing:1px; text-transform:uppercase; margin-top:2px; }
+  .score-rat { font-size:8pt; color:#555; line-height:1.4; margin-top:8px; text-align:left; }
+  .bid-ready { margin-top:8px; font-size:8pt; font-weight:700; padding:4px 10px; border-radius:3px; background:${conf.ready_to_bid ? '#dcfce7' : '#fee2e2'}; color:${conf.ready_to_bid ? '#16a34a' : '#dc2626'}; }
+  .section { margin-bottom:24px; }
+  .section-head { font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:600; letter-spacing:2px; text-transform:uppercase; color:#0057FF; padding:6px 0; border-bottom:1.5px solid #0057FF; margin-bottom:12px; }
+  table { width:100%; border-collapse:collapse; font-size:8.5pt; }
+  thead { background:#111; }
+  th { padding:6px 10px; text-align:left; font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:1px; text-transform:uppercase; color:#0057FF; white-space:nowrap; }
+  td { padding:6px 10px; border-bottom:1px solid #eee; vertical-align:top; }
+  tr:nth-child(even) td { background:#fafafa; }
+  .mono { font-family:'JetBrains Mono',monospace; }
+  .muted { color:#888; }
+  .bold { font-weight:700; }
+  .center { text-align:center; }
+  .small { font-size:7.5pt; color:#666; }
+  .rbadge { display:inline-block; font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:700; padding:1px 7px; border:1px solid; border-radius:2px; letter-spacing:0.5px; }
+  .scope-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .scope-row { display:flex; gap:10px; align-items:flex-start; padding:8px 10px; border-left:3px solid #ddd; background:#fafafa; }
+  .scope-icon { font-size:10pt; font-weight:700; width:16px; flex-shrink:0; font-family:'JetBrains Mono',monospace; margin-top:1px; }
+  .scope-item { font-size:9pt; font-weight:600; margin-bottom:2px; }
+  .scope-note { font-size:7.5pt; color:#666; line-height:1.4; }
+  .conflict-row { padding:10px 0; border-bottom:1px solid #eee; }
+  .conflict-row:last-child { border-bottom:none; }
+  .conflict-top { display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:9pt; font-weight:600; }
+  .conflict-sub { font-size:8pt; color:#555; margin-bottom:4px; }
+  .conflict-note { font-size:8.5pt; color:#333; padding:6px 10px; background:#f5f5f5; border-left:2px solid #ddd; line-height:1.5; }
+  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-bottom:24px; }
+  .q-row { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px solid #eee; }
+  .q-row:last-child { border-bottom:none; }
+  .q-text { font-size:9pt; font-weight:600; line-height:1.4; margin-bottom:2px; }
+  .assume-row { padding:8px 0; border-bottom:1px solid #eee; }
+  .assume-row:last-child { border-bottom:none; }
+  .assume-text { font-size:9pt; font-weight:600; margin-bottom:4px; }
+  .bid-notes { list-style:none; padding:0; display:flex; flex-direction:column; gap:8px; }
+  .bid-notes li { font-size:9pt; line-height:1.6; padding:8px 14px; border-left:3px solid #0057FF; background:#f0f4ff; color:#222; }
+  .report-footer { margin-top:32px; padding-top:12px; border-top:1px solid #ddd; display:flex; justify-content:space-between; font-size:7.5pt; color:#999; font-family:'JetBrains Mono',monospace; }
+  @media print { body { -webkit-print-color-adjust:exact; print-color-adjust:exact; } .page { padding:16px 20px; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="report-header">
+    <div>
+      <div class="brand">TAKEOFF <span>COPILOT</span></div>
+      <div class="brand-sub">6 Signal // Bid Risk Analysis</div>
+      <div class="qa-pill">QA Mode</div>
+    </div>
+    <div class="report-meta">
+      <div><strong>${date}</strong></div>
+      <div>takeoffcopilot.com</div>
+      ${si.sheet_number ? `<div>Sheet ${si.sheet_number}</div>` : ''}
+    </div>
+  </div>
+  <div class="project-block">
+    <div class="proj-cell"><div class="proj-label">Project</div><div class="proj-val">${si.project_name || '—'}</div></div>
+    <div class="proj-cell"><div class="proj-label">Sheet</div><div class="proj-val">${si.sheet_title || images[activeImage]?.name || '—'}</div></div>
+    <div class="proj-cell"><div class="proj-label">Engineer</div><div class="proj-val">${si.engineer || '—'}</div></div>
+  </div>
+  ${sc ? `<div class="grade-block">
+    <div class="grade-circle">${sc.grade}</div>
+    <div><div class="grade-info-label">${sc.grade_label}</div><div class="grade-info-sub">Expected accuracy: ${sc.expected_accuracy_range}</div></div>
+    <div class="grade-rationale">${sc.grade_rationale}</div>
+  </div>` : ''}
+  <div class="top-row">
+    <div class="exec-card">
+      <div class="exec-title">Executive Risk Summary</div>
+      <div class="exec-text">${res.executive_risk_summary}</div>
+    </div>
+    <div class="score-card">
+      <div class="score-num">${conf.score ?? '—'}</div>
+      <div class="score-grade">Grade ${conf.grade ?? '—'}</div>
+      <div class="score-lbl">Estimator Confidence</div>
+      <div class="score-rat">${conf.rationale || ''}</div>
+      <div class="bid-ready">${conf.ready_to_bid ? '&#10003; Ready to Bid' : '&#10007; Needs Revision'}</div>
+    </div>
+  </div>
+  ${highRiskRows ? `<div class="section">
+    <div class="section-head">High Risk Misses — ${(res.high_risk_misses || []).length} flagged</div>
+    <table><thead><tr><th>Risk</th><th>Item</th><th>Estimator Had</th><th>Plan Shows</th><th>Notes</th></tr></thead>
+    <tbody>${highRiskRows}</tbody></table>
+  </div>` : ''}
+  ${recheckRows ? `<div class="section">
+    <div class="section-head">Quantity Items to Recheck — ${(res.quantity_items_to_recheck || []).length} flagged</div>
+    <table><thead><tr><th>Status</th><th>Item</th><th>Estimator Had</th><th>Plan Shows</th><th>Notes</th></tr></thead>
+    <tbody>${recheckRows}</tbody></table>
+  </div>` : ''}
+  ${scopeRows ? `<div class="section">
+    <div class="section-head">Scope Gaps — ${(res.scope_gaps || []).filter(s => s.status === 'MISSING').length} missing</div>
+    <div class="scope-grid">${scopeRows}</div>
+  </div>` : ''}
+  ${conflictRows ? `<div class="section">
+    <div class="section-head">Geotech & Plan Conflicts</div>
+    ${conflictRows}
+  </div>` : ''}
+  ${(questionRows || assumptionRows) ? `<div class="two-col">
+    ${questionRows ? `<div class="section"><div class="section-head">Clarification Questions</div>${questionRows}</div>` : ''}
+    ${assumptionRows ? `<div class="section"><div class="section-head">Assumptions Needing Approval</div>${assumptionRows}</div>` : ''}
+  </div>` : ''}
+  ${bidNotes ? `<div class="section">
+    <div class="section-head">Recommended Bid Notes & Exclusions</div>
+    <ul class="bid-notes">${bidNotes}</ul>
+  </div>` : ''}
+  <div class="report-footer">
+    <span>Generated by 6 Signal Takeoff Copilot</span>
+    <span>QA Bid Risk Report — AI-generated. Verify all flags before submitting bid.</span>
+    <span>${date}</span>
+  </div>
+</div>
+</body>
+</html>`
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const win = window.open(url, '_blank', 'width=1100,height=900')
+    win.onload = () => { URL.revokeObjectURL(url); win.focus(); win.print() }
+  }
+
   const result = results[activeImage]
   const isQAResult = !!(result && result.executive_risk_summary)
   const analyzedCount = Object.keys(results).length
@@ -1197,12 +1417,16 @@ export default function Dashboard() {
                     }}>
                       <RotateCcw size={14} /> Re-analyze
                     </button>
-                    <button className="btn btn-secondary" onClick={() => exportCSV(false)}>
-                      <Download size={14} /> CSV
-                    </button>
-                    <button className="btn btn-primary" onClick={exportPDF}>
-                      <FileText size={14} /> PDF Report
-                    </button>
+                    {!isQAResult && (
+                      <>
+                        <button className="btn btn-secondary" onClick={() => exportCSV(false)}>
+                          <Download size={14} /> CSV
+                        </button>
+                        <button className="btn btn-primary" onClick={exportPDF}>
+                          <FileText size={14} /> PDF Report
+                        </button>
+                      </>
+                    )}
                     {activeJobId && (
                       feedbackDone[activeJobId]
                         ? <span className="feedback-submitted">✓ Feedback received</span>
@@ -1477,6 +1701,14 @@ export default function Dashboard() {
               {/* BID RISK REPORT TAB — QA Mode */}
               {activeTab === 'report' && isQAResult && (
                 <div className="qa-report animate-fade">
+                  {/* DOWNLOAD BAR */}
+                  <div className="qa-download-bar">
+                    <span className="qa-download-label">Bid Risk Report</span>
+                    <button className="btn btn-primary" onClick={exportQAPDF}>
+                      <FileText size={14} /> Download as PDF
+                    </button>
+                  </div>
+
                   {/* PLAN GRADE BANNER */}
                   {(screenings[activeImage] || result.plan_screening) && (() => {
                     const sc = screenings[activeImage] || result.plan_screening
