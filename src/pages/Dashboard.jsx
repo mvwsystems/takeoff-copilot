@@ -965,9 +965,7 @@ export default function Dashboard() {
           </div>
           <div className="sidebar-geotech-body">
             {!geotechResult && !geotechLoading && !geotechError && (
-              <div className="geotech-empty">
-                <span>Upload your geotech PDF to flag soil risks</span>
-              </div>
+              <div className="geotech-empty" />
             )}
             {geotechLoading && (
               <div className="geotech-loading">
@@ -1070,10 +1068,9 @@ export default function Dashboard() {
             <div className="empty-icon">
               <Upload size={40} strokeWidth={1} />
             </div>
-            <h2>Upload Plan Sheets</h2>
+            <h2>Upload Your Files</h2>
             <p className="text-dim">
-              Upload PDF plan sets or individual sheet images. The AI will extract pipe types, fittings, 
-              structures, and quantities into a structured takeoff table.
+              Upload PDF plan sets or individual sheets, geotech analysis, and your takeoff. The AI will analyze your work for accuracy.
             </p>
             <button className="btn btn-primary btn-lg" onClick={() => fileInputRef.current?.click()}>
               <Upload size={18} /> Select Files
