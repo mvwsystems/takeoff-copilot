@@ -23,7 +23,7 @@
   margin-top: 6px;
   padding: 8px 10px;
   background: var(--titan-red-glow);
-  border: 1px solid rgba(232, 55, 44, 0.15);
+  border: 1px solid rgba(0, 87, 255, 0.2);
   border-radius: 2px;
   font-size: 0.7rem;
   color: var(--titan-red);
@@ -148,13 +148,13 @@
 }
 
 .history-item:hover {
-  background: rgba(192, 255, 0, 0.06);
-  border-left-color: rgba(192, 255, 0, 0.5);
+  background: rgba(0, 87, 255, 0.06);
+  border-left-color: rgba(0, 87, 255, 0.5);
 }
 
 .history-item-active {
   border-left-color: var(--titan-red) !important;
-  background: rgba(192, 255, 0, 0.09) !important;
+  background: rgba(0, 87, 255, 0.09) !important;
 }
 
 .history-name {
@@ -182,7 +182,7 @@
 }
 .history-grade-a { background: rgba(46,204,113,0.12); color: var(--titan-green); }
 .history-grade-b { background: rgba(241,196,15,0.12); color: var(--titan-yellow); }
-.history-grade-c { background: rgba(192,255,0,0.12); color: var(--titan-red); }
+.history-grade-c { background: rgba(0,87,255,0.12); color: var(--titan-red); }
 
 /* —— FEEDBACK —— */
 .feedback-submitted {
@@ -251,13 +251,13 @@
   --titan-text-muted:   #777777;
 }
 
-/* Lime text is unreadable on light gray — use dark for text, keep lime for borders/underlines */
+/* Blue accent on light gray — keep text dark, use blue only for borders/underlines */
 .main-content .tab:hover             { color: #111111; }
 .main-content .tab.active            { color: #111111; border-bottom-color: var(--titan-red); }
 .main-content .btn-secondary:hover   { color: #111111; border-color: var(--titan-red); }
 .main-content .btn-ghost:hover       { color: #111111; background: #dcdcdc; }
-.main-content .text-low              { color: #5a6b00; }
-.main-content .onboarding-key-link:hover { color: #4d6600; }
+.main-content .text-low              { color: #0044CC; }
+.main-content .onboarding-key-link:hover { color: #0044CC; }
 .main-content .card-highlight        { border-left-color: var(--titan-red); }
 
 /* EMPTY STATE */
@@ -373,7 +373,7 @@
   margin: var(--space-md);
   padding: var(--space-md);
   background: var(--titan-red-bg);
-  border: 1px solid rgba(192, 255, 0, 0.25);
+  border: 1px solid rgba(0, 87, 255, 0.25);
   border-radius: 3px;
   color: var(--titan-red);
   font-size: 0.82rem;
@@ -670,7 +670,7 @@
   border-bottom: 1px solid var(--titan-border);
   font-family: var(--font-mono);
 }
-.risk-col-header-geo   { color: var(--titan-red);    background: rgba(192,255,0,0.05); }
+.risk-col-header-geo   { color: var(--titan-red);    background: rgba(0,87,255,0.05); }
 .risk-col-header-scope { color: var(--titan-yellow);  background: rgba(234,179,8,0.05); }
 .risk-col-header-infer { color: var(--titan-text-dim); background: rgba(255,255,255,0.02); }
 
@@ -740,8 +740,8 @@
   border-color: rgba(234, 179, 8, 0.2);
 }
 .grade-banner-c {
-  background: rgba(192, 255, 0, 0.06);
-  border-color: rgba(192, 255, 0, 0.25);
+  background: rgba(0, 87, 255, 0.06);
+  border-color: rgba(0, 87, 255, 0.25);
 }
 .grade-banner-left {
   display: flex;
@@ -763,7 +763,7 @@
 }
 .grade-banner-a .grade-badge { background: rgba(34, 197, 94, 0.15); color: var(--titan-green); }
 .grade-banner-b .grade-badge { background: rgba(234, 179, 8, 0.15); color: var(--titan-yellow); }
-.grade-banner-c .grade-badge { background: rgba(192, 255, 0, 0.15); color: var(--titan-red); }
+.grade-banner-c .grade-badge { background: rgba(0, 87, 255, 0.15); color: var(--titan-red); }
 .grade-banner-label {
   font-size: 0.78rem;
   font-weight: 600;
@@ -800,8 +800,8 @@
   width: 72px;
   height: 72px;
   border-radius: 50%;
-  background: rgba(192, 255, 0, 0.1);
-  border: 1px solid rgba(192, 255, 0, 0.3);
+  background: rgba(0, 87, 255, 0.1);
+  border: 1px solid rgba(0, 87, 255, 0.3);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -822,8 +822,8 @@
   line-height: 1.65;
   margin-bottom: var(--space-lg);
   padding: 12px 16px;
-  background: rgba(232, 55, 44, 0.06);
-  border: 1px solid rgba(232, 55, 44, 0.15);
+  background: rgba(0, 87, 255, 0.06);
+  border: 1px solid rgba(0, 87, 255, 0.2);
   border-radius: 3px;
   text-align: left;
 }
