@@ -885,6 +885,254 @@
   justify-content: center;
 }
 
+/* ════════════════════════════════════════
+   QA BID RISK REPORT
+   ════════════════════════════════════════ */
+
+.qa-report {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 0 24px;
+}
+
+/* TOP ROW: EXEC SUMMARY + SCORE */
+.qa-top-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.qa-exec-card {
+  flex: 1;
+}
+.qa-exec-text {
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--titan-text);
+}
+
+/* CONFIDENCE SCORE CARD */
+.qa-score-card {
+  width: 200px;
+  flex-shrink: 0;
+  text-align: center;
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.qa-score-num {
+  font-size: 2.8rem;
+  font-weight: 800;
+  line-height: 1;
+  color: var(--titan-white);
+  font-family: var(--font-mono);
+}
+.qa-score-grade {
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+}
+.qa-score-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--titan-text-muted);
+}
+.qa-score-rationale {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--titan-text-dim);
+  margin-top: 6px;
+  text-align: left;
+}
+.qa-bid-ready {
+  margin-top: 10px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+.qa-bid-yes {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+}
+.qa-bid-no {
+  background: rgba(232, 55, 44, 0.1);
+  color: #E8372C;
+}
+/* Score color tiers */
+.qa-score-a .qa-score-num { color: #22c55e; }
+.qa-score-b .qa-score-num { color: #84cc16; }
+.qa-score-c .qa-score-num { color: #eab308; }
+.qa-score-d .qa-score-num { color: #f97316; }
+.qa-score-f .qa-score-num { color: #E8372C; }
+
+/* SECTION SHARED */
+.qa-section {
+  padding: 16px;
+}
+.qa-section-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--titan-text-muted);
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.qa-label-danger {
+  color: #E8372C;
+}
+
+/* SCOPE GAPS */
+.qa-scope-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.qa-scope-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+.qa-scope-present {
+  background: rgba(34, 197, 94, 0.07);
+}
+.qa-scope-missing {
+  background: rgba(232, 55, 44, 0.07);
+}
+.qa-scope-unknown {
+  background: rgba(255, 255, 255, 0.04);
+}
+.qa-scope-icon {
+  font-size: 0.85rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+  width: 14px;
+}
+.qa-scope-present .qa-scope-icon { color: #22c55e; }
+.qa-scope-missing .qa-scope-icon { color: #E8372C; }
+.qa-scope-unknown .qa-scope-icon { color: var(--titan-text-muted); }
+.qa-scope-body { flex: 1; }
+.qa-scope-item {
+  font-weight: 600;
+  color: var(--titan-white);
+  margin-bottom: 2px;
+}
+.qa-scope-note {
+  font-size: 0.75rem;
+  color: var(--titan-text-dim);
+  line-height: 1.4;
+}
+
+/* GEOTECH CONFLICTS */
+.qa-conflict-row {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--titan-border-light);
+}
+.qa-conflict-row:last-child { border-bottom: none; }
+.qa-conflict-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.qa-conflict-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--titan-white);
+}
+.qa-conflict-details {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.78rem;
+  color: var(--titan-text-dim);
+  margin-bottom: 5px;
+}
+.qa-conflict-note {
+  font-size: 0.78rem;
+  color: var(--titan-text);
+  line-height: 1.5;
+  padding: 6px 10px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 4px;
+  border-left: 2px solid var(--titan-border);
+}
+
+/* CLARIFICATION + ASSUMPTIONS */
+.qa-bottom-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.qa-question-row {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--titan-border-light);
+}
+.qa-question-row:last-child { border-bottom: none; }
+.qa-question-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.qa-question-text {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--titan-white);
+  line-height: 1.4;
+}
+.qa-question-context {
+  font-size: 0.75rem;
+  color: var(--titan-text-dim);
+  line-height: 1.4;
+  padding-left: 4px;
+}
+.qa-assumption-row {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--titan-border-light);
+}
+.qa-assumption-row:last-child { border-bottom: none; }
+.qa-assumption-text {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--titan-white);
+  margin-bottom: 4px;
+}
+.qa-assumption-sub {
+  font-size: 0.75rem;
+  color: var(--titan-text-dim);
+  line-height: 1.4;
+  margin-bottom: 2px;
+}
+
+/* BID NOTES */
+.qa-bid-notes {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.qa-bid-notes li {
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--titan-text);
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.04);
+  border-left: 2px solid var(--titan-red);
+  border-radius: 0 4px 4px 0;
+}
+
 /* RESPONSIVE */
 @media (max-width: 768px) {
   .sidebar { width: 180px; }
@@ -892,4 +1140,7 @@
   .compare-panels { grid-template-columns: 1fr; }
   .sheet-header { flex-direction: column; gap: 8px; align-items: flex-start; }
   .sheet-header-actions { width: 100%; justify-content: flex-end; }
+  .qa-top-row { flex-direction: column; }
+  .qa-score-card { width: 100%; }
+  .qa-bottom-row { grid-template-columns: 1fr; }
 }

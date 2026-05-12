@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ExternalLink } from 'lucide-react'
+import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ExternalLink, ShieldAlert } from 'lucide-react'
 import { SYSTEM_PROMPT, QA_SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
@@ -434,21 +434,21 @@ export default function Dashboard() {
       const parsed = await callApi(img, prompt)
       setResults(prev => ({ ...prev, [idx]: parsed }))
       setActiveImage(idx)
-      setActiveTab('takeoff')
+      setActiveTab(qaMode ? 'report' : 'takeoff')
 
       // Fire-and-forget: log the completed job to Supabase for beta tracking
       if (user) {
         const rm = parsed?.risk_and_misses || {}
-        const riskCount = (rm.geotech_concerns?.length || 0) +
-                          (rm.missed_items?.length || 0) +
-                          (rm.bid_risk_items?.length || 0)
+        const riskCount = qaMode
+          ? (parsed?.high_risk_misses?.length || 0) + (parsed?.scope_gaps?.filter(s => s.status === 'MISSING').length || 0)
+          : (rm.geotech_concerns?.length || 0) + (rm.missed_items?.length || 0) + (rm.bid_risk_items?.length || 0)
         supabase.from('jobs').insert({
           user_id: user.id,
           plan_filename: images[idx]?.name || null,
           geotech_filename: geotechFileName || null,
           screening_grade: screenings[idx]?.grade || null,
           screening_rationale: screenings[idx]?.rationale || null,
-          line_item_count: parsed?.takeoff?.length || 0,
+          line_item_count: qaMode ? (parsed?.high_risk_misses?.length || 0) : (parsed?.items?.length || 0),
           risk_flag_count: riskCount,
           result_json: parsed,
         }).select('id').then(({ data, error }) => {
@@ -786,6 +786,7 @@ export default function Dashboard() {
   }
 
   const result = results[activeImage]
+  const isQAResult = !!(result && result.executive_risk_summary)
   const analyzedCount = Object.keys(results).length
 
   const confidenceColor = (level) => {
@@ -975,7 +976,7 @@ export default function Dashboard() {
                 <div className="sheet-name">{img.name}</div>
                 <div className="sheet-status">
                   {results[i] ? (
-                    <span className="text-green">✓ {results[i].items.length} items</span>
+                    <span className="text-green">✓ {results[i].items ? `${results[i].items.length} items` : 'QA report'}</span>
                   ) : screeningSheet === i ? (
                     <span className="text-dim">Screening...</span>
                   ) : loadingSheet === i ? (
@@ -1172,7 +1173,9 @@ export default function Dashboard() {
                   <div className="sheet-header-name">{images[activeImage]?.name}</div>
                   <div className="sheet-header-meta">
                     Sheet {activeImage + 1} of {images.length}
-                    {result && ` // ${result.items.length} items // ${result.summary?.high_confidence_count || 0} high confidence`}
+                    {result && (isQAResult
+                      ? ` // QA Bid Risk Report // ${result.high_risk_misses?.length || 0} risk flags`
+                      : ` // ${result.items.length} items // ${result.summary?.high_confidence_count || 0} high confidence`)}
                   </div>
                 </div>
               </div>
@@ -1219,12 +1222,10 @@ export default function Dashboard() {
 
             {/* TABS */}
             <div className="tab-bar">
-              {[
-                ['takeoff', 'Takeoff', Layers],
-                ['plan', 'Plan View', Eye],
-                ['compare', 'Compare', GitCompare],
-                ['summary', 'Summary', BarChart3]
-              ].map(([key, label, Icon]) => (
+              {(isQAResult || (!result && qaMode)
+                ? [['report', 'Bid Risk Report', ShieldAlert], ['plan', 'Plan View', Eye]]
+                : [['takeoff', 'Takeoff', Layers], ['plan', 'Plan View', Eye], ['compare', 'Compare', GitCompare], ['summary', 'Summary', BarChart3]]
+              ).map(([key, label, Icon]) => (
                 <button key={key} className={`tab ${activeTab === key ? 'active' : ''}`} onClick={() => setActiveTab(key)}>
                   <Icon size={14} />
                   <span>{label}</span>
@@ -1473,6 +1474,185 @@ export default function Dashboard() {
                 </div>
               )}
 
+              {/* BID RISK REPORT TAB — QA Mode */}
+              {activeTab === 'report' && isQAResult && (
+                <div className="qa-report animate-fade">
+                  {/* PLAN GRADE BANNER */}
+                  {(screenings[activeImage] || result.plan_screening) && (() => {
+                    const sc = screenings[activeImage] || result.plan_screening
+                    const gradeClass = sc.grade === 'A' ? 'grade-banner-a' : sc.grade === 'B' ? 'grade-banner-b' : 'grade-banner-c'
+                    return (
+                      <div className={`grade-banner ${gradeClass}`}>
+                        <div className="grade-banner-left">
+                          <span className="grade-badge">{sc.grade}</span>
+                          <div>
+                            <div className="grade-banner-label">{sc.grade_label}</div>
+                            <div className="grade-banner-accuracy">Expected accuracy: {sc.expected_accuracy_range}</div>
+                          </div>
+                        </div>
+                        <div className="grade-banner-rationale">{sc.grade_rationale}</div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* EXECUTIVE SUMMARY + CONFIDENCE SCORE */}
+                  <div className="qa-top-row">
+                    <div className="card qa-exec-card">
+                      <div className="qa-section-label">Executive Risk Summary</div>
+                      <p className="qa-exec-text">{result.executive_risk_summary}</p>
+                    </div>
+                    {result.estimator_confidence_score && (
+                      <div className={`card qa-score-card qa-score-${(result.estimator_confidence_score.grade || 'c').toLowerCase()}`}>
+                        <div className="qa-score-num">{result.estimator_confidence_score.score}</div>
+                        <div className="qa-score-grade">Grade {result.estimator_confidence_score.grade}</div>
+                        <div className="qa-score-label">Estimator Confidence</div>
+                        <div className="qa-score-rationale">{result.estimator_confidence_score.rationale}</div>
+                        <div className={`qa-bid-ready ${result.estimator_confidence_score.ready_to_bid ? 'qa-bid-yes' : 'qa-bid-no'}`}>
+                          {result.estimator_confidence_score.ready_to_bid ? '✓ Ready to Bid' : '✗ Needs Revision'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* HIGH RISK MISSES */}
+                  {result.high_risk_misses?.length > 0 && (
+                    <div className="card qa-section">
+                      <div className="qa-section-label qa-label-danger">High Risk Misses — {result.high_risk_misses.length} flagged</div>
+                      <div className="table-wrap">
+                        <table className="titan-table">
+                          <thead>
+                            <tr>{['Risk', 'Item', 'Estimator Had', 'Plan Shows', 'Notes'].map(h => <th key={h}>{h}</th>)}</tr>
+                          </thead>
+                          <tbody>
+                            {result.high_risk_misses.map((m, i) => (
+                              <tr key={i}>
+                                <td><span className={`badge ${m.risk_level === 'HIGH' ? 'badge-low' : m.risk_level === 'MEDIUM' ? 'badge-medium' : 'badge-high'}`}>{m.risk_level}</span></td>
+                                <td style={{ maxWidth: 220, fontWeight: 600 }}>{m.item}</td>
+                                <td className="text-mono text-dim">{m.estimator_quantity}</td>
+                                <td className="text-mono">{m.plan_read_quantity}</td>
+                                <td className="text-dim" style={{ maxWidth: 280, fontSize: '0.75rem', lineHeight: 1.4 }}>{m.note}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* QUANTITY ITEMS TO RECHECK */}
+                  {result.quantity_items_to_recheck?.length > 0 && (
+                    <div className="card qa-section">
+                      <div className="qa-section-label">Quantity Items to Recheck — {result.quantity_items_to_recheck.length} flagged</div>
+                      <div className="table-wrap">
+                        <table className="titan-table">
+                          <thead>
+                            <tr>{['Status', 'Item', 'Estimator Had', 'Plan Shows', 'Notes'].map(h => <th key={h}>{h}</th>)}</tr>
+                          </thead>
+                          <tbody>
+                            {result.quantity_items_to_recheck.map((q, i) => {
+                              const sc = q.qa_status === 'CONFIRMED' ? 'badge-high' : q.qa_status === 'APPEARS HIGH' ? 'badge-medium' : 'badge-low'
+                              return (
+                                <tr key={i}>
+                                  <td><span className={`badge ${sc}`} style={{ fontSize: '0.65rem', whiteSpace: 'nowrap' }}>{q.qa_status}</span></td>
+                                  <td style={{ maxWidth: 220 }}>{q.item}</td>
+                                  <td className="text-mono text-dim">{q.estimator_quantity}</td>
+                                  <td className="text-mono">{q.plan_read_quantity}</td>
+                                  <td className="text-dim" style={{ maxWidth: 260, fontSize: '0.75rem', lineHeight: 1.4 }}>{q.note}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SCOPE GAPS */}
+                  {result.scope_gaps?.length > 0 && (
+                    <div className="card qa-section">
+                      <div className="qa-section-label">Scope Gaps — {result.scope_gaps.filter(s => s.status === 'MISSING').length} missing</div>
+                      <div className="qa-scope-grid">
+                        {result.scope_gaps.map((s, i) => (
+                          <div key={i} className={`qa-scope-row qa-scope-${s.status.toLowerCase()}`}>
+                            <span className="qa-scope-icon">{s.status === 'PRESENT' ? '✓' : s.status === 'MISSING' ? '✗' : '?'}</span>
+                            <div className="qa-scope-body">
+                              <div className="qa-scope-item">{s.item}</div>
+                              <div className="qa-scope-note">{s.note}</div>
+                            </div>
+                            {s.risk_level && s.status !== 'PRESENT' && (
+                              <span className={`badge ${s.risk_level === 'HIGH' ? 'badge-low' : s.risk_level === 'MEDIUM' ? 'badge-medium' : 'badge-high'}`}>{s.risk_level}</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* GEOTECH & PLAN CONFLICTS */}
+                  {result.geotech_and_plan_conflicts?.length > 0 && (
+                    <div className="card qa-section">
+                      <div className="qa-section-label">Geotech & Plan Conflicts</div>
+                      {result.geotech_and_plan_conflicts.map((c, i) => (
+                        <div key={i} className="qa-conflict-row">
+                          <div className="qa-conflict-top">
+                            <span className={`badge ${c.risk_level === 'HIGH' ? 'badge-low' : c.risk_level === 'MEDIUM' ? 'badge-medium' : 'badge-high'}`}>{c.risk_level}</span>
+                            <span className="qa-conflict-label">{c.conflict}</span>
+                          </div>
+                          <div className="qa-conflict-details">
+                            <div><span className="text-muted">Geotech: </span>{c.geotech_finding}</div>
+                            <div><span className="text-muted">Takeoff: </span>{c.estimator_response}</div>
+                          </div>
+                          <div className="qa-conflict-note">{c.note}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* CLARIFICATION QUESTIONS + ASSUMPTIONS */}
+                  <div className="qa-bottom-row">
+                    {result.clarification_questions?.length > 0 && (
+                      <div className="card qa-section">
+                        <div className="qa-section-label">Clarification Questions</div>
+                        {result.clarification_questions.map((q, i) => (
+                          <div key={i} className="qa-question-row">
+                            <div className="qa-question-top">
+                              <span className={`badge ${q.priority === 'HIGH' ? 'badge-low' : q.priority === 'MEDIUM' ? 'badge-medium' : 'badge-high'}`}>{q.priority}</span>
+                              <span className="qa-question-text">{q.question}</span>
+                            </div>
+                            {q.context && <div className="qa-question-context">{q.context}</div>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {result.assumptions_needing_approval?.length > 0 && (
+                      <div className="card qa-section">
+                        <div className="qa-section-label">Assumptions Needing Approval</div>
+                        {result.assumptions_needing_approval.map((a, i) => (
+                          <div key={i} className="qa-assumption-row">
+                            <div className="qa-assumption-text">{a.assumption}</div>
+                            <div className="qa-assumption-sub"><strong>Risk:</strong> {a.risk_if_wrong}</div>
+                            <div className="qa-assumption-sub"><strong>Action:</strong> {a.recommended_action}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* RECOMMENDED BID NOTES */}
+                  {result.recommended_bid_notes?.length > 0 && (
+                    <div className="card qa-section">
+                      <div className="qa-section-label">Recommended Bid Notes & Exclusions</div>
+                      <p className="text-dim" style={{ fontSize: '0.78rem', marginBottom: 10 }}>Copy these into your bid letter to protect against scope creep.</p>
+                      <ul className="qa-bid-notes">
+                        {result.recommended_bid_notes.map((note, i) => (
+                          <li key={i}>{note}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* PLAN VIEW TAB */}
               {activeTab === 'plan' && images[activeImage] && (
                 <div className="plan-view animate-fade">
@@ -1633,10 +1813,10 @@ export default function Dashboard() {
               )}
 
               {/* EMPTY STATES */}
-              {activeTab === 'takeoff' && !result && loadingSheet !== activeImage && screeningSheet !== activeImage && screenings[activeImage]?.grade !== 'C' && (
+              {(activeTab === 'takeoff' || activeTab === 'report') && !result && loadingSheet !== activeImage && screeningSheet !== activeImage && screenings[activeImage]?.grade !== 'C' && (
                 <div className="loading-state">
                   <ChevronRight size={32} style={{ opacity: 0.2 }} />
-                  <p>Click "Analyze Sheet" to run the AI takeoff</p>
+                  <p>Click &ldquo;Analyze Sheet&rdquo; to {qaMode ? 'run the QA review' : 'run the AI takeoff'}</p>
                 </div>
               )}
               {activeTab === 'summary' && !result && (
