@@ -689,6 +689,127 @@
 }
 
 /* ============================================================
+   PRICING
+   ============================================================ */
+
+.pricing-section {
+  padding: var(--space-3xl) var(--space-lg);
+  background: var(--titan-bg);
+}
+
+.pricing-inner {
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.pricing-card-wrap {
+  display: flex;
+  justify-content: center;
+  margin-top: var(--space-xl);
+}
+
+.pricing-card {
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border);
+  border-top: 3px solid var(--titan-red);
+  border-radius: 8px;
+  width: 100%;
+  max-width: 560px;
+  overflow: hidden;
+}
+
+.pricing-card-header {
+  padding: 36px 36px 28px;
+  border-bottom: 1px solid var(--titan-border);
+  background: linear-gradient(160deg, rgba(0, 87, 255, 0.06) 0%, transparent 60%);
+}
+
+.pricing-tier-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--titan-red);
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+
+.pricing-amount {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.pricing-dollar {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--titan-text-dim);
+  line-height: 1;
+  align-self: flex-start;
+  margin-top: 8px;
+}
+
+.pricing-num {
+  font-family: var(--font-display, 'Outfit', sans-serif);
+  font-size: 4.5rem;
+  font-weight: 800;
+  color: var(--titan-white);
+  line-height: 1;
+  letter-spacing: -2px;
+}
+
+.pricing-per {
+  font-size: 1rem;
+  color: var(--titan-text-muted);
+  margin-left: 4px;
+}
+
+.pricing-tagline {
+  font-size: 0.85rem;
+  color: var(--titan-text-dim);
+  line-height: 1.5;
+}
+
+.pricing-features {
+  list-style: none;
+  padding: 28px 36px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pricing-features li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.85rem;
+  color: var(--titan-text);
+  line-height: 1.5;
+}
+
+.pricing-check {
+  color: var(--titan-red);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.pricing-cta {
+  padding: 24px 36px 32px;
+  border-top: 1px solid var(--titan-border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pricing-disclaimer {
+  font-size: 0.75rem;
+  color: var(--titan-text-muted);
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* ============================================================
    CTA
    ============================================================ */
 
@@ -788,6 +909,10 @@
   .footer-inner { flex-direction: column; gap: var(--space-md); text-align: center; }
   .step:hover { transform: translateX(3px); }
   .faq-item:hover { transform: translateX(1px); }
+  .pricing-card-header { padding: 28px 24px 20px; }
+  .pricing-features { padding: 20px 24px; }
+  .pricing-cta { padding: 20px 24px 28px; }
+  .pricing-num { font-size: 3.5rem; }
 }
 
 /* Fully disable motion for users who prefer it */

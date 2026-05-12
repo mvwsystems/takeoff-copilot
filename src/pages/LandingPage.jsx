@@ -1,32 +1,32 @@
 import { Link } from 'react-router-dom'
-import { Upload, FileText, BarChart3, AlertTriangle, Layers, Users, ScanSearch, ChevronDown } from 'lucide-react'
+import { Upload, FileText, BarChart3, AlertTriangle, Layers, Eye, ScanSearch, ChevronDown, CheckCircle } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import './LandingPage.css'
 
 const FAQS = [
   {
     q: 'Does this replace my estimator?',
-    a: 'No. It is built to help estimators move faster, not remove them from the process. Your estimator reviews the output before anything goes into a bid.'
+    a: 'No. It is a second set of eyes for the estimator\'s own work, not a replacement. The estimator builds the takeoff. Takeoff Copilot reads the plans and geotech against it and tells them what may be wrong before the bid goes out.'
   },
   {
-    q: 'How accurate is it?',
-    a: 'Accuracy depends on plan quality, scope clarity, and how much information is actually shown in the documents. That is why every line item gets a confidence score and unclear items are flagged for review. We do not publish a single accuracy number because it would not be honest.'
+    q: 'What does the Bid Risk Report include?',
+    a: 'It includes an executive risk summary, every quantity item that appears low or missing relative to the plans, geotech conflicts (dewatering, rock, lime stabilization, haul-off), commonly missed scope items, clarification questions the estimator should ask before bidding, assumptions that need approval, and recommended bid notes to include in the proposal letter. Everything in one downloadable PDF.'
   },
   {
-    q: 'What happens if the plans are not good enough?',
-    a: 'The system checks the documents first. If the plan set is incomplete, too dense to read reliably, or missing key information, it tells you instead of producing a bad takeoff.'
+    q: 'What if the plans are not good quality?',
+    a: 'Every submission is graded A, B, or C for plan readability before the QA review runs. A Grade C plan set limits what can be confirmed or disputed — the report will tell you exactly what it cannot verify and why, so the estimator knows which items require field verification before the bid goes final.'
   },
   {
     q: 'What trades is this for?',
-    a: 'The beta is focused on underground and site utility work — sanitary sewer, storm drain, water main, force main, and related civil utility scope.'
+    a: 'The beta is focused on underground and site utility work — sanitary sewer, storm drain, water main, force main, and related civil utility scope. Calibrated against DFW and greater Texas market conditions.'
   },
   {
     q: 'Can I upload geotech reports?',
-    a: 'Yes. Geotech reports are part of the intended workflow. Soil classification, groundwater depth, boring data, and backfill suitability are pulled into the review so excavation and subgrade concerns show up before they become bid risk.'
+    a: 'Yes, and you should. Geotech reports are a core part of the workflow. Soil classification, groundwater depth, boring data, and backfill suitability are cross-referenced against the estimator\'s takeoff. If the estimator has no dewatering line item and groundwater is at 6 feet, that shows up as a HIGH risk flag.'
   },
   {
-    q: 'Is this ready for production bids?',
-    a: 'It is currently in beta. Use the output as a first-pass review tool. Final bid decisions should remain with your estimator. We are tuning the system against real plans and completed takeoffs before we call it production-ready.'
+    q: 'How does pricing work?',
+    a: 'Each report is $97. Upload your plan sheets, geotech report, and completed takeoff CSV or Excel file. The report is generated and available to download as a PDF immediately. No subscription. No seat fees. Pay per review.'
   },
 ]
 
@@ -78,22 +78,21 @@ export default function LandingPage() {
           </div>
 
           <h1 className="hero-title">
-            First-pass utility<br />
-            takeoffs, built for<br />
-            <span className="text-red">estimator review.</span>
+            Find the mistake<br />
+            before the bid<br />
+            <span className="text-red">goes out.</span>
           </h1>
 
           <p className="hero-subtitle">
-            Upload your plans and geotech. Takeoff Copilot checks whether the
-            documents are usable, runs a first-pass takeoff, grades confidence
-            on every line item, and flags what your estimator should verify
-            before it goes anywhere near a bid.
+            Upload your plans, geotech, and completed takeoff. Takeoff Copilot
+            reviews the package for missed quantities, risky assumptions,
+            plan&thinsp;/&thinsp;geotech conflicts, and scope gaps before you submit.
           </p>
 
           <div className="hero-actions">
             <Link to="/login" className="btn btn-primary btn-lg">
               <Upload size={18} />
-              Request Beta Access
+              Submit a Bid for QA Review
             </Link>
             <a href="#how-it-works" className="btn btn-secondary btn-lg">
               See How It Works
@@ -101,7 +100,7 @@ export default function LandingPage() {
           </div>
 
           <div className="hero-trust">
-            {['Plan screening', 'Confidence-graded line items', 'Estimator review flags', 'Geotech-aware', 'Built for utility scope'].map((t, i) => (
+            {['Plan screening', 'Missed quantity detection', 'Geotech conflict flags', 'Scope gap check', 'Bid Risk Report PDF'].map((t, i) => (
               <span key={i} className="hero-trust-item">
                 {i > 0 && <span className="hero-trust-sep">//</span>}
                 {t}
@@ -118,39 +117,39 @@ export default function LandingPage() {
           <div className="section-header" data-reveal>
             <span className="titan-label">Capabilities</span>
             <h2>What It Does</h2>
-            <p className="section-sub">Six things Takeoff Copilot does on every uploaded job.</p>
+            <p className="section-sub">A second set of eyes on every bid package before the number leaves the building.</p>
           </div>
           <div className="features-grid">
             {[
               {
                 icon: <ScanSearch size={22} />,
                 title: 'Plan Set Screening',
-                desc: 'Before it runs the takeoff, Takeoff Copilot checks whether the plans are clear enough to produce useful output. If the set is missing key information, it tells you instead of guessing.'
+                desc: 'Before reviewing the estimator\'s takeoff, the system grades the plan set A, B, or C. Grade C plans cannot support a reliable QA review and are flagged before the report runs.'
               },
               {
                 icon: <FileText size={22} />,
-                title: 'First-Pass Takeoff',
-                desc: 'Organized line items for pipe, structures, fittings, excavation, services, and quantities pulled from the uploaded documents.'
-              },
-              {
-                icon: <BarChart3 size={22} />,
-                title: 'Confidence Grading',
-                desc: 'Every line item includes a confidence score — High, Medium, or Low — so your estimator knows what looks solid and what needs a closer look.'
+                title: 'Bid Risk Report',
+                desc: 'The primary output is a structured Bid Risk Report — not a raw takeoff. Executive summary, risk flags, quantity discrepancies, scope gaps, clarification questions, and recommended bid notes. Downloadable as a PDF.'
               },
               {
                 icon: <AlertTriangle size={22} />,
-                title: 'Review Flags',
-                desc: 'Items with unclear quantities, missing callouts, geotech concerns, or possible scope gaps are flagged before they become bid risk.'
+                title: 'Missed Quantity Detection',
+                desc: 'Each line item in the estimator\'s takeoff is compared against what the plans show. Items that appear low, appear high, or are missing from the plans entirely are flagged with a risk level and a note.'
               },
               {
                 icon: <Layers size={22} />,
-                title: 'Geotech-Aware Review',
-                desc: 'Upload geotech reports alongside the plans. Soil classification, groundwater depth, boring data, and backfill suitability are surfaced in the review.'
+                title: 'Geotech Conflict Detection',
+                desc: 'Geotech data is cross-referenced against the takeoff. If groundwater is at 6 feet and there\'s no dewatering line item, that is a HIGH risk flag. Same for rock excavation, lime stabilization, imported fill, and haul-off.'
               },
               {
-                icon: <Users size={22} />,
-                title: 'Estimator-Controlled',
-                desc: 'The tool gives your team a faster starting point. Your estimator still makes the final call. Use it to speed up review, not skip review.'
+                icon: <BarChart3 size={22} />,
+                title: 'Estimator Confidence Score',
+                desc: 'The report closes with an A–F confidence grade on the estimator\'s overall package — scored by how well quantities align with the plans and how complete the scope appears. Not a judgment. A calibration.'
+              },
+              {
+                icon: <Eye size={22} />,
+                title: 'Second Set of Eyes',
+                desc: 'Calibrated against real completed jobs in the DFW market. The system knows what utility contractors miss — trench safety, testing requirements, municipal-specific callouts, and scope items that don\'t show up until the RFI.'
               }
             ].map((f, i) => (
               <div
@@ -181,28 +180,28 @@ export default function LandingPage() {
             {[
               {
                 num: '01',
-                title: 'Upload Plans & Geotech',
-                desc: 'Send in the plan set, relevant specs, and geotech report. PDF or image files.'
+                title: 'Upload the Full Package',
+                desc: 'Send in the plan set, geotech report, and the estimator\'s completed takeoff as a CSV or Excel file. All three together give the review full context.'
               },
               {
                 num: '02',
-                title: 'Document Check',
-                desc: 'Takeoff Copilot checks whether the files are complete and readable enough to run. Plans that are not a good fit are flagged or rejected here — not after the fact.'
+                title: 'Plan Grade Assessment',
+                desc: 'The system evaluates plan quality and assigns a grade. Grade A and B plans support a reliable QA review. Grade C plans are flagged — the report tells you what cannot be confirmed and why.'
               },
               {
                 num: '03',
-                title: 'First-Pass Takeoff',
-                desc: 'Visible quantities, scope items, utility notes, and likely bid concerns are extracted and organized into a structured table.'
+                title: 'Line-by-Line QA Review',
+                desc: 'Every line item in the estimator\'s takeoff is checked against what the plans show. Quantities that appear low, high, or missing are identified. Items on the plans not in the takeoff are flagged as misses.'
               },
               {
                 num: '04',
-                title: 'Confidence Review',
-                desc: 'Each line item is graded High, Medium, or Low confidence. Anything unclear is flagged with a note explaining what to verify and why.'
+                title: 'Bid Risk Report Generated',
+                desc: 'A structured report is produced: executive summary, high-risk misses, quantity rechecks, geotech conflicts, scope gaps, clarification questions, and bid notes formatted for the proposal letter.'
               },
               {
                 num: '05',
-                title: 'Estimator Final Check',
-                desc: 'Your team reviews, adjusts, and decides what makes it into the bid. The tool does the first pass. The estimator stays in control.'
+                title: 'Estimator Reviews and Decides',
+                desc: 'The report is downloaded as a PDF. The estimator reviews every flag, makes corrections where warranted, and submits the bid with confidence. The tool raises the flags. The estimator makes the call.'
               }
             ].map((s, i) => (
               <div
@@ -227,25 +226,26 @@ export default function LandingPage() {
         <div className="accuracy-inner" data-reveal>
           <div className="accuracy-label titan-label">On Accuracy</div>
           <h2 className="accuracy-headline">
-            Not every plan set is equal.<br />
-            <span className="text-red">We do not pretend otherwise.</span>
+            Not every plan set supports<br />
+            <span className="text-red">a reliable QA review.</span>
           </h2>
           <div className="accuracy-body">
             <p>
-              Clean utility profiles, clear callouts, complete sheet sets, and useful geotech produce stronger outputs.
-              Messy, incomplete, or unclear plans get flagged or rejected.
+              Clean utility profiles, explicit callouts, complete sheet sets, and useful geotech
+              produce HIGH and MEDIUM confidence flags. Dense, unclear, or incomplete plans
+              produce UNVERIFIABLE items — and the report says so clearly.
             </p>
             <p>
-              The goal is not blind automation. The goal is a faster,
-              better-organized first pass with the risk clearly marked so your
-              estimator knows exactly where to spend their time.
+              The goal is not to automate the estimator out of the process. The goal is to surface
+              the risk before it becomes a change order, so the estimator knows exactly what to
+              verify and what to protect in the proposal.
             </p>
           </div>
           <div className="accuracy-pills">
             {[
-              { cls: 'pill-high', label: 'High confidence — looks solid' },
-              { cls: 'pill-medium', label: 'Medium — verify before pricing' },
-              { cls: 'pill-low', label: 'Low — estimator must confirm' },
+              { cls: 'pill-high', label: 'HIGH — confirmed against plans' },
+              { cls: 'pill-medium', label: 'MEDIUM — verify before pricing' },
+              { cls: 'pill-low', label: 'LOW — estimator must confirm' },
             ].map((p, i) => (
               <span
                 key={i}
@@ -259,6 +259,55 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* PRICING */}
+      <section className="pricing-section">
+        <div className="pricing-inner">
+          <div className="section-header" data-reveal>
+            <span className="titan-label">Pricing</span>
+            <h2>Simple. Per Report.</h2>
+            <p className="section-sub">No subscription. No seat fees. Pay when you need a second set of eyes.</p>
+          </div>
+          <div className="pricing-card-wrap" data-reveal>
+            <div className="pricing-card">
+              <div className="pricing-card-header">
+                <div className="pricing-tier-label">QA Bid Review</div>
+                <div className="pricing-amount">
+                  <span className="pricing-dollar">$</span>
+                  <span className="pricing-num">97</span>
+                  <span className="pricing-per">/ report</span>
+                </div>
+                <p className="pricing-tagline">One submission. Full Bid Risk Report. Downloadable PDF.</p>
+              </div>
+              <ul className="pricing-features">
+                {[
+                  'Plan grade assessment (A / B / C)',
+                  'Line-by-line quantity comparison against plans',
+                  'High Risk Misses table with risk level and notes',
+                  'Geotech cross-reference (dewatering, rock, lime, fill, haul-off)',
+                  'Scope gap check (CCTV, testing, traffic control, permits, and more)',
+                  'Clarification questions and assumptions needing approval',
+                  'Recommended bid notes formatted for the proposal letter',
+                  'Estimator confidence score (A–F)',
+                  'Full PDF download',
+                ].map((item, i) => (
+                  <li key={i}>
+                    <CheckCircle size={14} className="pricing-check" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="pricing-cta">
+                <Link to="/login" className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
+                  <Upload size={16} />
+                  Submit a Bid for QA Review
+                </Link>
+                <p className="pricing-disclaimer">Upload your plans, geotech, and takeoff. Report is ready immediately.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* FAQ */}
       <section className="faq-section">
         <div className="faq-inner">
@@ -267,7 +316,7 @@ export default function LandingPage() {
             <h2>Common Questions</h2>
           </div>
           <div className="faq-list">
-            {FAQS.map((f, i) => <FAQ key={i} index={i} {...f} />)}
+            {FAQS.map((f, i) => <FAQ key={i} {...f} />)}
           </div>
         </div>
       </section>
@@ -277,22 +326,22 @@ export default function LandingPage() {
         <div className="cta-inner" data-reveal>
           <span className="titan-label">Beta Program</span>
           <h2>
-            Currently testing with<br />
-            <span className="text-red">utility contractors.</span>
+            Your estimator built the number.<br />
+            <span className="text-red">We check it.</span>
           </h2>
           <p className="cta-sub">
-            We are tuning Takeoff Copilot against real plans, geotech reports,
-            and completed takeoffs. If you bid underground utility work and want
-            a faster first pass, request access and try it on a real job.
+            Upload your plan set, geotech report, and completed takeoff.
+            Get a structured Bid Risk Report that tells you exactly what
+            to verify, protect, and fix before the bid goes out.
           </p>
           <div className="hero-actions" style={{ justifyContent: 'center' }}>
             <Link to="/login" className="btn btn-primary btn-lg">
               <Upload size={18} />
-              Request Beta Access
+              Submit a Bid for QA Review
             </Link>
           </div>
           <p className="cta-disclaimer">
-            No commitment. No sales call. Upload a plan set and see what it produces.
+            $97 per report. No subscription. Download the PDF immediately.
           </p>
         </div>
       </section>
