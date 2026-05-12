@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ExternalLink } from 'lucide-react'
-import { SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
+import { SYSTEM_PROMPT, QA_SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
 import * as XLSX from 'xlsx'
@@ -417,11 +417,21 @@ export default function Dashboard() {
     setError(null)
 
     try {
-      const modeContext = qaMode && uploadedTakeoffData
-        ? `\n\n---\n\nMODE: QA Mode. The estimator has already completed a takeoff. Your job is to analyze the plan sheet and cross-reference your findings against the estimator's submitted takeoff below. Flag any items the estimator may have missed, any quantities that appear significantly different from what you can read from the plans, and any line items in the estimator's takeoff that you cannot verify from the documents.\n\nESTIMATOR'S COMPLETED TAKEOFF (${uploadedTakeoffName}):\n${JSON.stringify(uploadedTakeoffData, null, 2)}\n\nAnalyze this construction plan sheet and produce a complete quantity takeoff, then cross-reference with the estimator's takeoff above. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.`
-        : `\n\n---\n\nMODE: Takeoff Mode. Analyze this construction plan sheet and produce a complete quantity takeoff. Extract every identifiable item. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.`
+      let prompt
+      if (qaMode && uploadedTakeoffData) {
+        prompt = QA_SYSTEM_PROMPT +
+          `\n\n---\n\nESTIMATOR'S SUBMITTED TAKEOFF (${uploadedTakeoffName}):\n` +
+          JSON.stringify(uploadedTakeoffData, null, 2) +
+          `\n\n---\n\nReview the plan sheet above against the estimator's takeoff. Produce the full Bid Risk Report. Respond ONLY with the JSON object, no other text.`
+      } else if (qaMode) {
+        prompt = QA_SYSTEM_PROMPT +
+          `\n\n---\n\nNo estimator takeoff was uploaded. Read the plan sheet and produce the Bid Risk Report based on plan review alone. Flag all scope gaps and items an estimator should not miss. Respond ONLY with the JSON object, no other text.`
+      } else {
+        prompt = SYSTEM_PROMPT +
+          `\n\n---\n\nAnalyze this construction plan sheet and produce a complete quantity takeoff. Extract every identifiable item. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.`
+      }
 
-      const parsed = await callApi(img, SYSTEM_PROMPT + modeContext)
+      const parsed = await callApi(img, prompt)
       setResults(prev => ({ ...prev, [idx]: parsed }))
       setActiveImage(idx)
       setActiveTab('takeoff')
