@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ExternalLink, ShieldAlert } from 'lucide-react'
+import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ExternalLink, ShieldAlert, MessageCircle, Send, ChevronUp } from 'lucide-react'
 import { SYSTEM_PROMPT, QA_SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
@@ -45,11 +45,16 @@ export default function Dashboard() {
   const [qaMode, setQaMode] = useState(true)
   const [uploadedTakeoffName, setUploadedTakeoffName] = useState(null)
   const [uploadedTakeoffData, setUploadedTakeoffData] = useState(null)
+  const [chatOpen, setChatOpen] = useState(false)
+  const [chatMessages, setChatMessages] = useState([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
   const fileInputRef = useRef(null)
   const geotechInputRef = useRef(null)
   const takeoffInputRef = useRef(null)
   const workerRef = useRef(null)
   const pendingRef = useRef({})
+  const chatScrollRef = useRef(null)
 
   // Spin up a Web Worker for API calls — workers are exempt from background-tab throttling
   useEffect(() => {
@@ -67,6 +72,87 @@ export default function Dashboard() {
     }
     return () => worker.terminate()
   }, [])
+
+  // Reset chat when switching sheets
+  useEffect(() => {
+    setChatOpen(false)
+    setChatMessages([])
+  }, [activeImage])
+
+  // Auto-scroll chat to latest message
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight
+    }
+  }, [chatMessages])
+
+  const buildChatSystemPrompt = (res) => {
+    const questions = res.clarification_questions || []
+    const misses = res.high_risk_misses || []
+    const gaps = (res.scope_gaps || []).filter(s => s.status === 'MISSING')
+    return `You are Takeoff Brain v1.0 operating in CHAT MODE. A QA Bid Risk Report has already been generated for this bid package. Your role is to resolve the open clarification questions by conversing with the estimator — one question at a time — so the bid can be finalized with confidence.
+
+REPORT SUMMARY:
+${res.executive_risk_summary}
+
+CLARIFICATION QUESTIONS (${questions.length} total — work through these in order, HIGH priority first):
+${questions.map((q, i) => `${i + 1}. [${q.priority}] ${q.question}${q.context ? `\n   Context: ${q.context}` : ''}`).join('\n') || 'None'}
+
+HIGH RISK MISSES:
+${misses.map(m => `- [${m.risk_level}] ${m.item}: ${m.note}`).join('\n') || 'None'}
+
+MISSING SCOPE ITEMS:
+${gaps.map(g => `- ${g.item}: ${g.note}`).join('\n') || 'None'}
+
+CURRENT CONFIDENCE: ${res.estimator_confidence_score?.score ?? '—'}/100 (Grade ${res.estimator_confidence_score?.grade ?? '—'})
+
+INSTRUCTIONS:
+- Ask one question at a time. Do not list all questions at once.
+- When the estimator answers, state whether the flag is RESOLVED or STILL FLAGGED, then immediately ask the next unanswered question.
+- If an answer introduces new risk or ambiguity, ask a follow-up before moving on.
+- Reference specific items from the report (quantities, depths, pipe sizes) to keep questions concrete.
+- Keep each response to 2–4 sentences unless giving a final summary.
+- When all questions are answered or dismissed, give a revised 2–3 sentence risk summary and an updated confidence score out of 100.
+- Be direct. The estimator is a utility contractor, not a software user. Skip filler language.`
+  }
+
+  const getInitialChatMessage = (res) => {
+    const questions = res.clarification_questions || []
+    if (!questions.length) {
+      return `Report complete — no open clarification questions. The plan set was clear enough to assess everything. Current confidence: ${res.estimator_confidence_score?.score ?? '—'}/100 (Grade ${res.estimator_confidence_score?.grade ?? '—'}). Any questions about the flags I raised?`
+    }
+    const first = questions.find(q => q.priority === 'HIGH') || questions[0]
+    const count = questions.length
+    return `Report complete. I have ${count} clarification question${count > 1 ? 's' : ''} before this bid is solid.\n\nFirst (${first.priority} priority): ${first.question}${first.context ? `\n\n${first.context}` : ''}`
+  }
+
+  const callChatApi = (systemPrompt, messages) => {
+    return new Promise((resolve, reject) => {
+      const id = Math.random().toString(36).slice(2) + Date.now()
+      pendingRef.current[id] = { resolve, reject }
+      workerRef.current.postMessage({ id, systemPrompt, messages, apiKey, maxTokens: 1024 })
+    })
+  }
+
+  const sendChatMessage = async () => {
+    const text = chatInput.trim()
+    if (!text || chatLoading) return
+    setChatInput('')
+    const history = [...chatMessages, { role: 'user', text }]
+    setChatMessages([...history, { role: 'assistant', text: null, loading: true }])
+    setChatLoading(true)
+    try {
+      const res = results[activeImage]
+      const systemPrompt = buildChatSystemPrompt(res)
+      const apiMessages = history.map(m => ({ role: m.role, content: m.text }))
+      const reply = await callChatApi(systemPrompt, apiMessages)
+      setChatMessages([...history, { role: 'assistant', text: reply }])
+    } catch (err) {
+      setChatMessages([...history, { role: 'assistant', text: `Error: ${err.message}` }])
+    } finally {
+      setChatLoading(false)
+    }
+  }
 
   // If user already has a Supabase profile from a prior session, skip onboarding
   useEffect(() => {
@@ -421,6 +507,12 @@ export default function Dashboard() {
       setResults(prev => ({ ...prev, [idx]: parsed }))
       setActiveImage(idx)
       setActiveTab(qaMode ? 'report' : 'takeoff')
+
+      // In QA mode, open the proactive chat with the first clarification question
+      if (qaMode && parsed?.clarification_questions !== undefined) {
+        setChatMessages([{ role: 'assistant', text: getInitialChatMessage(parsed) }])
+        setChatOpen(true)
+      }
 
       // Fire-and-forget: log the completed job to Supabase for beta tracking
       if (user) {
@@ -1400,6 +1492,7 @@ export default function Dashboard() {
                     <button className="btn btn-ghost" onClick={() => {
                       const r = { ...results }; delete r[activeImage]; setResults(r)
                       const s = { ...screenings }; delete s[activeImage]; setScreenings(s)
+                      setChatOpen(false); setChatMessages([])
                     }}>
                       <RotateCcw size={14} /> Re-analyze
                     </button>
@@ -2042,6 +2135,73 @@ export default function Dashboard() {
               )}
             </div>
           </>
+        )}
+
+        {/* PROACTIVE CHAT PANEL — QA Mode only */}
+        {isQAResult && (
+          <div className={`chat-panel ${chatOpen ? 'chat-open' : 'chat-collapsed'}`}>
+            <button
+              className="chat-panel-header"
+              onClick={() => setChatOpen(o => !o)}
+              aria-label={chatOpen ? 'Collapse chat' : 'Open bid clarification chat'}
+            >
+              <div className="chat-header-left">
+                <MessageCircle size={14} />
+                <span className="chat-header-title">Bid Clarification</span>
+                {!chatOpen && chatMessages.length > 0 && (
+                  <span className="chat-unread-badge">{chatMessages.filter(m => m.role === 'assistant').length}</span>
+                )}
+              </div>
+              <div className="chat-header-right">
+                {!chatOpen && chatMessages.length > 0 && (
+                  <span className="chat-header-preview">
+                    {chatMessages[chatMessages.length - 1]?.text?.slice(0, 60)}…
+                  </span>
+                )}
+                {chatOpen ? <ChevronUp size={14} /> : <ChevronRight size={14} />}
+              </div>
+            </button>
+
+            {chatOpen && (
+              <div className="chat-body">
+                <div className="chat-messages" ref={chatScrollRef}>
+                  {chatMessages.map((msg, i) => (
+                    <div key={i} className={`chat-msg chat-msg-${msg.role}`}>
+                      {msg.role === 'assistant' && (
+                        <div className="chat-msg-avatar">AI</div>
+                      )}
+                      <div className="chat-msg-bubble">
+                        {msg.loading
+                          ? <div className="chat-typing"><span /><span /><span /></div>
+                          : (msg.text || '').split('\n').map((line, j) => (
+                              <span key={j}>{line}{j < msg.text.split('\n').length - 1 && <br />}</span>
+                            ))
+                        }
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="chat-input-row">
+                  <input
+                    className="chat-input"
+                    value={chatInput}
+                    onChange={e => setChatInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage() } }}
+                    placeholder="Answer or ask a follow-up..."
+                    disabled={chatLoading}
+                    autoFocus
+                  />
+                  <button
+                    className="btn btn-primary chat-send-btn"
+                    onClick={sendChatMessage}
+                    disabled={chatLoading || !chatInput.trim()}
+                  >
+                    <Send size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </main>
 

@@ -1151,6 +1151,193 @@
   border-radius: 0 4px 4px 0;
 }
 
+/* ════════════════════════════════════════
+   PROACTIVE CHAT PANEL
+   ════════════════════════════════════════ */
+
+.chat-panel {
+  flex-shrink: 0;
+  border-top: 1px solid var(--titan-border);
+  background: var(--titan-card);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: height 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.chat-collapsed { height: 48px; }
+.chat-open      { height: 360px; }
+
+.chat-panel-header {
+  all: unset;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  height: 48px;
+  flex-shrink: 0;
+  width: 100%;
+  box-sizing: border-box;
+  border-bottom: 1px solid transparent;
+  transition: background 160ms;
+}
+.chat-open .chat-panel-header {
+  border-bottom-color: var(--titan-border);
+}
+.chat-panel-header:hover { background: var(--titan-surface); }
+
+.chat-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--titan-red);
+}
+.chat-header-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--titan-white);
+}
+.chat-unread-badge {
+  background: var(--titan-red);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 1px 6px;
+  line-height: 1.6;
+}
+.chat-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--titan-text-muted);
+}
+.chat-header-preview {
+  font-size: 0.72rem;
+  color: var(--titan-text-muted);
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* CHAT BODY */
+.chat-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  scroll-behavior: smooth;
+}
+
+.chat-msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 88%;
+}
+.chat-msg-user {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.chat-msg-avatar {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--titan-red);
+  color: #fff;
+  font-size: 0.6rem;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 0.05em;
+  margin-top: 2px;
+}
+
+.chat-msg-bubble {
+  font-size: 0.82rem;
+  line-height: 1.6;
+  padding: 8px 12px;
+  border-radius: 8px;
+  color: var(--titan-text);
+}
+.chat-msg-assistant .chat-msg-bubble {
+  background: var(--titan-surface);
+  border: 1px solid var(--titan-border);
+  border-radius: 2px 8px 8px 8px;
+}
+.chat-msg-user .chat-msg-bubble {
+  background: var(--titan-red);
+  color: #fff;
+  border-radius: 8px 2px 8px 8px;
+}
+
+/* TYPING INDICATOR */
+.chat-typing {
+  display: flex;
+  gap: 4px;
+  padding: 4px 2px;
+  align-items: center;
+}
+.chat-typing span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--titan-text-muted);
+  animation: chat-bounce 1.2s infinite ease-in-out;
+}
+.chat-typing span:nth-child(2) { animation-delay: 0.2s; }
+.chat-typing span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes chat-bounce {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+  40%           { transform: translateY(-5px); opacity: 1; }
+}
+
+/* INPUT ROW */
+.chat-input-row {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--titan-border);
+  background: var(--titan-card);
+  flex-shrink: 0;
+}
+.chat-input {
+  flex: 1;
+  background: var(--titan-surface);
+  border: 1px solid var(--titan-border);
+  border-radius: 6px;
+  padding: 7px 12px;
+  font-size: 0.82rem;
+  color: var(--titan-white);
+  outline: none;
+  transition: border-color 160ms;
+  font-family: inherit;
+}
+.chat-input:focus { border-color: var(--titan-red); }
+.chat-input::placeholder { color: var(--titan-text-muted); }
+.chat-input:disabled { opacity: 0.5; }
+
+.chat-send-btn {
+  padding: 7px 12px;
+  flex-shrink: 0;
+}
+
 /* RESPONSIVE */
 @media (max-width: 768px) {
   .sidebar { width: 180px; }
