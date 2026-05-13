@@ -48,6 +48,25 @@ export default function Dashboard() {
   const fileInputRef = useRef(null)
   const geotechInputRef = useRef(null)
   const takeoffInputRef = useRef(null)
+  const workerRef = useRef(null)
+  const pendingRef = useRef({})
+
+  // Spin up a Web Worker for API calls — workers are exempt from background-tab throttling
+  useEffect(() => {
+    const worker = new Worker(new URL('../workers/apiWorker.js', import.meta.url), { type: 'module' })
+    workerRef.current = worker
+    worker.onmessage = ({ data: { id, success, result, error } }) => {
+      const pending = pendingRef.current[id]
+      if (!pending) return
+      delete pendingRef.current[id]
+      if (success) pending.resolve(result)
+      else pending.reject(new Error(error))
+    }
+    worker.onerror = (e) => {
+      console.error('Worker error:', e)
+    }
+    return () => worker.terminate()
+  }, [])
 
   // If user already has a Supabase profile from a prior session, skip onboarding
   useEffect(() => {
@@ -210,45 +229,12 @@ export default function Dashboard() {
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } }
       : { type: 'image', source: { type: 'base64', media_type: mType, data: base64Data } }
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'pdfs-2024-09-25',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: maxTokens,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt },
-            fileBlock
-          ]
-        }]
-      })
+    // Dispatch to Web Worker — runs in a background thread unaffected by tab focus
+    return new Promise((resolve, reject) => {
+      const id = Math.random().toString(36).slice(2) + Date.now()
+      pendingRef.current[id] = { resolve, reject }
+      workerRef.current.postMessage({ id, fileBlock, prompt, apiKey, maxTokens })
     })
-
-    if (!response.ok) {
-      const errBody = await response.text()
-      throw new Error(`API ${response.status}: ${errBody.substring(0, 200)}`)
-    }
-
-    const data = await response.json()
-    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error))
-    const text = data.content.map(b => b.type === 'text' ? b.text : '').join('')
-    let parsed
-    try {
-      parsed = JSON.parse(text.replace(/```json\s?|```/g, '').trim())
-    } catch {
-      const jsonMatch = text.match(/\{[\s\S]*\}/)
-      if (jsonMatch) parsed = JSON.parse(jsonMatch[0])
-      else throw new Error('Could not parse response as JSON')
-    }
-    return parsed
   }
 
   const callApiMulti = async (imgArray, prompt, maxTokens = 4096) => {
