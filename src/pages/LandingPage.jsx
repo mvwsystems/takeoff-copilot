@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Upload, FileText, BarChart3, AlertTriangle, Layers, Eye, ScanSearch, ChevronDown, CheckCircle } from 'lucide-react'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import './LandingPage.css'
 
 const FAQS = [
@@ -51,6 +51,8 @@ function FAQ({ q, a }) {
 }
 
 export default function LandingPage() {
+  const cardRef = useRef(null)
+
   useEffect(() => {
     const els = document.querySelectorAll('[data-reveal]')
     if (!els.length) return
@@ -64,6 +66,19 @@ export default function LandingPage() {
     return () => io.disconnect()
   }, [])
 
+  useEffect(() => {
+    const card = cardRef.current
+    if (!card) return
+    let raf
+    const onScroll = () => {
+      raf = requestAnimationFrame(() => {
+        card.style.transform = `rotate(-3deg) translateY(${window.scrollY * 0.5}px)`
+      })
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => { window.removeEventListener('scroll', onScroll); cancelAnimationFrame(raf) }
+  }, [])
+
   return (
     <div className="landing">
 
@@ -71,42 +86,117 @@ export default function LandingPage() {
       <section className="hero">
         <div className="hero-bg-grid" />
         <div className="hero-glow" />
-        <div className="hero-content animate-in">
-          <div className="hero-badge">
-            <span className="hero-badge-dot" />
-            <span>Beta &mdash; Built for utility contractors</span>
+        <div className="hero-two-col animate-in">
+
+          {/* LEFT — copy */}
+          <div className="hero-left">
+            <div className="hero-badge">
+              <span className="hero-badge-dot" />
+              <span>Beta &mdash; Built for utility contractors</span>
+            </div>
+
+            <h1 className="hero-title">
+              Find the mistake<br />
+              before the bid<br />
+              <span className="text-red">goes out.</span>
+            </h1>
+
+            <p className="hero-subtitle">
+              Upload your plans, geotech, and completed takeoff. Takeoff Copilot
+              reviews the package for missed quantities, risky assumptions,
+              plan&thinsp;/&thinsp;geotech conflicts, and scope gaps before you submit.
+            </p>
+
+            <div className="hero-actions">
+              <Link to="/login" className="btn btn-primary btn-lg">
+                <Upload size={18} />
+                Submit a Bid for QA Review
+              </Link>
+              <a href="#how-it-works" className="btn btn-secondary btn-lg">
+                See How It Works
+              </a>
+            </div>
+
+            <div className="hero-trust">
+              {['Plan screening', 'Missed quantity detection', 'Geotech conflict flags', 'Scope gap check', 'Bid Risk Report PDF'].map((t, i) => (
+                <span key={i} className="hero-trust-item">
+                  {i > 0 && <span className="hero-trust-sep">//</span>}
+                  {t}
+                </span>
+              ))}
+            </div>
           </div>
 
-          <h1 className="hero-title">
-            Find the mistake<br />
-            before the bid<br />
-            <span className="text-red">goes out.</span>
-          </h1>
+          {/* RIGHT — mock Bid Risk Report card */}
+          <div className="hero-right">
+            <div className="hero-report-glow" />
+            <div className="hero-report-card" ref={cardRef}>
 
-          <p className="hero-subtitle">
-            Upload your plans, geotech, and completed takeoff. Takeoff Copilot
-            reviews the package for missed quantities, risky assumptions,
-            plan&thinsp;/&thinsp;geotech conflicts, and scope gaps before you submit.
-          </p>
+              <div className="hrrc-header">
+                <div>
+                  <div className="hrrc-label">BID RISK REPORT</div>
+                  <div className="hrrc-job">JOB-DFW-2461</div>
+                </div>
+                <div className="hrrc-status">REVIEW COMPLETE</div>
+              </div>
 
-          <div className="hero-actions">
-            <Link to="/login" className="btn btn-primary btn-lg">
-              <Upload size={18} />
-              Submit a Bid for QA Review
-            </Link>
-            <a href="#how-it-works" className="btn btn-secondary btn-lg">
-              See How It Works
-            </a>
+              <div className="hrrc-section">
+                <div className="hrrc-section-title">EXECUTIVE SUMMARY</div>
+                <ul className="hrrc-bullets">
+                  <li><span className="hrrc-dot hrrc-dot-red" />Missing dewatering allowance — geotech shows groundwater at 5.5&nbsp;ft</li>
+                  <li><span className="hrrc-dot hrrc-dot-amber" />Storm drain manhole count appears low vs. plan sheet C-4</li>
+                  <li><span className="hrrc-dot hrrc-dot-green" />Sanitary sewer footage aligns with profile sheets</li>
+                </ul>
+              </div>
+
+              <div className="hrrc-section hrrc-section-table">
+                <div className="hrrc-section-title">HIGH RISK MISSES</div>
+                <table className="hrrc-table">
+                  <thead>
+                    <tr>
+                      <th>ITEM</th>
+                      <th>PLAN QTY</th>
+                      <th>T/O QTY</th>
+                      <th>FLAG</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Dewatering</td>
+                      <td>Required</td>
+                      <td className="hrrc-td-missing">—</td>
+                      <td><span className="hrrc-flag hrrc-flag-red">HIGH</span></td>
+                    </tr>
+                    <tr>
+                      <td>MH, 4&apos; Dia</td>
+                      <td>14 EA</td>
+                      <td>9 EA</td>
+                      <td><span className="hrrc-flag hrrc-flag-red">HIGH</span></td>
+                    </tr>
+                    <tr>
+                      <td>Lime Stabilization</td>
+                      <td>3,200 SY</td>
+                      <td className="hrrc-td-missing">—</td>
+                      <td><span className="hrrc-flag hrrc-flag-amber">MED</span></td>
+                    </tr>
+                    <tr>
+                      <td>CCTV Inspection</td>
+                      <td>Spec req.</td>
+                      <td className="hrrc-td-missing">—</td>
+                      <td><span className="hrrc-flag hrrc-flag-amber">MED</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="hrrc-footer">
+                <span className="hrrc-footer-label">ESTIMATOR CONFIDENCE</span>
+                <span className="hrrc-grade">B</span>
+              </div>
+
+            </div>
           </div>
 
-          <div className="hero-trust">
-            {['Plan screening', 'Missed quantity detection', 'Geotech conflict flags', 'Scope gap check', 'Bid Risk Report PDF'].map((t, i) => (
-              <span key={i} className="hero-trust-item">
-                {i > 0 && <span className="hero-trust-sep">//</span>}
-                {t}
-              </span>
-            ))}
-          </div>
         </div>
         <div className="hero-angle" />
       </section>
