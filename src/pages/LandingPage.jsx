@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { Upload, FileText, BarChart3, AlertTriangle, Layers, Eye, ScanSearch, ChevronDown, CheckCircle } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
+import RiskPill from '../components/RiskPill'
 import './LandingPage.css'
 
 const FAQS = [
@@ -214,31 +215,37 @@ export default function LandingPage() {
               {
                 icon: <ScanSearch size={22} />,
                 title: 'Plan Set Screening',
+                pill: null,
                 desc: 'Before reviewing the estimator\'s takeoff, the system grades the plan set A, B, or C. Grade C plans cannot support a reliable QA review and are flagged before the report runs.'
               },
               {
                 icon: <FileText size={22} />,
                 title: 'Bid Risk Report',
+                pill: null,
                 desc: 'The primary output is a structured Bid Risk Report — not a raw takeoff. Executive summary, risk flags, quantity discrepancies, scope gaps, clarification questions, and recommended bid notes. Downloadable as a PDF.'
               },
               {
                 icon: <AlertTriangle size={22} />,
                 title: 'Missed Quantity Detection',
+                pill: 'miss',
                 desc: 'Each line item in the estimator\'s takeoff is compared against what the plans show. Items that appear low, appear high, or are missing from the plans entirely are flagged with a risk level and a note.'
               },
               {
                 icon: <Layers size={22} />,
                 title: 'Geotech Conflict Detection',
+                pill: 'high',
                 desc: 'Geotech data is cross-referenced against the takeoff. If groundwater is at 6 feet and there\'s no dewatering line item, that is a HIGH risk flag. Same for rock excavation, lime stabilization, imported fill, and haul-off.'
               },
               {
                 icon: <BarChart3 size={22} />,
                 title: 'Estimator Confidence Score',
+                pill: null,
                 desc: 'The report closes with an A–F confidence grade on the estimator\'s overall package — scored by how well quantities align with the plans and how complete the scope appears. Not a judgment. A calibration.'
               },
               {
                 icon: <Eye size={22} />,
                 title: 'Second Set of Eyes',
+                pill: 'medium',
                 desc: 'Calibrated against real completed jobs in the DFW market. The system knows what utility contractors miss — trench safety, testing requirements, municipal-specific callouts, and scope items that don\'t show up until the RFI.'
               }
             ].map((f, i) => (
@@ -248,8 +255,11 @@ export default function LandingPage() {
                 data-reveal
                 style={{ '--reveal-delay': `${i * 80}ms` }}
               >
-                <div className="feature-icon-wrap">
-                  <div className="feature-icon">{f.icon}</div>
+                <div className="feature-card-top">
+                  <div className="feature-icon-wrap">
+                    <div className="feature-icon">{f.icon}</div>
+                  </div>
+                  {f.pill && <RiskPill level={f.pill} size="sm" />}
                 </div>
                 <h4 className="feature-title">{f.title}</h4>
                 <p className="feature-desc">{f.desc}</p>
@@ -325,9 +335,9 @@ export default function LandingPage() {
                         <td>{r.actual}</td>
                         <td className={r.flag === 'MISS' ? 'cal-td-delta-miss' : ''}>{r.delta}</td>
                         <td>
-                          <span className={`cal-flag ${r.flag === 'HIGH' ? 'cal-flag-high' : 'cal-flag-miss'}`}>
-                            {r.badge || r.flag}
-                          </span>
+                          <RiskPill level={r.flag === 'HIGH' ? 'high' : 'miss'} size="sm">
+                            {r.flag === 'HIGH' && r.badge ? r.badge : null}
+                          </RiskPill>
                         </td>
                       </tr>
                     ))}
@@ -417,20 +427,22 @@ export default function LandingPage() {
               the risk before it becomes a change order, so the estimator knows exactly what to
               verify and what to protect in the proposal.
             </p>
+            <p>
+              Where we matched, we say HIGH. Where we missed, we mark MISS — in red,
+              in the report. The estimator sees both.
+            </p>
           </div>
           <div className="accuracy-pills">
             {[
-              { cls: 'pill-high', label: 'HIGH — confirmed against plans' },
-              { cls: 'pill-medium', label: 'MEDIUM — verify before pricing' },
-              { cls: 'pill-low', label: 'LOW — estimator must confirm' },
+              { level: 'high',   sub: 'confirmed against plans' },
+              { level: 'medium', sub: 'verify before pricing' },
+              { level: 'low',    sub: 'estimator must confirm' },
+              { level: 'miss',   sub: "AI's own gap, disclosed in red" },
             ].map((p, i) => (
-              <span
-                key={i}
-                className={`accuracy-pill ${p.cls}`}
-                style={{ '--reveal-delay': `${i * 100 + 200}ms` }}
-              >
-                {p.label}
-              </span>
+              <div key={i} className="accuracy-pill-item">
+                <RiskPill level={p.level} size="md" />
+                <span className="accuracy-pill-sub">{p.sub}</span>
+              </div>
             ))}
           </div>
         </div>

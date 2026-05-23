@@ -585,8 +585,14 @@
     0 0 0 1px rgba(0, 87, 255, 0.08);
 }
 
-.feature-icon-wrap {
+.feature-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   margin-bottom: var(--space-md);
+}
+
+.feature-icon-wrap {
   display: inline-block;
 }
 
@@ -780,27 +786,6 @@
   color: #E8372C !important;
 }
 
-.cal-flag {
-  display: inline-block;
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  letter-spacing: 0.5px;
-  padding: 3px 8px;
-  border-radius: 2px;
-  white-space: nowrap;
-}
-
-.cal-flag-high {
-  background: rgba(52, 211, 153, 0.08);
-  color: #34d399;
-  border: 1px solid rgba(52, 211, 153, 0.22);
-}
-
-.cal-flag-miss {
-  background: rgba(232, 55, 44, 0.09);
-  color: #E8372C;
-  border: 1px solid rgba(232, 55, 44, 0.22);
-}
 
 .cal-footnote {
   font-size: 0.68rem;
@@ -942,52 +927,27 @@
 
 .accuracy-pills {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   flex-wrap: wrap;
-  gap: var(--space-sm);
+  gap: var(--space-lg) var(--space-md);
 }
 
-.accuracy-pill {
+.accuracy-pill-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.accuracy-pill-sub {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  padding: 7px 16px;
-  border-radius: 2px;
-  border: 1px solid;
-  cursor: default;
-  transition: transform 0.4s var(--ease-lux), box-shadow 0.4s var(--ease-silk);
-}
-
-.pill-high {
-  background: rgba(52, 211, 153, 0.07);
-  border-color: rgba(52, 211, 153, 0.25);
-  color: #34d399;
-}
-.pill-high:hover {
-  transform: scale(1.06);
-  box-shadow: 0 0 22px rgba(52, 211, 153, 0.2);
-}
-
-.pill-medium {
-  background: rgba(251, 191, 36, 0.07);
-  border-color: rgba(251, 191, 36, 0.25);
-  color: #fbbf24;
-}
-.pill-medium:hover {
-  transform: scale(1.06);
-  box-shadow: 0 0 22px rgba(251, 191, 36, 0.2);
-}
-
-.pill-low {
-  background: rgba(232, 55, 44, 0.07);
-  border-color: rgba(232, 55, 44, 0.25);
-  color: #E8372C;
-}
-.pill-low:hover {
-  transform: scale(1.06);
-  box-shadow: 0 0 22px rgba(232, 55, 44, 0.2);
+  font-size: 0.6rem;
+  letter-spacing: 0.5px;
+  color: var(--titan-text-muted);
+  text-align: center;
+  max-width: 120px;
+  line-height: 1.4;
 }
 
 /* ============================================================

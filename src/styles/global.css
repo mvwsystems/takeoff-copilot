@@ -58,6 +58,16 @@
   --duration-normal: 350ms;
   --duration-slow: 550ms;
   
+  /* —— RISK FLAG TOKENS —— */
+  --flag-high:      #34d399;
+  --flag-medium:    #fbbf24;
+  --flag-low:       #E8372C;
+  --flag-miss:      #E8372C;
+  --flag-high-bg:   rgba(52, 211, 153, 0.08);
+  --flag-medium-bg: rgba(251, 191, 36, 0.08);
+  --flag-low-bg:    rgba(232, 55, 44, 0.08);
+  --flag-miss-bg:   rgba(232, 55, 44, 0.10);
+
   /* —— ANGLES (ticker tape motif) —— */
   --angle-sm: 1.5deg;
   --angle-md: 3deg;

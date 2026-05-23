@@ -1,0 +1,84 @@
+/* ===================================================
+   RISK PILL — four-state flag component
+   high | medium | low | miss
+   =================================================== */
+
+:root {
+  --flag-high:      #34d399;
+  --flag-medium:    #fbbf24;
+  --flag-low:       #E8372C;
+  --flag-miss:      #E8372C;
+  --flag-high-bg:   rgba(52, 211, 153, 0.08);
+  --flag-medium-bg: rgba(251, 191, 36, 0.08);
+  --flag-low-bg:    rgba(232, 55, 44, 0.08);
+  --flag-miss-bg:   rgba(232, 55, 44, 0.10);
+}
+
+.risk-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  border-radius: 2px;
+  border: 1px solid;
+  white-space: nowrap;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+/* — Sizes — */
+
+.rp-sm {
+  font-size: 0.55rem;
+  padding: 2px 7px;
+}
+
+.rp-md {
+  font-size: 0.65rem;
+  padding: 5px 14px;
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1),
+              box-shadow 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* — States — */
+
+.rp-high {
+  background: var(--flag-high-bg);
+  border-color: rgba(52, 211, 153, 0.25);
+  color: var(--flag-high);
+}
+
+.rp-medium {
+  background: var(--flag-medium-bg);
+  border-color: rgba(251, 191, 36, 0.25);
+  color: var(--flag-medium);
+}
+
+.rp-low {
+  background: var(--flag-low-bg);
+  border-color: rgba(232, 55, 44, 0.25);
+  color: var(--flag-low);
+}
+
+/* MISS has fill — heavier visual weight than outline-only states */
+.rp-miss {
+  background: var(--flag-miss-bg);
+  border-color: rgba(232, 55, 44, 0.32);
+  color: var(--flag-miss);
+}
+
+/* Hover — only meaningful at md size */
+.rp-md.rp-high:hover   { transform: scale(1.05); box-shadow: 0 0 20px rgba(52, 211, 153, 0.2); }
+.rp-md.rp-medium:hover { transform: scale(1.05); box-shadow: 0 0 20px rgba(251, 191, 36, 0.2); }
+.rp-md.rp-low:hover    { transform: scale(1.05); box-shadow: 0 0 20px rgba(232, 55, 44, 0.2); }
+.rp-md.rp-miss:hover   { transform: scale(1.05); box-shadow: 0 0 20px rgba(232, 55, 44, 0.22); }
+
+/* — Trail copy (optional children) — */
+
+.rp-trail {
+  opacity: 0.68;
+  font-size: 0.9em;
+  letter-spacing: 0.3px;
+}
