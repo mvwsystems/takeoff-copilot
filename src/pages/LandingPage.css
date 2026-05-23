@@ -7,6 +7,81 @@
 }
 
 /* ============================================================
+   LANDING SECONDARY NAV
+   ============================================================ */
+
+.landing-subnav {
+  position: sticky;
+  top: 56px;
+  z-index: 90;
+  height: 40px;
+  background: rgba(10, 10, 10, 0.96);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--titan-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.landing-subnav::-webkit-scrollbar {
+  display: none;
+}
+
+.landing-subnav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 var(--space-xl);
+  width: 100%;
+  min-width: max-content;
+}
+
+.subnav-item {
+  display: flex;
+  align-items: center;
+}
+
+.subnav-sep {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--titan-red);
+  opacity: 0.45;
+  padding: 0 6px;
+  pointer-events: none;
+  user-select: none;
+  letter-spacing: 0;
+}
+
+.subnav-link {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  padding: 2px 4px;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    color        0.2s var(--ease-silk),
+    border-color 0.2s var(--ease-silk);
+}
+
+.subnav-link:hover {
+  color: var(--titan-text);
+}
+
+.subnav-link-active {
+  color: var(--titan-text);
+  border-bottom-color: var(--titan-red);
+}
+
+/* ============================================================
    SCROLL REVEAL SYSTEM
    Small distance (14px), long duration (0.9s), expo-out easing.
    The combination reads as floating up — not jumping.

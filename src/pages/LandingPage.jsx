@@ -47,6 +47,70 @@ const FAQS = [
   },
 ]
 
+const SECTIONS = [
+  { id: 'capabilities', label: 'CAPABILITIES' },
+  { id: 'sample-job',   label: 'SAMPLE JOB'   },
+  { id: 'workflow',     label: 'WORKFLOW'      },
+  { id: 'accuracy',     label: 'ACCURACY'      },
+  { id: 'difference',   label: 'DIFFERENCE'    },
+  { id: 'pricing',      label: 'PRICING'       },
+  { id: 'faq',          label: 'FAQ'           },
+]
+
+function LandingNav() {
+  const [active, setActive] = useState(SECTIONS[0].id)
+  const linkRefs = useRef({})
+
+  useEffect(() => {
+    const visible = new Set()
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) visible.add(e.target.id)
+        else visible.delete(e.target.id)
+      })
+      const found = SECTIONS.find(s => visible.has(s.id))
+      if (found) setActive(found.id)
+    }, { rootMargin: '-96px 0px -30% 0px', threshold: 0 })
+
+    SECTIONS.forEach(({ id }) => {
+      const el = document.getElementById(id)
+      if (el) observer.observe(el)
+    })
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    const el = linkRefs.current[active]
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' })
+  }, [active])
+
+  const scrollTo = (id) => {
+    const el = document.getElementById(id)
+    if (!el) return
+    const y = el.getBoundingClientRect().top + window.scrollY - 96
+    window.scrollTo({ top: y, behavior: 'smooth' })
+  }
+
+  return (
+    <div className="landing-subnav">
+      <div className="landing-subnav-inner">
+        {SECTIONS.map(({ id, label }, i) => (
+          <div key={id} className="subnav-item">
+            {i > 0 && <span className="subnav-sep">//</span>}
+            <button
+              ref={el => { linkRefs.current[id] = el }}
+              className={`subnav-link${active === id ? ' subnav-link-active' : ''}`}
+              onClick={() => scrollTo(id)}
+            >
+              {label}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function FAQ({ q, a, tag, defaultOpen = false }) {
   const [open, setOpen] = useState(defaultOpen)
   return (
@@ -144,6 +208,8 @@ export default function LandingPage() {
 
   return (
     <div className="landing">
+
+      <LandingNav />
 
       {/* HERO */}
       <section className="hero">
@@ -265,7 +331,7 @@ export default function LandingPage() {
       </section>
 
       {/* WHAT IT DOES */}
-      <section className="features">
+      <section className="features" id="capabilities">
         <div className="features-inner">
           <div className="section-header" data-reveal>
             <span className="titan-label">Capabilities</span>
@@ -399,7 +465,7 @@ export default function LandingPage() {
       </section>
 
       {/* HOW WE CALIBRATE */}
-      <section className="calibration-section">
+      <section className="calibration-section" id="sample-job">
         <div className="calibration-inner">
 
           <div className="section-header" data-reveal>
@@ -486,7 +552,7 @@ export default function LandingPage() {
       </section>
 
       {/* HOW IT WORKS */}
-      <section className="how-it-works" id="how-it-works" ref={howRef}>
+      <section className="how-it-works" id="workflow" ref={howRef}>
         <div className="how-inner">
           <div className="section-header" data-reveal>
             <span className="titan-label">Workflow</span>
@@ -584,7 +650,7 @@ export default function LandingPage() {
       </section>
 
       {/* ACCURACY / HONEST FRAMING */}
-      <section className="accuracy-section">
+      <section className="accuracy-section" id="accuracy">
         <div className="accuracy-inner" data-reveal>
           <div className="accuracy-label titan-label">On Accuracy</div>
           <h2 className="accuracy-headline">
@@ -624,7 +690,7 @@ export default function LandingPage() {
       </section>
 
       {/* THE DIFFERENCE */}
-      <section className="difference-section">
+      <section className="difference-section" id="difference">
         <div className="difference-inner">
           <div className="section-header" data-reveal>
             <span className="titan-label">The Difference</span>
@@ -683,7 +749,7 @@ export default function LandingPage() {
       </section>
 
       {/* PRICING */}
-      <section className="pricing-section">
+      <section className="pricing-section" id="pricing">
         <div className="pricing-inner">
 
           {/* LEFT — sticky price card */}
@@ -956,7 +1022,7 @@ export default function LandingPage() {
       </section>
 
       {/* FAQ */}
-      <section className="faq-section">
+      <section className="faq-section" id="faq">
         <div className="faq-inner">
           <div className="section-header" data-reveal>
             <span className="titan-label">Questions</span>
