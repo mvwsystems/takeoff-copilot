@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Upload, FileText, BarChart3, AlertTriangle, Layers, Eye, ScanSearch, ChevronDown, CheckCircle } from 'lucide-react'
+import { Upload, FileText, BarChart3, AlertTriangle, Layers, Eye, ScanSearch, ChevronDown, CheckCircle, Check, Minus } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import RiskPill from '../components/RiskPill'
 import './LandingPage.css'
@@ -600,6 +600,65 @@ export default function LandingPage() {
                 <span className="accuracy-pill-sub">{p.sub}</span>
               </div>
             ))}
+          </div>
+        </div>
+      </section>
+
+      {/* THE DIFFERENCE */}
+      <section className="difference-section">
+        <div className="difference-inner">
+          <div className="section-header" data-reveal>
+            <span className="titan-label">The Difference</span>
+            <h2>QA&apos;d or Not.</h2>
+          </div>
+
+          <div className="diff-table" data-reveal>
+
+            {/* Left — unreviewed */}
+            <div className="diff-col diff-col-left">
+              <div className="diff-header diff-header-left">BID GOES OUT</div>
+              {[
+                'Plan grade verified',
+                'Quantities double-checked',
+                'Geotech cross-referenced',
+                'Scope gaps surfaced',
+                'Estimator confidence graded',
+              ].map((label, i) => (
+                <div key={i} className="diff-row">
+                  <Minus size={15} className="diff-icon-no" strokeWidth={2.5} />
+                  <span>{label}</span>
+                </div>
+              ))}
+              <div className="diff-separator" />
+              <div className="diff-outcome diff-outcome-left">
+                Change order<br />or margin hit
+              </div>
+            </div>
+
+            {/* vs. chip — visible on mobile only */}
+            <div className="diff-vs">VS</div>
+
+            {/* Right — QA'd */}
+            <div className="diff-col diff-col-right">
+              <div className="diff-header diff-header-right">BID GOES OUT &mdash; QA&apos;D</div>
+              {[
+                'Plan grade verified',
+                'Quantities double-checked',
+                'Geotech cross-referenced',
+                'Scope gaps surfaced',
+                'Estimator confidence graded',
+              ].map((label, i) => (
+                <div key={i} className="diff-row">
+                  <Check size={15} className="diff-icon-yes" strokeWidth={2.5} />
+                  <span>{label}</span>
+                </div>
+              ))}
+              <div className="diff-separator" />
+              <div className="diff-outcome diff-outcome-right">
+                Priced correctly<br />or passed
+              </div>
+            </div>
+
           </div>
         </div>
       </section>

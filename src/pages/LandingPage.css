@@ -1357,6 +1357,111 @@
 }
 
 /* ============================================================
+   THE DIFFERENCE
+   ============================================================ */
+
+.difference-section {
+  padding: var(--space-3xl) var(--space-lg);
+}
+
+.difference-inner {
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.diff-table {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-md);
+  margin-top: var(--space-xl);
+}
+
+/* vs. chip — desktop: hidden, mobile: shown between stacked cols */
+.diff-vs {
+  display: none;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 3px;
+  color: var(--titan-text-muted);
+  padding: var(--space-sm) 0;
+}
+
+.diff-col {
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.diff-col-right {
+  border-top: 2px solid var(--titan-red);
+}
+
+.diff-header {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  padding: 13px 20px;
+}
+
+.diff-header-left {
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--titan-text-muted);
+  border-bottom: 1px solid var(--titan-border);
+}
+
+.diff-header-right {
+  background: rgba(0, 87, 255, 0.08);
+  color: var(--titan-text-dim);
+  border-bottom: 1px solid rgba(0, 87, 255, 0.14);
+}
+
+.diff-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 20px;
+  border-bottom: 1px solid var(--titan-border);
+  font-size: 0.82rem;
+  color: var(--titan-text-dim);
+  font-family: var(--font-body);
+}
+
+.diff-icon-no {
+  color: #E8372C;
+  flex-shrink: 0;
+}
+
+.diff-icon-yes {
+  color: #34d399;
+  flex-shrink: 0;
+}
+
+.diff-separator {
+  height: 14px;
+  border-bottom: 1px solid var(--titan-border);
+}
+
+.diff-outcome {
+  padding: 15px 20px;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  letter-spacing: 1.5px;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.diff-outcome-left {
+  color: rgba(232, 55, 44, 0.6);
+}
+
+.diff-outcome-right {
+  color: #34d399;
+}
+
+/* ============================================================
    PRICING
    ============================================================ */
 
@@ -1648,6 +1753,8 @@
   .calibration-cols { grid-template-columns: 1fr; gap: 40px; }
   .calibration-headline { font-size: 2rem; }
   .faq-item:hover { transform: translateX(1px); }
+  .diff-table { grid-template-columns: 1fr; }
+  .diff-vs { display: block; }
   .pricing-card-header { padding: 28px 24px 20px; }
   .pricing-features { padding: 20px 24px; }
   .pricing-cta { padding: 20px 24px 28px; }
