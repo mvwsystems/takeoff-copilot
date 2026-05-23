@@ -6,33 +6,49 @@ import './LandingPage.css'
 
 const FAQS = [
   {
-    q: 'Does this replace my estimator?',
-    a: 'No. It is a second set of eyes for the estimator\'s own work, not a replacement. The estimator builds the takeoff. Takeoff Copilot reads the plans and geotech against it and tells them what may be wrong before the bid goes out.'
+    q: 'Will this slow down my bid?',
+    tag: 'SPEED',
+    a: 'No. Upload your plan set, geotech, and takeoff file. The report is ready immediately — typically under two minutes. You get a PDF with every risk flag, quantity variance, and scope gap sorted by severity. The only work on your end is reviewing the flags and deciding which ones to address. Most estimators run this the night before submission, not the morning of.',
   },
   {
-    q: 'What does the Bid Risk Report include?',
-    a: 'It includes an executive risk summary, every quantity item that appears low or missing relative to the plans, geotech conflicts (dewatering, rock, lime stabilization, haul-off), commonly missed scope items, clarification questions the estimator should ask before bidding, assumptions that need approval, and recommended bid notes to include in the proposal letter. Everything in one downloadable PDF.'
+    q: 'Does the report replace my estimator?',
+    tag: 'PROCESS',
+    a: 'No. The estimator builds the takeoff. Takeoff Copilot reads the plans and geotech against it and flags what they may have missed before the bid goes out. Your estimator\'s judgment, experience, and sub relationships stay at the center of the number. This is a structured second read — the kind a senior PM would do if you had one available for every bid.',
   },
   {
-    q: 'What if the plans are not good quality?',
-    a: 'Every submission is graded A, B, or C for plan readability before the QA review runs. A Grade C plan set limits what can be confirmed or disputed — the report will tell you exactly what it cannot verify and why, so the estimator knows which items require field verification before the bid goes final.'
+    q: 'Where do our plans and takeoffs go? Who sees them?',
+    tag: 'SECURITY',
+    a: 'Your files are transmitted over TLS, processed in an isolated environment, and not retained after the report is generated. No human at Takeoff Copilot reads your documents. We do not sell, share, or transfer your files to third parties. Each submission is scoped and discarded — your bid information does not persist in our system after delivery.',
   },
   {
-    q: 'What trades is this for?',
-    a: 'The beta is focused on underground and site utility work — sanitary sewer, storm drain, water main, force main, and related civil utility scope. Calibrated against DFW and greater Texas market conditions.'
+    q: 'What if the plans are unclear or incomplete?',
+    tag: 'ACCURACY',
+    a: 'Every submission is graded A, B, or C for plan readability before the QA review runs. A Grade C plan set limits what can be confirmed — the report tells you exactly what it could not verify and why. Items with incomplete plan support are flagged MEDIUM or LOW rather than HIGH. The estimator knows which flags need field verification before the number goes final.',
   },
   {
-    q: 'Can I upload geotech reports?',
-    a: 'Yes, and you should. Geotech reports are a core part of the workflow. Soil classification, groundwater depth, boring data, and backfill suitability are cross-referenced against the estimator\'s takeoff. If the estimator has no dewatering line item and groundwater is at 6 feet, that shows up as a HIGH risk flag.'
+    q: 'What trades does this support?',
+    tag: 'SCOPE',
+    a: 'The beta is focused on underground and site utility work — sanitary sewer, storm drain, water main, force main, and related civil scope. Calibrated against DFW and greater Texas market conditions. Road work, earthwork, and structural concrete are not in scope for this release. Additional trade coverage is in development.',
   },
   {
-    q: 'How does pricing work?',
-    a: 'Each report is $97. Upload your plan sheets, geotech report, and completed takeoff CSV or Excel file. The report is generated and available to download as a PDF immediately. No subscription. No seat fees. Pay per review.'
+    q: 'How is this different from another takeoff service?',
+    tag: 'PROCESS',
+    a: 'Takeoff services produce a quantity list from plans. Takeoff Copilot reads your estimator\'s completed takeoff against the plans and tells them what they missed. The assumption is the takeoff is done — this is the QA pass that happens after. If you\'re looking for someone to build the number from scratch, that\'s a different product.',
+  },
+  {
+    q: 'Can I dispute a flag?',
+    tag: 'PROCESS',
+    a: 'Yes. Flags are not decisions — they are structured concerns for the estimator to evaluate. If a flag is wrong, that\'s useful information: it means the answer is in the plans somewhere the system didn\'t catch. We are building a formal flag feedback loop that will feed into calibration. For now, note your resolution alongside the flag in your own records.',
+  },
+  {
+    q: 'Do you train on our data?',
+    tag: 'SECURITY',
+    a: 'No. Your plans, takeoff, and geotech are not used to train any model. Each submission is processed, the report is generated, and the input files are discarded. We do not use your proprietary project data for any purpose beyond producing your report.',
   },
 ]
 
-function FAQ({ q, a }) {
-  const [open, setOpen] = useState(false)
+function FAQ({ q, a, tag, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen)
   return (
     <div
       className={`faq-item ${open ? 'open' : ''}`}
@@ -40,7 +56,10 @@ function FAQ({ q, a }) {
     >
       <div className="faq-question">
         <span>{q}</span>
-        <ChevronDown size={16} className="faq-chevron" />
+        <span className="faq-question-right">
+          {tag && <span className="faq-tag">{tag}</span>}
+          <ChevronDown size={16} className="faq-chevron" />
+        </span>
       </div>
       <div className="faq-body">
         <div className="faq-body-inner">
@@ -944,7 +963,7 @@ export default function LandingPage() {
             <h2>Common Questions</h2>
           </div>
           <div className="faq-list">
-            {FAQS.map((f, i) => <FAQ key={i} {...f} />)}
+            {FAQS.map((f, i) => <FAQ key={i} {...f} defaultOpen={i === 0} />)}
           </div>
         </div>
       </section>

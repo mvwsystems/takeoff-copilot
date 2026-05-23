@@ -1308,12 +1308,33 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-md);
   padding: var(--space-md) var(--space-lg);
   font-size: 0.88rem;
   font-weight: 500;
   color: var(--titan-text);
   user-select: none;
   transition: color 0.35s var(--ease-silk);
+}
+
+.faq-question-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.faq-tag {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  transition: color 0.2s var(--ease-silk);
+}
+
+.faq-item.open .faq-tag {
+  color: var(--titan-blue);
 }
 
 .faq-item:hover .faq-question,
@@ -1332,15 +1353,19 @@
   color: var(--titan-red);
 }
 
-/* Smooth expand — grid-template-rows with slow luxury ease */
+/* Smooth expand — 200ms, grid-template-rows trick */
 .faq-body {
   display: grid;
   grid-template-rows: 0fr;
-  transition: grid-template-rows 0.5s var(--ease-lux);
+  transition: grid-template-rows 0.2s var(--ease-silk);
 }
 
 .faq-item.open .faq-body {
   grid-template-rows: 1fr;
+}
+
+@media (max-width: 480px) {
+  .faq-tag { display: none; }
 }
 
 .faq-body-inner {
