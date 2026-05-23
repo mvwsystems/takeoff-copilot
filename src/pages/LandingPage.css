@@ -545,8 +545,113 @@
 
 .features-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--space-md);
+}
+
+/* — Bento placement — */
+.bento-hero  { grid-column: 1 / 3; grid-row: 1 / 3; }
+.bento-c3r1  { grid-column: 3;     grid-row: 1; }
+.bento-c4r1  { grid-column: 4;     grid-row: 1; }
+.bento-c3r2  { grid-column: 3;     grid-row: 2; }
+.bento-c4r2  { grid-column: 4;     grid-row: 2; }
+.bento-wide  { grid-column: 1 / 5; grid-row: 3; }
+
+/* — Hero card (Bid Risk Report) — */
+.bento-hero {
+  display: flex;
+  flex-direction: column;
+}
+
+.bento-hero-title {
+  font-size: 1.35rem;
+}
+
+.bento-pdf {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  margin-top: var(--space-lg);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.bento-pdf-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: linear-gradient(135deg, rgba(0, 87, 255, 0.08) 0%, transparent 60%);
+}
+
+.bento-pdf-label {
+  font-family: var(--font-display);
+  font-size: 0.88rem;
+  letter-spacing: 2px;
+  color: var(--titan-white);
+}
+
+.bento-pdf-job {
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  letter-spacing: 1.5px;
+  color: var(--titan-text-muted);
+}
+
+.bento-pdf-rows {
+  padding: 4px 0;
+}
+
+.bento-pdf-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.bento-pdf-row:last-child {
+  border-bottom: none;
+}
+
+.bento-pdf-item {
+  font-size: 0.72rem;
+  color: var(--titan-text-dim);
+  flex: 1;
+}
+
+.bento-grade-badge {
+  position: absolute;
+  bottom: var(--space-lg);
+  right: var(--space-lg);
+  font-family: var(--font-display);
+  font-size: 2.8rem;
+  color: #fbbf24;
+  line-height: 1;
+  text-shadow: 0 0 28px rgba(251, 191, 36, 0.45);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* — Wide closing strip (Second Set of Eyes) — */
+.bento-wide {
+  padding: var(--space-xl) var(--space-lg);
+  border: none;
+  border-top: 1px solid var(--titan-border);
+  border-radius: 0;
+}
+
+.bento-wide:hover {
+  transform: none;
+  box-shadow: none;
+  border-top-color: rgba(0, 87, 255, 0.3);
+}
+
+.bento-wide .feature-desc {
+  max-width: 720px;
 }
 
 .feature-card {
@@ -1287,7 +1392,6 @@
     height: 260px;
   }
   .hero-title { font-size: 3.5rem; }
-  .features-grid { grid-template-columns: 1fr; }
   .hero-trust { gap: 4px; }
   .hero-trust-item { font-size: 0.58rem; }
   .accuracy-headline { font-size: 1.8rem; }
@@ -1295,6 +1399,18 @@
   .accuracy-pill { text-align: center; }
   .faq-question { font-size: 0.84rem; }
   .footer-inner { flex-direction: column; gap: var(--space-md); text-align: center; }
+  .features-grid { grid-template-columns: 1fr; }
+  .bento-hero, .bento-c3r1, .bento-c4r1,
+  .bento-c3r2, .bento-c4r2, .bento-wide {
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .bento-wide {
+    border: 1px solid var(--titan-border);
+    border-radius: 3px;
+  }
+  .bento-wide:hover { transform: none; box-shadow: none; }
+  .bento-grade-badge { font-size: 2rem; bottom: var(--space-md); right: var(--space-md); }
   .calibration-cols { grid-template-columns: 1fr; gap: 40px; }
   .calibration-headline { font-size: 2rem; }
   .step:hover { transform: translateX(3px); }

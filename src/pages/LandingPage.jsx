@@ -213,58 +213,125 @@ export default function LandingPage() {
           <div className="features-grid">
             {[
               {
+                icon: <FileText size={26} />,
+                title: 'Bid Risk Report',
+                pill: null,
+                bentoCls: 'bento-hero',
+                heroCard: true,
+                desc: 'The primary output is a structured Bid Risk Report — not a raw takeoff. Executive summary, risk flags, quantity discrepancies, scope gaps, clarification questions, and recommended bid notes. Downloadable as a PDF.'
+              },
+              {
                 icon: <ScanSearch size={22} />,
                 title: 'Plan Set Screening',
                 pill: null,
+                bentoCls: 'bento-c3r1',
                 desc: 'Before reviewing the estimator\'s takeoff, the system grades the plan set A, B, or C. Grade C plans cannot support a reliable QA review and are flagged before the report runs.'
-              },
-              {
-                icon: <FileText size={22} />,
-                title: 'Bid Risk Report',
-                pill: null,
-                desc: 'The primary output is a structured Bid Risk Report — not a raw takeoff. Executive summary, risk flags, quantity discrepancies, scope gaps, clarification questions, and recommended bid notes. Downloadable as a PDF.'
               },
               {
                 icon: <AlertTriangle size={22} />,
                 title: 'Missed Quantity Detection',
                 pill: 'miss',
+                bentoCls: 'bento-c4r1',
                 desc: 'Each line item in the estimator\'s takeoff is compared against what the plans show. Items that appear low, appear high, or are missing from the plans entirely are flagged with a risk level and a note.'
               },
               {
                 icon: <Layers size={22} />,
                 title: 'Geotech Conflict Detection',
                 pill: 'high',
+                bentoCls: 'bento-c3r2',
                 desc: 'Geotech data is cross-referenced against the takeoff. If groundwater is at 6 feet and there\'s no dewatering line item, that is a HIGH risk flag. Same for rock excavation, lime stabilization, imported fill, and haul-off.'
               },
               {
                 icon: <BarChart3 size={22} />,
                 title: 'Estimator Confidence Score',
                 pill: null,
+                bentoCls: 'bento-c4r2',
                 desc: 'The report closes with an A–F confidence grade on the estimator\'s overall package — scored by how well quantities align with the plans and how complete the scope appears. Not a judgment. A calibration.'
               },
               {
                 icon: <Eye size={22} />,
                 title: 'Second Set of Eyes',
                 pill: 'medium',
+                bentoCls: 'bento-wide',
+                wideCard: true,
                 desc: 'Calibrated against real completed jobs in the DFW market. The system knows what utility contractors miss — trench safety, testing requirements, municipal-specific callouts, and scope items that don\'t show up until the RFI.'
-              }
-            ].map((f, i) => (
-              <div
-                key={i}
-                className="feature-card card"
-                data-reveal
-                style={{ '--reveal-delay': `${i * 80}ms` }}
-              >
-                <div className="feature-card-top">
-                  <div className="feature-icon-wrap">
-                    <div className="feature-icon">{f.icon}</div>
+              },
+            ].map((f, i) => {
+              if (f.heroCard) return (
+                <div
+                  key={i}
+                  className="feature-card card bento-hero"
+                  data-reveal
+                  style={{ '--reveal-delay': `${i * 80}ms` }}
+                >
+                  <div className="feature-card-top">
+                    <div className="feature-icon-wrap">
+                      <div className="feature-icon">{f.icon}</div>
+                    </div>
                   </div>
-                  {f.pill && <RiskPill level={f.pill} size="sm" />}
+                  <h4 className="feature-title bento-hero-title">{f.title}</h4>
+                  <p className="feature-desc">{f.desc}</p>
+
+                  <div className="bento-pdf">
+                    <div className="bento-pdf-header">
+                      <span className="bento-pdf-label">BID RISK REPORT</span>
+                      <span className="bento-pdf-job">JOB-DFW-2461</span>
+                    </div>
+                    <div className="bento-pdf-rows">
+                      {[
+                        { item: 'Dewatering allowance',   level: 'miss'   },
+                        { item: 'Sanitary sewer main 8"', level: 'high'   },
+                        { item: 'Storm drain MH count',   level: 'medium' },
+                        { item: 'Lime stabilization',     level: 'miss'   },
+                      ].map((r, ri) => (
+                        <div key={ri} className="bento-pdf-row">
+                          <span className="bento-pdf-item">{r.item}</span>
+                          <RiskPill level={r.level} size="sm" />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bento-grade-badge">B+</div>
                 </div>
-                <h4 className="feature-title">{f.title}</h4>
-                <p className="feature-desc">{f.desc}</p>
-              </div>
-            ))}
+              )
+
+              if (f.wideCard) return (
+                <div
+                  key={i}
+                  className="feature-card bento-wide"
+                  data-reveal
+                  style={{ '--reveal-delay': `${i * 80}ms` }}
+                >
+                  <div className="feature-card-top">
+                    <div className="feature-icon-wrap">
+                      <div className="feature-icon">{f.icon}</div>
+                    </div>
+                    {f.pill && <RiskPill level={f.pill} size="sm" />}
+                  </div>
+                  <h4 className="feature-title">{f.title}</h4>
+                  <p className="feature-desc">{f.desc}</p>
+                </div>
+              )
+
+              return (
+                <div
+                  key={i}
+                  className={`feature-card card ${f.bentoCls}`}
+                  data-reveal
+                  style={{ '--reveal-delay': `${i * 80}ms` }}
+                >
+                  <div className="feature-card-top">
+                    <div className="feature-icon-wrap">
+                      <div className="feature-icon">{f.icon}</div>
+                    </div>
+                    {f.pill && <RiskPill level={f.pill} size="sm" />}
+                  </div>
+                  <h4 className="feature-title">{f.title}</h4>
+                  <p className="feature-desc">{f.desc}</p>
+                </div>
+              )
+            })}
           </div>
         </div>
       </section>
