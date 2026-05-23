@@ -259,6 +259,93 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* HOW WE CALIBRATE */}
+      <section className="calibration-section">
+        <div className="calibration-inner">
+
+          <div className="section-header" data-reveal>
+            <span className="titan-label">// Calibration — DFW Multifamily Off-Site Utilities, 2025</span>
+            <h2 className="calibration-headline">
+              Where we were right.<br />
+              <span className="text-red">Where we missed.</span>
+            </h2>
+            <p className="calibration-lede">
+              Every Bid Risk Report compares the AI takeoff to what the contractor
+              actually built on similar jobs. HIGH means we matched. MISS means we
+              didn&apos;t — and the report says so. This is one of those comparisons.
+            </p>
+          </div>
+
+          <div className="calibration-cols" data-reveal>
+
+            {/* LEFT — stat tiles */}
+            <div className="cal-stats">
+              {[
+                { eyebrow: 'MAINLINE REVIEWED', num: '1,527', unit: 'LF', sub: 'sewer + water + storm' },
+                { eyebrow: 'ITEMS MATCHED ACTUALS', num: '13 / 17', unit: '', sub: '76% first-pass accuracy' },
+                { eyebrow: 'AI MISSES DISCLOSED', num: '4', unit: '', sub: 'flagged in red, in the report' },
+              ].map((s, i) => (
+                <div key={i} className="cal-stat-tile">
+                  <div className="cal-stat-eyebrow">{s.eyebrow}</div>
+                  <div className="cal-stat-num">
+                    {s.num}
+                    {s.unit && <span className="cal-stat-unit">{s.unit}</span>}
+                  </div>
+                  <div className="cal-stat-sub">{s.sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* RIGHT — accuracy table */}
+            <div className="cal-table-wrap">
+              <div className="cal-table-title">System-Level Accuracy vs. Contractor Actuals</div>
+              <div className="cal-table-scroll">
+                <table className="cal-table">
+                  <thead>
+                    <tr>
+                      <th>SYSTEM</th>
+                      <th>AI EXTRACT</th>
+                      <th>ACTUAL</th>
+                      <th>DELTA</th>
+                      <th>FLAG</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { system: 'Sanitary sewer main 8"', ai: '468 LF', actual: '466 LF', delta: '-2 LF',   flag: 'HIGH', badge: '99.6%' },
+                      { system: 'Water main 8"',           ai: '932 LF', actual: '932 LF', delta: '—',       flag: 'HIGH', badge: 'MATCH' },
+                      { system: 'Gate valves 4"',          ai: '0 EA',   actual: '2 EA',   delta: '-2 EA',   flag: 'MISS', badge: null },
+                      { system: 'Storm drain 24" RCP',     ai: '30 LF',  actual: '129 LF', delta: '-99 LF',  flag: 'MISS', badge: null },
+                      { system: "Curb inlets 10'",         ai: '1 EA',   actual: '2 EA',   delta: '-1 EA',   flag: 'MISS', badge: null },
+                      { system: 'TV inspection',           ai: '—',      actual: '595 LF', delta: '-595 LF', flag: 'MISS', badge: null },
+                    ].map((r, i) => (
+                      <tr key={i} className={r.flag === 'MISS' ? 'cal-row-miss' : ''}>
+                        <td className="cal-td-system">{r.system}</td>
+                        <td>{r.ai}</td>
+                        <td>{r.actual}</td>
+                        <td className={r.flag === 'MISS' ? 'cal-td-delta-miss' : ''}>{r.delta}</td>
+                        <td>
+                          <span className={`cal-flag ${r.flag === 'HIGH' ? 'cal-flag-high' : 'cal-flag-miss'}`}>
+                            {r.badge || r.flag}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="cal-footnote">
+                MISS rows are surfaced in your report in red. We disclose the AI&apos;s own
+                gaps so the estimator knows exactly where to verify before pricing.
+                Calibrated against actuals from Rumsey Site Construction and others
+                in the DFW market.
+              </p>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
       {/* HOW IT WORKS */}
       <section className="how-it-works" id="how-it-works">
         <div className="how-inner">

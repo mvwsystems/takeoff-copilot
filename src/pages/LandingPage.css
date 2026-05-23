@@ -624,6 +624,195 @@
 }
 
 /* ============================================================
+   HOW WE CALIBRATE
+   ============================================================ */
+
+.calibration-section {
+  padding: var(--space-3xl) var(--space-lg);
+  background: #101015;
+  border-top: 1px solid var(--titan-border);
+  border-bottom: 1px solid var(--titan-border);
+}
+
+.calibration-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.calibration-headline {
+  font-size: 2.8rem;
+  line-height: 1.1;
+  margin: var(--space-md) 0 var(--space-lg);
+}
+
+.calibration-lede {
+  font-size: 0.88rem;
+  color: var(--titan-text-dim);
+  line-height: 1.7;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.calibration-cols {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 56px;
+  align-items: start;
+  margin-top: var(--space-3xl);
+}
+
+/* --- Stat tiles --- */
+
+.cal-stats {
+  display: flex;
+  flex-direction: column;
+}
+
+.cal-stat-tile {
+  padding: var(--space-lg) 0;
+  border-bottom: 1px solid var(--titan-border);
+}
+
+.cal-stat-tile:first-child {
+  border-top: 1px solid var(--titan-border);
+}
+
+.cal-stat-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  margin-bottom: 8px;
+}
+
+.cal-stat-num {
+  font-family: var(--font-display);
+  font-size: clamp(56px, 7vw, 96px);
+  line-height: 0.88;
+  color: var(--titan-white);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 10px;
+}
+
+.cal-stat-unit {
+  font-size: 0.3em;
+  letter-spacing: 2px;
+  color: var(--titan-text-dim);
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.cal-stat-sub {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--titan-text-muted);
+  letter-spacing: 0.5px;
+}
+
+/* --- Accuracy table --- */
+
+.cal-table-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.cal-table-title {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1px solid var(--titan-border);
+}
+
+.cal-table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-table th {
+  font-family: var(--font-mono);
+  font-size: 0.57rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--titan-border);
+  white-space: nowrap;
+}
+
+.cal-table td {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--titan-text);
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  white-space: nowrap;
+}
+
+.cal-td-system {
+  font-family: var(--font-body) !important;
+  font-size: 0.78rem !important;
+  color: var(--titan-text-dim) !important;
+  white-space: normal !important;
+  min-width: 160px;
+}
+
+.cal-row-miss td {
+  color: rgba(255, 255, 255, 0.38);
+}
+
+.cal-row-miss .cal-td-system {
+  color: rgba(255, 255, 255, 0.38) !important;
+}
+
+.cal-td-delta-miss {
+  color: #E8372C !important;
+}
+
+.cal-flag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.5px;
+  padding: 3px 8px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.cal-flag-high {
+  background: rgba(52, 211, 153, 0.08);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.22);
+}
+
+.cal-flag-miss {
+  background: rgba(232, 55, 44, 0.09);
+  color: #E8372C;
+  border: 1px solid rgba(232, 55, 44, 0.22);
+}
+
+.cal-footnote {
+  font-size: 0.68rem;
+  color: var(--titan-text-muted);
+  line-height: 1.65;
+  max-width: 540px;
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--titan-border);
+  margin: 0;
+}
+
+/* ============================================================
    HOW IT WORKS
    ============================================================ */
 
@@ -1146,6 +1335,8 @@
   .accuracy-pill { text-align: center; }
   .faq-question { font-size: 0.84rem; }
   .footer-inner { flex-direction: column; gap: var(--space-md); text-align: center; }
+  .calibration-cols { grid-template-columns: 1fr; gap: 40px; }
+  .calibration-headline { font-size: 2rem; }
   .step:hover { transform: translateX(3px); }
   .faq-item:hover { transform: translateX(1px); }
   .pricing-card-header { padding: 28px 24px 20px; }
