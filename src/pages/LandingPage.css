@@ -4,6 +4,7 @@
   background: var(--bg);
   --ease-lux: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-silk: cubic-bezier(0.4, 0, 0.2, 1);
+  overflow-x: clip;
 }
 
 /* ============================================================
@@ -1581,6 +1582,11 @@
 .pricing-col-left {
   position: sticky;
   top: 80px;
+  min-width: 0;
+}
+
+.pricing-col-right {
+  min-width: 0;
 }
 
 .pricing-section-header {
@@ -2123,7 +2129,12 @@
     border-radius: 3px;
   }
   .bento-wide:hover { transform: none; box-shadow: none; }
-  .bento-grade-badge { font-size: 2rem; bottom: var(--space-md); right: var(--space-md); }
+  .bento-grade-badge {
+    position: static;
+    align-self: flex-end;
+    font-size: 1.8rem;
+    margin-top: var(--space-sm);
+  }
   /* Pipeline — vertical flow on mobile */
   .pipeline {
     flex-direction: column;
@@ -2180,9 +2191,12 @@
     gap: 12px;
     padding-bottom: 12px;
     margin-bottom: 0;
+    /* prevent the row itself from causing page-level overflow */
+    max-width: 100%;
   }
   .page-preview {
     flex: 0 0 82vw;
+    max-width: 82vw;
     scroll-snap-align: start;
     margin-left: 0 !important;
     margin-bottom: 0;
