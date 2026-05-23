@@ -1,8 +1,8 @@
 .landing {
   padding-top: 56px;
-  /* Luxury easing — exponential out: fast start, long graceful deceleration */
+  --bg: #0a0a0c;
+  background: var(--bg);
   --ease-lux: cubic-bezier(0.22, 1, 0.36, 1);
-  /* Silk ease — smooth in-out for hovers */
   --ease-silk: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -147,16 +147,15 @@
   overflow: hidden;
 }
 
-/* Static grid — no background-position animation (causes paint jank).
-   The mask fades it out at the edges for depth. */
+/* Blueprint grid — fades out over the bottom 30% so it doesn't fight the next section */
 .hero-bg-grid {
   position: absolute;
   inset: 0;
   background-image:
-    linear-gradient(rgba(0, 87, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 87, 255, 0.035) 1px, transparent 1px);
-  background-size: 60px 60px;
-  mask-image: radial-gradient(ellipse 65% 65% at 50% 40%, black 10%, transparent 75%);
+    linear-gradient(rgba(43, 91, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(43, 91, 255, 0.04) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
   pointer-events: none;
 }
 
@@ -246,7 +245,7 @@
   left: 0;
   right: 0;
   height: 60px;
-  background: var(--titan-black);
+  background: #0f0f13;
   clip-path: polygon(0 100%, 100% 100%, 100% 0);
 }
 
@@ -523,7 +522,9 @@
 .btn-primary {
   position: relative;
   overflow: hidden;
-  /* Longer transition so the lift + glow land together gracefully */
+  box-shadow:
+    inset 0  1px 0 rgba(255, 255, 255, 0.25),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35);
   transition: background 0.4s var(--ease-silk), box-shadow 0.4s var(--ease-silk), transform 0.4s var(--ease-lux) !important;
 }
 
@@ -550,7 +551,11 @@
 
 .btn-primary:hover {
   background: var(--titan-red-bright);
-  box-shadow: 0 0 32px rgba(0, 87, 255, 0.3), 0 6px 20px rgba(0, 0, 0, 0.28);
+  box-shadow:
+    0 0 32px rgba(0, 87, 255, 0.3),
+    0 6px 20px rgba(0, 0, 0, 0.28),
+    inset 0  1px 0 rgba(255, 255, 255, 0.25),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35);
   transform: translateY(-2px) !important;
 }
 
@@ -581,21 +586,16 @@
   position: relative;
 }
 
-/* Red underline extends in after the reveal completes */
+/* 24px hairline above the kicker — no animation, always present */
 .section-header .titan-label::after {
   content: '';
   position: absolute;
-  bottom: -3px;
+  top: -8px;
   left: 50%;
   transform: translateX(-50%);
-  width: 0;
+  width: 24px;
   height: 1px;
-  background: var(--titan-red);
-  transition: width 0.6s var(--ease-lux) 0.5s;
-}
-
-.section-header[data-reveal].visible .titan-label::after {
-  width: 100%;
+  background: rgba(0, 87, 255, 0.6);
 }
 
 .section-sub {
@@ -610,7 +610,7 @@
 
 .features {
   padding: var(--space-3xl) var(--space-lg);
-  background: var(--titan-dark);
+  background: #0f0f13;
 }
 
 .features-inner {
@@ -815,9 +815,7 @@
 
 .calibration-section {
   padding: var(--space-3xl) var(--space-lg);
-  background: #101015;
-  border-top: 1px solid var(--titan-border);
-  border-bottom: 1px solid var(--titan-border);
+  background: #0f0f13;
 }
 
 .calibration-inner {
@@ -983,6 +981,7 @@
 
 .how-it-works {
   padding: var(--space-3xl) var(--space-lg);
+  background: var(--bg);
 }
 
 .how-inner {
@@ -1253,9 +1252,7 @@
 
 .accuracy-section {
   padding: var(--space-3xl) var(--space-lg);
-  background: var(--titan-dark);
-  border-top: 1px solid var(--titan-border);
-  border-bottom: 1px solid var(--titan-border);
+  background: #0f0f13;
   position: relative;
   overflow: hidden;
 }
@@ -1338,6 +1335,7 @@
 
 .faq-section {
   padding: var(--space-3xl) var(--space-lg);
+  background: var(--bg);
 }
 
 .faq-inner {
@@ -1462,6 +1460,7 @@
 
 .difference-section {
   padding: var(--space-3xl) var(--space-lg);
+  background: #0f0f13;
 }
 
 .difference-inner {
@@ -1567,7 +1566,7 @@
 
 .pricing-section {
   padding: var(--space-3xl) var(--space-lg);
-  background: var(--titan-bg);
+  background: var(--bg);
 }
 
 .pricing-inner {
@@ -1995,7 +1994,7 @@
 
 .cta {
   padding: var(--space-3xl) var(--space-lg);
-  background: var(--titan-dark);
+  background: #0f0f13;
   text-align: center;
   position: relative;
   overflow: hidden;
