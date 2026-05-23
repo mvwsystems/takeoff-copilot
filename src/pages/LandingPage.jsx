@@ -666,49 +666,273 @@ export default function LandingPage() {
       {/* PRICING */}
       <section className="pricing-section">
         <div className="pricing-inner">
-          <div className="section-header" data-reveal>
-            <span className="titan-label">Pricing</span>
-            <h2>Simple. Per Report.</h2>
-            <p className="section-sub">No subscription. No seat fees. Pay when you need a second set of eyes.</p>
-          </div>
-          <div className="pricing-card-wrap" data-reveal>
-            <div className="pricing-card">
-              <div className="pricing-card-header">
-                <div className="pricing-tier-label">QA Bid Review</div>
-                <div className="pricing-amount">
-                  <span className="pricing-dollar">$</span>
-                  <span className="pricing-num">97</span>
-                  <span className="pricing-per">/ report</span>
+
+          {/* LEFT — sticky price card */}
+          <div className="pricing-col-left">
+            <div className="section-header pricing-section-header" data-reveal>
+              <span className="titan-label">Pricing</span>
+              <h2>Simple. Per Report.</h2>
+              <p className="section-sub">No subscription. No seat fees. Pay when you need a second set of eyes.</p>
+            </div>
+            <div data-reveal>
+              <div className="pricing-card">
+                <div className="pricing-card-header">
+                  <div className="pricing-tier-label">QA Bid Review</div>
+                  <div className="pricing-amount">
+                    <span className="pricing-dollar">$</span>
+                    <span className="pricing-num">97</span>
+                    <span className="pricing-per">/ report</span>
+                  </div>
+                  <p className="pricing-tagline">One submission. Full Bid Risk Report. Downloadable PDF.</p>
                 </div>
-                <p className="pricing-tagline">One submission. Full Bid Risk Report. Downloadable PDF.</p>
-              </div>
-              <ul className="pricing-features">
-                {[
-                  'Plan grade assessment (A / B / C)',
-                  'Line-by-line quantity comparison against plans',
-                  'High Risk Misses table with risk level and notes',
-                  'Geotech cross-reference (dewatering, rock, lime, fill, haul-off)',
-                  'Scope gap check (CCTV, testing, traffic control, permits, and more)',
-                  'Clarification questions and assumptions needing approval',
-                  'Recommended bid notes formatted for the proposal letter',
-                  'Estimator confidence score (A–F)',
-                  'Full PDF download',
-                ].map((item, i) => (
-                  <li key={i}>
-                    <CheckCircle size={14} className="pricing-check" />
-                    <span>{item}</span>
-                  </li>
-                ))}
-              </ul>
-              <div className="pricing-cta">
-                <Link to="/login" className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
-                  <Upload size={16} />
-                  Submit a Bid for QA Review
-                </Link>
-                <p className="pricing-disclaimer">Upload your plans, geotech, and takeoff. Report is ready immediately.</p>
+                <ul className="pricing-features">
+                  {[
+                    'Plan grade assessment (A / B / C)',
+                    'Line-by-line quantity comparison against plans',
+                    'High Risk Misses table with risk level and notes',
+                    'Geotech cross-reference (dewatering, rock, lime, fill, haul-off)',
+                    'Scope gap check (CCTV, testing, traffic control, permits, and more)',
+                    'Clarification questions and assumptions needing approval',
+                    'Recommended bid notes formatted for the proposal letter',
+                    'Estimator confidence score (A–F)',
+                    'Full PDF download',
+                  ].map((item, i) => (
+                    <li key={i}>
+                      <CheckCircle size={14} className="pricing-check" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="pricing-cta">
+                  <Link to="/login" className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
+                    <Upload size={16} />
+                    Submit a Bid for QA Review
+                  </Link>
+                  <p className="pricing-disclaimer">Upload your plans, geotech, and takeoff. Report is ready immediately.</p>
+                </div>
               </div>
             </div>
           </div>
+
+          {/* RIGHT — fanned PDF page previews */}
+          <div className="pricing-col-right">
+            <div className="pp-kicker">
+              <span className="titan-label">// 16 Pages — What's In the Report</span>
+            </div>
+
+            <div className="pp-stack">
+
+              {/* PAGE 01 — Cover */}
+              <div className="page-preview pp-1" data-reveal>
+                <div className="pp-inner">
+                  <div className="pp-page-label">PAGE 01 / 16</div>
+                  <div className="pp-cover-title">QA BID REVIEW</div>
+                  <div className="pp-cover-subtitle">Bid Risk Report</div>
+                  <div className="pp-cover-meta">
+                    <div className="pp-meta-row"><span className="pp-meta-key">Contractor</span><span className="pp-meta-val">Valley Utility Contractors</span></div>
+                    <div className="pp-meta-row"><span className="pp-meta-key">Engineer</span><span className="pp-meta-val">Meridian Engineering Group</span></div>
+                    <div className="pp-meta-row"><span className="pp-meta-key">Plan Date</span><span className="pp-meta-val">March 2025</span></div>
+                    <div className="pp-meta-row"><span className="pp-meta-key">Sheets</span><span className="pp-meta-val">C101–C412 (38 sheets)</span></div>
+                    <div className="pp-meta-row"><span className="pp-meta-key">Geotech</span><span className="pp-meta-val">BV Associates Report #24-118</span></div>
+                    <div className="pp-meta-row"><span className="pp-meta-key">Review Date</span><span className="pp-meta-val">April 14, 2025</span></div>
+                  </div>
+                  <div className="pp-cover-footer">
+                    <div className="pp-grade-stamp">B+</div>
+                    <div className="pp-legend">
+                      <RiskPill level="high" size="sm">Confirmed</RiskPill>
+                      <RiskPill level="medium" size="sm">Calculated</RiskPill>
+                      <RiskPill level="low" size="sm">Inferred</RiskPill>
+                      <RiskPill level="miss" size="sm">Miss</RiskPill>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* PAGE 04 — Executive Summary */}
+              <div className="page-preview pp-2" data-reveal>
+                <div className="pp-inner">
+                  <div className="pp-page-label">PAGE 04 / 16</div>
+                  <div className="pp-section-title">Executive Summary — Key Variances</div>
+                  <table className="pp-table">
+                    <thead>
+                      <tr>
+                        <th>System</th>
+                        <th>AI Extract</th>
+                        <th>Actual</th>
+                        <th>Delta</th>
+                        <th>Flag</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>8″ DI Water Main</td>
+                        <td>1,840 LF</td>
+                        <td>1,840 LF</td>
+                        <td>—</td>
+                        <td><RiskPill level="high" size="sm" /></td>
+                      </tr>
+                      <tr>
+                        <td>Dewatering</td>
+                        <td>Not found</td>
+                        <td>$42,000</td>
+                        <td>–$42K</td>
+                        <td><RiskPill level="miss" size="sm" /></td>
+                      </tr>
+                      <tr>
+                        <td>4″ Force Main</td>
+                        <td>610 LF</td>
+                        <td>610 LF</td>
+                        <td>—</td>
+                        <td><RiskPill level="high" size="sm" /></td>
+                      </tr>
+                      <tr>
+                        <td>Traffic Control</td>
+                        <td>Not found</td>
+                        <td>$18,500</td>
+                        <td>–$18.5K</td>
+                        <td><RiskPill level="miss" size="sm" /></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* PAGE 08 — Per-Division Line Items */}
+              <div className="page-preview pp-3" data-reveal>
+                <div className="pp-inner">
+                  <div className="pp-page-label">PAGE 08 / 16</div>
+                  <div className="pp-section-title">Division 02 — Water Distribution</div>
+                  <div className="pp-sheet-badge">Sheet C202</div>
+                  <table className="pp-table">
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th>Size</th>
+                        <th>Mat</th>
+                        <th>Qty</th>
+                        <th>Unit</th>
+                        <th>Src</th>
+                        <th>Conf</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Water Main</td>
+                        <td>8″</td>
+                        <td>DI</td>
+                        <td>1,840</td>
+                        <td>LF</td>
+                        <td>C202</td>
+                        <td><RiskPill level="high" size="sm" /></td>
+                      </tr>
+                      <tr>
+                        <td>Gate Valve</td>
+                        <td>8″</td>
+                        <td>MJ</td>
+                        <td>6</td>
+                        <td>EA</td>
+                        <td>C202</td>
+                        <td><RiskPill level="high" size="sm" /></td>
+                      </tr>
+                      <tr>
+                        <td>Fire Hydrant</td>
+                        <td>6″</td>
+                        <td>—</td>
+                        <td>4</td>
+                        <td>EA</td>
+                        <td>C205</td>
+                        <td><RiskPill level="medium" size="sm" /></td>
+                      </tr>
+                      <tr>
+                        <td>Air Release</td>
+                        <td>2″</td>
+                        <td>—</td>
+                        <td>2</td>
+                        <td>EA</td>
+                        <td>Spec</td>
+                        <td><RiskPill level="low" size="sm" /></td>
+                      </tr>
+                      <tr>
+                        <td>Dewatering</td>
+                        <td>—</td>
+                        <td>—</td>
+                        <td>LS</td>
+                        <td>—</td>
+                        <td>—</td>
+                        <td><RiskPill level="miss" size="sm" /></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* PAGE 14 — Pre-Bid Checklist */}
+              <div className="page-preview pp-4" data-reveal>
+                <div className="pp-inner">
+                  <div className="pp-page-label">PAGE 14 / 16</div>
+                  <div className="pp-section-title">Before Your Number Leaves the Building</div>
+                  <div className="pp-checklist">
+                    <div className="pp-check-row pp-check-pass">
+                      <span className="pp-check-mark">✓</span>
+                      <span className="pp-check-text">Water main quantities verified against plan callout</span>
+                      <RiskPill level="high" size="sm" />
+                    </div>
+                    <div className="pp-check-row pp-check-pass">
+                      <span className="pp-check-mark">✓</span>
+                      <span className="pp-check-text">Geotech cross-referenced — no rock noted</span>
+                      <RiskPill level="high" size="sm" />
+                    </div>
+                    <div className="pp-check-row pp-check-warn">
+                      <span className="pp-check-mark pp-x">✗</span>
+                      <span className="pp-check-text">Dewatering not in takeoff — geotech shows high water table</span>
+                      <RiskPill level="miss" size="sm" />
+                    </div>
+                    <div className="pp-check-row pp-check-warn">
+                      <span className="pp-check-mark pp-x">✗</span>
+                      <span className="pp-check-text">Traffic control not scoped — arterial road work on Sheets C301</span>
+                      <RiskPill level="miss" size="sm" />
+                    </div>
+                    <div className="pp-check-row pp-check-mid">
+                      <span className="pp-check-mark">~</span>
+                      <span className="pp-check-text">CCTV inspection — spec referenced, no unit price included</span>
+                      <RiskPill level="medium" size="sm" />
+                    </div>
+                    <div className="pp-check-row pp-check-pass">
+                      <span className="pp-check-mark">✓</span>
+                      <span className="pp-check-text">Permit allowance confirmed in bid notes</span>
+                      <RiskPill level="high" size="sm" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>{/* end pp-stack */}
+
+            <div className="pp-toc" data-reveal>
+              <div className="pp-toc-label">All 16 pages include</div>
+              <div className="pp-toc-grid">
+                {[
+                  ['01', 'Cover & project metadata'],
+                  ['02', 'Plan quality grade & methodology'],
+                  ['03–05', 'Executive summary variances'],
+                  ['06–10', 'Per-division line-item tables'],
+                  ['11', 'Geotech cross-reference'],
+                  ['12', 'Scope gap analysis'],
+                  ['13', 'Clarification questions'],
+                  ['14', 'Pre-bid go/no-go checklist'],
+                  ['15', 'Recommended bid notes'],
+                  ['16', 'Confidence score & appendix'],
+                ].map(([pg, desc]) => (
+                  <div key={pg} className="pp-toc-row">
+                    <span className="pp-toc-pg">{pg}</span>
+                    <span className="pp-toc-desc">{desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+          </div>{/* end pricing-col-right */}
+
         </div>
       </section>
 
