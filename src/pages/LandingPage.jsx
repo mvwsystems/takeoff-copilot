@@ -53,6 +53,11 @@ function FAQ({ q, a }) {
 
 export default function LandingPage() {
   const cardRef = useRef(null)
+  const pipelineRef = useRef(null)
+  const connLeftRef = useRef(null)
+  const connRightRef = useRef(null)
+  const howRef = useRef(null)
+  const [activeStep, setActiveStep] = useState(0)
 
   useEffect(() => {
     const els = document.querySelectorAll('[data-reveal]')
@@ -74,6 +79,44 @@ export default function LandingPage() {
     const onScroll = () => {
       raf = requestAnimationFrame(() => {
         card.style.transform = `rotate(-3deg) translateY(${window.scrollY * 0.5}px)`
+      })
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => { window.removeEventListener('scroll', onScroll); cancelAnimationFrame(raf) }
+  }, [])
+
+  // Pipeline animation trigger + connector width measurement
+  useEffect(() => {
+    const pipeline = pipelineRef.current
+    const connLeft = connLeftRef.current
+    const connRight = connRightRef.current
+    if (!pipeline || !connLeft || !connRight) return
+
+    const setWidths = () => {
+      connLeft.style.setProperty('--connector-w', `${connLeft.offsetWidth - 7}px`)
+      connRight.style.setProperty('--connector-w', `${connRight.offsetWidth - 7}px`)
+    }
+    setWidths()
+    window.addEventListener('resize', setWidths)
+
+    const io = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { pipeline.classList.add('pipeline-active'); io.disconnect() } },
+      { threshold: 0.25 }
+    )
+    io.observe(pipeline)
+    return () => { window.removeEventListener('resize', setWidths); io.disconnect() }
+  }, [])
+
+  // Scroll-driven active step
+  useEffect(() => {
+    const section = howRef.current
+    if (!section) return
+    let raf
+    const onScroll = () => {
+      raf = requestAnimationFrame(() => {
+        const { top, height } = section.getBoundingClientRect()
+        const fraction = Math.max(0, Math.min(1, (-top + window.innerHeight * 0.65) / height))
+        setActiveStep(Math.min(4, Math.floor(fraction * 5)))
       })
     }
     window.addEventListener('scroll', onScroll, { passive: true })
@@ -424,13 +467,65 @@ export default function LandingPage() {
       </section>
 
       {/* HOW IT WORKS */}
-      <section className="how-it-works" id="how-it-works">
+      <section className="how-it-works" id="how-it-works" ref={howRef}>
         <div className="how-inner">
           <div className="section-header" data-reveal>
             <span className="titan-label">Workflow</span>
             <h2>How It Works</h2>
           </div>
-          <div className="steps">
+
+          {/* Pipeline diagram */}
+          <div className="pipeline" ref={pipelineRef}>
+
+            {/* Input file stack */}
+            <div className="pipeline-inputs">
+              {[
+                { ext: 'PDF',  name: 'plan-set-001.pdf',   label: 'PLAN SET' },
+                { ext: 'PDF',  name: 'geotech-report.pdf', label: 'GEOTECH'  },
+                { ext: 'XLSX', name: 'takeoff-v3.xlsx',    label: 'TAKEOFF'  },
+              ].map((f, i) => (
+                <div key={i} className="pipeline-file">
+                  <span className={`pipeline-ext pipeline-ext-${f.ext.toLowerCase()}`}>{f.ext}</span>
+                  <div className="pipeline-file-info">
+                    <span className="pipeline-file-label">{f.label}</span>
+                    <span className="pipeline-file-name">{f.name}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Left connector */}
+            <div className="pipeline-connector pipeline-connector-left" ref={connLeftRef}>
+              <div className="connector-dot" />
+            </div>
+
+            {/* QA Review node */}
+            <div className="pipeline-node">
+              <div className="pipeline-node-ring" />
+              <div className="pipeline-node-label">QA<br />REVIEW</div>
+            </div>
+
+            {/* Right connector */}
+            <div className="pipeline-connector pipeline-connector-right" ref={connRightRef}>
+              <div className="connector-dot" />
+            </div>
+
+            {/* Output card */}
+            <div className="pipeline-output">
+              <div className="pipeline-file pipeline-output-file">
+                <span className="pipeline-ext pipeline-ext-pdf">PDF</span>
+                <div className="pipeline-file-info">
+                  <span className="pipeline-file-label">BID RISK REPORT</span>
+                  <span className="pipeline-file-name">bid-risk-report.pdf</span>
+                </div>
+                <div className="pipeline-grade">B</div>
+              </div>
+            </div>
+
+          </div>
+
+          {/* 5-step cards */}
+          <div className="steps-row" data-reveal>
             {[
               {
                 num: '01',
@@ -458,20 +553,14 @@ export default function LandingPage() {
                 desc: 'The report is downloaded as a PDF. The estimator reviews every flag, makes corrections where warranted, and submits the bid with confidence. The tool raises the flags. The estimator makes the call.'
               }
             ].map((s, i) => (
-              <div
-                key={i}
-                className="step"
-                data-reveal
-                style={{ '--reveal-delay': `${i * 90}ms` }}
-              >
-                <div className="step-num">{s.num}</div>
-                <div className="step-content">
-                  <h4>{s.title}</h4>
-                  <p>{s.desc}</p>
-                </div>
+              <div key={i} className={`step-card${activeStep === i ? ' step-card-active' : ''}`}>
+                <div className="step-card-num">{s.num}</div>
+                <h4 className="step-card-title">{s.title}</h4>
+                <p className="step-card-desc">{s.desc}</p>
               </div>
             ))}
           </div>
+
         </div>
       </section>
 

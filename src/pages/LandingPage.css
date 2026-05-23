@@ -903,7 +903,7 @@
 }
 
 /* ============================================================
-   HOW IT WORKS
+   HOW IT WORKS — pipeline diagram + step cards
    ============================================================ */
 
 .how-it-works {
@@ -911,63 +911,265 @@
 }
 
 .how-inner {
-  max-width: 700px;
+  max-width: 1100px;
   margin: 0 auto;
 }
 
-.steps {
+/* ---- Pipeline diagram ---- */
+
+.pipeline {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: var(--space-2xl) 0;
+}
+
+/* Input file stack */
+.pipeline-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Individual file cards */
+.pipeline-file {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border);
+  border-radius: 4px;
+  padding: 9px 14px;
+  width: 190px;
+  transition: border-color 0.35s var(--ease-silk);
+}
+
+.pipeline-file:hover {
+  border-color: var(--titan-border-light);
+}
+
+.pipeline-ext {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 1px;
+  padding: 2px 5px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.pipeline-ext-pdf {
+  background: rgba(232, 55, 44, 0.09);
+  color: #E8372C;
+  border: 1px solid rgba(232, 55, 44, 0.22);
+}
+
+.pipeline-ext-xlsx {
+  background: rgba(52, 211, 153, 0.08);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.2);
+}
+
+.pipeline-file-info {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
 }
 
-.step {
-  display: flex;
-  gap: var(--space-lg);
-  align-items: flex-start;
-  padding: var(--space-lg) var(--space-lg) var(--space-lg) var(--space-md);
-  border-left: 2px solid var(--titan-border);
-  border-radius: 0 2px 2px 0;
-  will-change: transform;
-  transition:
-    border-color 0.45s var(--ease-silk),
-    background   0.45s var(--ease-silk),
-    transform    0.45s var(--ease-lux);
+.pipeline-file-label {
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  white-space: nowrap;
 }
 
-.step:hover {
-  border-color: var(--titan-red);
-  background: rgba(0, 87, 255, 0.025);
-  transform: translateX(5px);
-}
-
-.step-num {
-  font-family: var(--font-display);
-  font-size: 2rem;
-  color: var(--titan-red);
-  min-width: 48px;
-  line-height: 1;
-  transition: text-shadow 0.45s var(--ease-silk);
-}
-
-.step:hover .step-num {
-  text-shadow: 0 0 28px rgba(0, 87, 255, 0.55);
-}
-
-.step-content h4 {
-  font-family: var(--font-display);
-  font-size: 1.1rem;
-  margin-bottom: 4px;
-  transition: color 0.35s var(--ease-silk);
-}
-
-.step:hover .step-content h4 {
-  color: var(--titan-white);
-}
-
-.step-content p {
-  font-size: 0.85rem;
+.pipeline-file-name {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
   color: var(--titan-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Connector */
+.pipeline-connector {
+  flex: 1;
+  min-width: 48px;
+  position: relative;
+  height: 20px;
+}
+
+.pipeline-connector::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1px dashed var(--titan-border-light);
+}
+
+.connector-dot {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--titan-red);
+  box-shadow: 0 0 10px rgba(0, 87, 255, 0.7);
+  transform: translateY(-50%) translateX(0);
+  opacity: 0;
+}
+
+/* Traveling dot animation — fires on .pipeline-active */
+@keyframes dotTravel {
+  0%   { opacity: 0;   transform: translateY(-50%) translateX(0); }
+  8%   { opacity: 1; }
+  92%  { opacity: 1; }
+  100% { opacity: 0;   transform: translateY(-50%) translateX(var(--connector-w, 120px)); }
+}
+
+.pipeline-active .pipeline-connector-left .connector-dot {
+  animation: dotTravel 1.8s var(--ease-silk) 0.4s forwards;
+}
+
+.pipeline-active .pipeline-connector-right .connector-dot {
+  animation: dotTravel 1.8s var(--ease-silk) 2.6s forwards;
+}
+
+/* QA Review node */
+.pipeline-node {
+  position: relative;
+  width: 116px;
+  height: 116px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pipeline-node-ring {
+  position: absolute;
+  inset: -14px;
+  border-radius: 50%;
+  border: 1px dashed rgba(0, 87, 255, 0.22);
+  animation: ringRotate 14s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes ringRotate {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.pipeline-node-label {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  letter-spacing: 3px;
+  text-align: center;
+  line-height: 1.1;
+  color: var(--titan-white);
+  box-shadow:
+    inset 0 0 28px rgba(0, 87, 255, 0.1),
+    0 0 0 1px rgba(0, 87, 255, 0.12);
+}
+
+/* Output card */
+.pipeline-output {
+  flex-shrink: 0;
+}
+
+.pipeline-output-file {
+  width: 210px;
+  position: relative;
+  padding: 12px 18px;
+  border-color: rgba(0, 87, 255, 0.18);
+  background: linear-gradient(135deg, rgba(0, 87, 255, 0.05) 0%, transparent 60%);
+}
+
+.pipeline-grade {
+  position: absolute;
+  top: -12px;
+  right: -12px;
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  color: #fbbf24;
+  background: var(--titan-card);
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 50%;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  text-shadow: 0 0 16px rgba(251, 191, 36, 0.4);
+}
+
+/* ---- 5-step cards ---- */
+
+.steps-row {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: var(--space-2xl);
+}
+
+.step-card {
+  flex: 1;
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border);
+  border-top: 2px solid var(--titan-border);
+  border-radius: 3px;
+  padding: var(--space-md);
+  transition:
+    border-top-color 0.4s var(--ease-silk),
+    background       0.4s var(--ease-silk);
+}
+
+.step-card-active {
+  border-top-color: var(--titan-red) !important;
+  background: rgba(0, 87, 255, 0.025);
+}
+
+.step-card-num {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  color: var(--titan-red);
+  line-height: 1;
+  margin-bottom: var(--space-sm);
+}
+
+.step-card-title {
+  font-size: 0.85rem;
+  letter-spacing: 1.5px;
+  color: var(--titan-white);
+  margin-bottom: 6px;
+  line-height: 1.25;
+}
+
+.step-card-desc {
+  font-size: 13px;
+  color: var(--titan-text-dim);
+  line-height: 1.6;
+  font-family: var(--font-body);
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 /* ============================================================
@@ -1411,9 +1613,40 @@
   }
   .bento-wide:hover { transform: none; box-shadow: none; }
   .bento-grade-badge { font-size: 2rem; bottom: var(--space-md); right: var(--space-md); }
+  /* Pipeline — vertical flow on mobile */
+  .pipeline {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+  .pipeline-inputs { flex-direction: column; }
+  .pipeline-file { width: 100%; }
+  .pipeline-output-file { width: 100%; }
+  .pipeline-connector {
+    width: 1px;
+    height: 36px;
+    align-self: center;
+    flex: none;
+  }
+  .pipeline-connector::before {
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: auto;
+    width: 0;
+    height: auto;
+    border-top: none;
+    border-left: 1px dashed var(--titan-border-light);
+  }
+  .connector-dot { display: none; }
+  .pipeline-node { align-self: center; }
+  .pipeline-node-ring { display: none; }
+  .pipeline-output { align-self: center; }
+  /* Step cards — vertical stack */
+  .steps-row { flex-direction: column; }
+  .step-card { width: 100%; }
   .calibration-cols { grid-template-columns: 1fr; gap: 40px; }
   .calibration-headline { font-size: 2rem; }
-  .step:hover { transform: translateX(3px); }
   .faq-item:hover { transform: translateX(1px); }
   .pricing-card-header { padding: 28px 24px 20px; }
   .pricing-features { padding: 20px 24px; }
@@ -1441,6 +1674,9 @@
   .hero-glow,
   .hero-badge-dot,
   .cta::before,
-  .accuracy-section::before { animation: none; }
+  .accuracy-section::before,
+  .pipeline-node-ring { animation: none; }
+  .connector-dot { display: none !important; }
+  .step-card { transition: none; }
   .faq-body { transition: none; }
 }
