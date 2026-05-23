@@ -4,7 +4,6 @@
   background: var(--bg);
   --ease-lux: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-silk: cubic-bezier(0.4, 0, 0.2, 1);
-  overflow-x: clip;
 }
 
 /* ============================================================
@@ -817,6 +816,7 @@
 .calibration-section {
   padding: var(--space-3xl) var(--space-lg);
   background: #0f0f13;
+  overflow: hidden;
 }
 
 .calibration-inner {
@@ -983,6 +983,7 @@
 .how-it-works {
   padding: var(--space-3xl) var(--space-lg);
   background: var(--bg);
+  overflow: hidden;
 }
 
 .how-inner {
@@ -1462,6 +1463,7 @@
 .difference-section {
   padding: var(--space-3xl) var(--space-lg);
   background: #0f0f13;
+  overflow: hidden;
 }
 
 .difference-inner {
