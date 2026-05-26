@@ -2,6 +2,15 @@
   command = "npm run build"
   publish = "dist"
   functions = "netlify/functions"
+  edge_functions = "netlify/edge-functions"
+
+[[edge_functions]]
+  path = "/api/upload"
+  function = "upload"
+
+[[edge_functions]]
+  path = "/api/analyze"
+  function = "analyze"
 
 [[redirects]]
   from = "/*"

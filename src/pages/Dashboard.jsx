@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ExternalLink, ShieldAlert, MessageCircle, Send, ChevronUp } from 'lucide-react'
+import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ShieldAlert, MessageCircle, Send, ChevronUp } from 'lucide-react'
 import { SYSTEM_PROMPT, QA_SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
@@ -23,13 +23,7 @@ export default function Dashboard() {
   const [geotechLoading, setGeotechLoading] = useState(false)
   const [geotechError, setGeotechError] = useState(null)
   const [geotechFileName, setGeotechFileName] = useState(null)
-  const [apiKey, setApiKey] = useState(localStorage.getItem('tc_api_key') || '')
-  const [showKeyInput, setShowKeyInput] = useState(!localStorage.getItem('tc_api_key'))
-  // Show onboarding only if neither the "completed" flag nor an existing API key is present
-  const [showOnboarding, setShowOnboarding] = useState(
-    !localStorage.getItem('tc_onboarded') && !localStorage.getItem('tc_api_key')
-  )
-  const [onboardKey, setOnboardKey] = useState('')
+  const [showOnboarding, setShowOnboarding] = useState(!localStorage.getItem('tc_onboarded'))
   const [onboardName, setOnboardName] = useState('')
   const [onboardCompany, setOnboardCompany] = useState('')
   const [onboardPhone, setOnboardPhone] = useState('')
@@ -126,11 +120,13 @@ INSTRUCTIONS:
     return `Report complete. I have ${count} clarification question${count > 1 ? 's' : ''} before this bid is solid.\n\nFirst (${first.priority} priority): ${first.question}${first.context ? `\n\n${first.context}` : ''}`
   }
 
-  const callChatApi = (systemPrompt, messages) => {
+  const callChatApi = async (systemPrompt, messages) => {
+    const { data: { session } } = await supabase.auth.getSession()
+    const accessToken = session?.access_token
     return new Promise((resolve, reject) => {
       const id = Math.random().toString(36).slice(2) + Date.now()
       pendingRef.current[id] = { resolve, reject }
-      workerRef.current.postMessage({ id, systemPrompt, messages, apiKey, maxTokens: 1024 })
+      workerRef.current.postMessage({ id, systemPrompt, messages, accessToken, maxTokens: 1024 })
     })
   }
 
@@ -154,15 +150,12 @@ INSTRUCTIONS:
     }
   }
 
-  // If user already has a Supabase profile from a prior session, skip onboarding
+  // Skip onboarding for users who already have a Supabase profile
   useEffect(() => {
     if (!user || !showOnboarding) return
     supabase.from('profiles').select('id').eq('id', user.id).maybeSingle().then(({ data }) => {
-      if (data) {
-        localStorage.setItem('tc_onboarded', '1')
-        setShowOnboarding(false)
-      }
-    }).catch(() => {}) // table may not exist yet — fail silently
+      if (data) { localStorage.setItem('tc_onboarded', '1'); setShowOnboarding(false) }
+    }).catch(() => {})
   }, [user, showOnboarding])
 
   const formatHistoryDate = (ts) => {
@@ -216,16 +209,10 @@ INSTRUCTIONS:
     setFeedbackCorrections('')
   }
 
-  const dismissOnboarding = (keyValue) => {
-    const key = keyValue || onboardKey
-    if (key.trim()) {
-      setApiKey(key.trim())
-      localStorage.setItem('tc_api_key', key.trim())
-    }
+  const dismissOnboarding = () => {
     localStorage.setItem('tc_onboarded', '1')
     setShowOnboarding(false)
 
-    // Save contact info to Supabase if the user filled it in
     if (user && (onboardName.trim() || onboardCompany.trim())) {
       supabase.from('profiles').upsert({
         id: user.id,
@@ -239,36 +226,51 @@ INSTRUCTIONS:
     }
   }
 
-  const saveApiKey = (key) => {
-    setApiKey(key)
-    localStorage.setItem('tc_api_key', key)
-    setShowKeyInput(false)
-  }
-
-  const readFileAsBase64 = (file) => new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = (ev) => resolve(ev.target.result.split(',')[1])
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-
-  const handleFileUpload = useCallback((e) => {
+  const handleFileUpload = useCallback(async (e) => {
     const files = Array.from(e.target.files)
-    files.forEach(file => {
-      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        const base64 = ev.target.result.split(',')[1]
-        setImages(prev => [...prev, {
-          name: file.name,
-          base64,
-          mediaType: isPdf ? 'application/pdf' : (file.type || 'image/png'),
-          preview: isPdf ? null : ev.target.result,
-        }])
-      }
-      reader.readAsDataURL(file)
-    })
     e.target.value = ''
+    for (const file of files) {
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+      if (isPdf) {
+        const tempId = Math.random().toString(36).slice(2)
+        setImages(prev => [...prev, { name: file.name, mediaType: 'application/pdf', preview: null, uploading: true, tempId }])
+        try {
+          const { data: { session } } = await supabase.auth.getSession()
+          const formData = new FormData()
+          formData.append('file', file, file.name)
+          const res = await fetch('/api/upload', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${session?.access_token}` },
+            body: formData,
+          })
+          if (!res.ok) {
+            const msg = await res.text()
+            throw new Error(`Upload failed (${res.status}): ${msg.slice(0, 120)}`)
+          }
+          const { file_id } = await res.json()
+          setImages(prev => prev.map(img =>
+            img.tempId === tempId
+              ? { name: file.name, mediaType: 'application/pdf', preview: null, file_id }
+              : img
+          ))
+        } catch (err) {
+          setImages(prev => prev.filter(img => img.tempId !== tempId))
+          setError(`Failed to upload ${file.name}: ${err.message}`)
+        }
+      } else {
+        const reader = new FileReader()
+        reader.onload = (ev) => {
+          const base64 = ev.target.result.split(',')[1]
+          setImages(prev => [...prev, {
+            name: file.name,
+            base64,
+            mediaType: file.type || 'image/png',
+            preview: ev.target.result,
+          }])
+        }
+        reader.readAsDataURL(file)
+      }
+    }
   }, [])
 
   const removeImage = (idx) => {
@@ -283,11 +285,23 @@ INSTRUCTIONS:
   }
 
   const callApi = async (img, prompt, maxTokens = 4096) => {
+    const { data: { session } } = await supabase.auth.getSession()
+    const accessToken = session?.access_token
+
+    if (img.file_id) {
+      // PDF already uploaded — reference by file_id (no base64 transfer)
+      return new Promise((resolve, reject) => {
+        const id = Math.random().toString(36).slice(2) + Date.now()
+        pendingRef.current[id] = { resolve, reject }
+        workerRef.current.postMessage({ id, file_id: img.file_id, prompt, accessToken, maxTokens })
+      })
+    }
+
+    // Image: resize if needed, then send as base64
     let base64Data = img.base64
     let mType = img.mediaType
-    const isPdf = mType === 'application/pdf'
 
-    if (!isPdf && base64Data.length > 5 * 1024 * 1024) {
+    if (base64Data && base64Data.length > 5 * 1024 * 1024) {
       const resizeCanvas = document.createElement('canvas')
       const resizeCtx = resizeCanvas.getContext('2d')
       const tempImg = new Image()
@@ -311,42 +325,34 @@ INSTRUCTIONS:
       mType = 'image/jpeg'
     }
 
-    const fileBlock = isPdf
-      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64Data } }
-      : { type: 'image', source: { type: 'base64', media_type: mType, data: base64Data } }
+    const fileBlock = { type: 'image', source: { type: 'base64', media_type: mType, data: base64Data } }
 
-    // Dispatch to Web Worker — runs in a background thread unaffected by tab focus
     return new Promise((resolve, reject) => {
       const id = Math.random().toString(36).slice(2) + Date.now()
       pendingRef.current[id] = { resolve, reject }
-      workerRef.current.postMessage({ id, fileBlock, prompt, apiKey, maxTokens })
+      workerRef.current.postMessage({ id, fileBlock, prompt, accessToken, maxTokens })
     })
   }
 
   const callApiMulti = async (imgArray, prompt, maxTokens = 4096) => {
+    const { data: { session } } = await supabase.auth.getSession()
     const imageBlocks = imgArray.map(img => ({
       type: 'image',
       source: { type: 'base64', media_type: img.mediaType, data: img.base64 }
     }))
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('/api/analyze', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
+        'Authorization': `Bearer ${session?.access_token}`,
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: maxTokens,
         messages: [{
           role: 'user',
-          content: [
-            { type: 'text', text: prompt },
-            ...imageBlocks
-          ]
-        }]
+          content: [{ type: 'text', text: prompt }, ...imageBlocks]
+        }],
+        maxTokens,
       })
     })
 
@@ -370,15 +376,23 @@ INSTRUCTIONS:
   }
 
   const processGeotech = async (file) => {
-    if (!apiKey) { setShowKeyInput(true); return }
     setGeotechLoading(true)
     setGeotechError(null)
     setGeotechFileName(file.name)
     setGeotechResult(null)
     try {
-      const base64 = await readFileAsBase64(file)
+      const { data: { session } } = await supabase.auth.getSession()
+      const formData = new FormData()
+      formData.append('file', file, file.name)
+      const uploadRes = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session?.access_token}` },
+        body: formData,
+      })
+      if (!uploadRes.ok) throw new Error(`Upload failed (${uploadRes.status})`)
+      const { file_id } = await uploadRes.json()
       const result = await callApi(
-        { base64, mediaType: 'application/pdf' },
+        { file_id, name: file.name, mediaType: 'application/pdf' },
         GEOTECH_PROMPT + '\n\nExtract all geotechnical data from this report. Respond ONLY with the JSON object, no other text.',
         2048
       )
@@ -455,10 +469,7 @@ INSTRUCTIONS:
 
   const screenSheet = async (idx) => {
     const img = images[idx]
-    if (!img || !apiKey) {
-      if (!apiKey) setShowKeyInput(true)
-      return
-    }
+    if (!img || img.uploading) return
     setScreeningSheet(idx)
     setError(null)
 
@@ -468,7 +479,7 @@ INSTRUCTIONS:
       setScreenings(prev => ({ ...prev, [idx]: screening }))
 
       if (screening.grade !== 'C') {
-        await analyzeSheet(idx, true)
+        await analyzeSheet(idx)
       }
     } catch (err) {
       console.error('Screening error:', err)
@@ -478,12 +489,9 @@ INSTRUCTIONS:
     }
   }
 
-  const analyzeSheet = async (idx, skipApiKeyCheck = false) => {
+  const analyzeSheet = async (idx) => {
     const img = images[idx]
-    if (!img || (!apiKey && !skipApiKeyCheck)) {
-      if (!apiKey) setShowKeyInput(true)
-      return
-    }
+    if (!img || img.uploading) return
     setLoading(true)
     setLoadingSheet(idx)
     setError(null)
@@ -1123,22 +1131,15 @@ INSTRUCTIONS:
               <div className="onboarding-step">
                 <span className="onboarding-step-num">1</span>
                 <div>
-                  <div className="onboarding-step-title">Enter your Anthropic API key</div>
-                  <div className="onboarding-step-desc">The AI analysis runs on your key — no markup, no middleman. Your key is stored locally in your browser only.</div>
-                </div>
-              </div>
-              <div className="onboarding-step">
-                <span className="onboarding-step-num">2</span>
-                <div>
                   <div className="onboarding-step-title">Upload a plan sheet</div>
                   <div className="onboarding-step-desc">PDF or image. Clean single-story pad sites with labeled profiles work best (Grade A = 90–100% accuracy).</div>
                 </div>
               </div>
               <div className="onboarding-step">
-                <span className="onboarding-step-num">3</span>
+                <span className="onboarding-step-num">2</span>
                 <div>
                   <div className="onboarding-step-title">Review the Risk Flags</div>
-                  <div className="onboarding-step-desc">Every takeoff includes geotech warnings, commonly missed scope, and AI-inferred items to verify before pricing.</div>
+                  <div className="onboarding-step-desc">Every scan includes geotech warnings, commonly missed scope, and AI-inferred items to verify before pricing.</div>
                 </div>
               </div>
             </div>
@@ -1181,69 +1182,15 @@ INSTRUCTIONS:
               </div>
             </div>
 
-            <div className="onboarding-key-section">
-              <label className="titan-label" style={{ marginBottom: 6, display: 'block' }}>
-                Anthropic API Key
-              </label>
-              <input
-                type="password"
-                className="input"
-                placeholder="sk-ant-..."
-                value={onboardKey}
-                onChange={e => setOnboardKey(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && onboardKey.trim() && dismissOnboarding()}
-              />
-              <a
-                href="https://console.anthropic.com"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="onboarding-key-link"
-              >
-                <ExternalLink size={11} /> Get your key at console.anthropic.com
-              </a>
-            </div>
-
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
-              <button className="btn btn-ghost" onClick={() => dismissOnboarding('')}>
-                Skip for now
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={() => dismissOnboarding()}
-                disabled={!onboardKey.trim()}
-              >
-                Save &amp; Get Started
+              <button className="btn btn-primary" onClick={dismissOnboarding}>
+                Get Started
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* API KEY MODAL */}
-      {showKeyInput && !showOnboarding && (
-        <div className="modal-overlay" onClick={() => apiKey && setShowKeyInput(false)}>
-          <div className="modal card" onClick={e => e.stopPropagation()}>
-            <h3>API Configuration</h3>
-            <p className="text-dim" style={{ fontSize: '0.82rem', margin: '12px 0 16px' }}>
-              Enter your Anthropic API key to enable plan analysis. Your key is stored locally and never sent to our servers.
-            </p>
-            <input
-              type="password"
-              className="input"
-              placeholder="sk-ant-..."
-              defaultValue={apiKey}
-              onKeyDown={(e) => e.key === 'Enter' && saveApiKey(e.target.value)}
-            />
-            <div style={{ display: 'flex', gap: 8, marginTop: 16, justifyContent: 'flex-end' }}>
-              {apiKey && <button className="btn btn-ghost" onClick={() => setShowKeyInput(false)}>Cancel</button>}
-              <button className="btn btn-primary" onClick={(e) => {
-                const input = e.target.closest('.modal').querySelector('input')
-                saveApiKey(input.value)
-              }}>Save Key</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* SIDEBAR */}
       <aside className="sidebar">
@@ -1273,7 +1220,9 @@ INSTRUCTIONS:
               <div className="sheet-info">
                 <div className="sheet-name">{img.name}</div>
                 <div className="sheet-status">
-                  {results[i] ? (
+                  {img.uploading ? (
+                    <span className="text-dim">Uploading...</span>
+                  ) : results[i] ? (
                     <span className="text-green">✓ {results[i].items ? `${results[i].items.length} items` : 'QA report'}</span>
                   ) : screeningSheet === i ? (
                     <span className="text-dim">Screening...</span>
@@ -1424,9 +1373,7 @@ INSTRUCTIONS:
         )}
 
         <div className="sidebar-footer">
-          <button className="btn btn-ghost" style={{ width: '100%', fontSize: '0.7rem' }} onClick={() => setShowKeyInput(true)}>
-            ⚙ API Settings
-          </button>
+          <span className="titan-label" style={{ fontSize: '0.6rem' }}>Takeoff Copilot // 6 Signal</span>
         </div>
       </aside>
 
@@ -1482,9 +1429,9 @@ INSTRUCTIONS:
                   <button
                     className="btn btn-primary"
                     onClick={() => screenings[activeImage] ? analyzeSheet(activeImage) : screenSheet(activeImage)}
-                    disabled={loading || screeningSheet === activeImage}
+                    disabled={loading || screeningSheet === activeImage || images[activeImage]?.uploading}
                   >
-                    {screeningSheet === activeImage ? 'Screening...' : loadingSheet === activeImage ? 'Analyzing...' : 'Analyze Sheet'}
+                    {images[activeImage]?.uploading ? 'Uploading...' : screeningSheet === activeImage ? 'Screening...' : loadingSheet === activeImage ? 'Analyzing...' : 'Analyze Sheet'}
                   </button>
                 )}
                 {results[activeImage] && (
