@@ -39,8 +39,8 @@ export default function LoginPage() {
             variables: {
               default: {
                 colors: {
-                  brand: '#E8372C',
-                  brandAccent: '#FF4438',
+                  brand: '#0057FF',
+                  brandAccent: '#1A6BFF',
                   brandButtonText: '#F5F5F0',
                   defaultButtonBackground: '#161616',
                   defaultButtonBackgroundHover: '#1A1A1A',
@@ -49,8 +49,8 @@ export default function LoginPage() {
                   dividerBackground: '#222222',
                   inputBackground: '#111111',
                   inputBorder: '#222222',
-                  inputBorderHover: '#E8372C',
-                  inputBorderFocus: '#E8372C',
+                  inputBorderHover: '#0057FF',
+                  inputBorderFocus: '#0057FF',
                   inputText: '#F5F5F0',
                   inputPlaceholder: '#555555',
                   inputLabelText: '#888888',
@@ -58,8 +58,8 @@ export default function LoginPage() {
                   messageBackground: '#1A1A1A',
                   messageBorder: '#333333',
                   messageTextDanger: '#E8372C',
-                  anchorTextColor: '#E8372C',
-                  anchorTextHoverColor: '#FF4438',
+                  anchorTextColor: '#0057FF',
+                  anchorTextHoverColor: '#1A6BFF',
                 },
                 fonts: {
                   bodyFontFamily: `'Outfit', -apple-system, sans-serif`,

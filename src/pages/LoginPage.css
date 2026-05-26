@@ -5,9 +5,9 @@
   justify-content: center;
   padding: var(--space-lg);
   background: var(--titan-black);
-  background-image: 
-    linear-gradient(rgba(232, 55, 44, 0.02) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(232, 55, 44, 0.02) 1px, transparent 1px);
+  background-image:
+    linear-gradient(rgba(0, 87, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 87, 255, 0.03) 1px, transparent 1px);
   background-size: 60px 60px;
 }
 
