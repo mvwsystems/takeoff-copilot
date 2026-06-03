@@ -28,7 +28,7 @@ export default async (request) => {
     return new Response('Auth verification failed', { status: 401 })
   }
 
-  const { file_id, fileBlock, prompt, maxTokens, systemPrompt, messages } = await request.json()
+  const { file_id, specs_file_id, fileBlock, prompt, maxTokens, systemPrompt, messages } = await request.json()
   const isChatMode = Array.isArray(messages)
 
   let anthropicBody, betaHeader
@@ -42,15 +42,17 @@ export default async (request) => {
     }
     betaHeader = null
   } else {
-    const contentBlock = file_id
-      ? { type: 'document', source: { type: 'file', file_id } }
-      : fileBlock
+    const contentParts = [{ type: 'text', text: prompt }]
+    if (file_id) contentParts.push({ type: 'document', source: { type: 'file', file_id } })
+    else if (fileBlock) contentParts.push(fileBlock)
+    if (specs_file_id) contentParts.push({ type: 'document', source: { type: 'file', file_id: specs_file_id } })
+
     anthropicBody = {
       model: 'claude-sonnet-4-20250514',
       max_tokens: maxTokens,
-      messages: [{ role: 'user', content: [{ type: 'text', text: prompt }, contentBlock] }],
+      messages: [{ role: 'user', content: contentParts }],
     }
-    betaHeader = file_id ? 'files-api-2025-04-14' : null
+    betaHeader = (file_id || specs_file_id) ? 'files-api-2025-04-14' : null
   }
 
   const headers = {

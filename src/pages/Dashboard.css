@@ -111,6 +111,111 @@
   margin-top: auto;
 }
 
+/* —— JOB CONTEXT PANEL —— */
+.sidebar-job-context {
+  border-top: 1px solid var(--titan-border);
+  flex-shrink: 0;
+}
+
+.job-context-body {
+  padding: 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.job-context-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.job-context-row-col {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.job-context-label {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.job-type-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--titan-dark);
+  border: 1px solid var(--titan-border);
+  border-radius: 2px;
+  padding: 2px;
+}
+
+.job-type-btn {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 1px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--titan-text-muted);
+  transition: background 0.15s, color 0.15s;
+}
+
+.job-type-btn.active {
+  background: var(--titan-red);
+  color: var(--titan-white);
+}
+
+.job-context-select {
+  background: var(--titan-dark);
+  border: 1px solid var(--titan-border);
+  border-radius: 2px;
+  color: var(--titan-text);
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 4px 6px;
+  cursor: pointer;
+  outline: none;
+  flex: 1;
+  min-width: 0;
+}
+
+.job-context-select:focus {
+  border-color: var(--titan-red);
+}
+
+.job-context-textarea {
+  background: var(--titan-dark);
+  border: 1px solid var(--titan-border);
+  border-radius: 2px;
+  color: var(--titan-text);
+  font-family: var(--font-body);
+  font-size: 0.72rem;
+  padding: 6px 8px;
+  width: 100%;
+  resize: none;
+  outline: none;
+  line-height: 1.4;
+  margin-top: 4px;
+}
+
+.job-context-textarea:focus {
+  border-color: var(--titan-red);
+}
+
+.job-context-textarea::placeholder {
+  color: var(--titan-text-muted);
+  font-size: 0.68rem;
+}
+
 /* —— JOB HISTORY —— */
 .sidebar-history {
   border-top: 1px solid var(--titan-border);

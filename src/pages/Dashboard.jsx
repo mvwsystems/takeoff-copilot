@@ -43,9 +43,16 @@ export default function Dashboard() {
   const [chatMessages, setChatMessages] = useState([])
   const [chatInput, setChatInput] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
+  const [jobType, setJobType] = useState(() => localStorage.getItem('tc_job_type') || 'private')
+  const [boreMethod, setBoreMethod] = useState('unknown')
+  const [scopeNotes, setScopeNotes] = useState('')
+  const [specsFileId, setSpecsFileId] = useState(null)
+  const [specsFileName, setSpecsFileName] = useState(null)
+  const [specsUploading, setSpecsUploading] = useState(false)
   const fileInputRef = useRef(null)
   const geotechInputRef = useRef(null)
   const takeoffInputRef = useRef(null)
+  const specsInputRef = useRef(null)
   const workerRef = useRef(null)
   const pendingRef = useRef({})
   const chatScrollRef = useRef(null)
@@ -150,6 +157,8 @@ INSTRUCTIONS:
     }
   }
 
+  useEffect(() => { localStorage.setItem('tc_job_type', jobType) }, [jobType])
+
   // Skip onboarding for users who already have a Supabase profile
   useEffect(() => {
     if (!user || !showOnboarding) return
@@ -226,6 +235,69 @@ INSTRUCTIONS:
     }
   }
 
+  const uploadSpecs = async (file) => {
+    setSpecsUploading(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const formData = new FormData()
+      formData.append('file', file, file.name)
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session?.access_token}` },
+        body: formData,
+      })
+      if (!res.ok) throw new Error(`Upload failed (${res.status})`)
+      const { file_id } = await res.json()
+      setSpecsFileId(file_id)
+      setSpecsFileName(file.name)
+    } catch (err) {
+      setError(`Specs upload failed: ${err.message}`)
+    } finally {
+      setSpecsUploading(false)
+    }
+  }
+
+  const buildJobContext = () => {
+    const lines = []
+
+    if (jobType === 'public') {
+      lines.push('JOB TYPE: PUBLIC — city/municipality-funded project.')
+      lines.push('Apply public contracting standards:')
+      lines.push('  - Flag if prevailing wage / Davis-Bacon rates are not accounted for in the bid.')
+      lines.push('  - City inspector coordination is typically required — flag if not in scope.')
+      lines.push('  - City standard details and uploaded project specs OVERRIDE plan callouts. Where conflicts exist, the specs govern.')
+      lines.push('  - TxDOT or municipal right-of-way permit required for any work in public ROW — flag if not in scope.')
+      lines.push('  - Public projects typically require bid bond, performance bond, and payment bond — note if not addressed.')
+      lines.push('  - Mandatory acceptance testing (CCTV, mandrel, pressure, bacteriological) is enforced — flag any missing.')
+    } else {
+      lines.push('JOB TYPE: PRIVATE — private developer or property owner project. Apply standard utility sub assumptions.')
+    }
+
+    if (specsFileId) {
+      lines.push(`SUPPLEMENTAL SPECS DOCUMENT UPLOADED: A ${jobType === 'public' ? 'city/project' : 'project'} specifications document has been provided as the second attached document. Cross-reference all plan items against it. Flag any conflicts where the specs require a different pipe class, bedding standard, testing frequency, or scope item than what the plans show. The specs take precedence over plan defaults.`)
+    }
+
+    const boreLabels = { wet: 'WET BORE', dry: 'DRY BORE', mixed: 'MIXED (wet and dry)', none: 'NONE', unknown: 'UNKNOWN' }
+    if (boreMethod === 'wet') {
+      lines.push('BORE METHOD CONFIRMED: WET BORE — do NOT include steel casing on any bore crossings. Wet bores use drilling fluid for hole stability; casing is not used.')
+    } else if (boreMethod === 'dry') {
+      lines.push('BORE METHOD CONFIRMED: DRY BORE — steel casing IS required on all bore crossings. Include casing as a separate line item at the correct diameter.')
+    } else if (boreMethod === 'mixed') {
+      lines.push('BORE METHOD: MIXED — this job has both wet and dry bores. Check each bore crossing individually for casing. The plans or notes should indicate which method applies to each crossing.')
+    } else if (boreMethod === 'none') {
+      lines.push('BORE METHOD: NO BORE CROSSINGS — the estimator has confirmed there are no bore crossings on this job. Do not flag missing casing.')
+    } else {
+      lines.push('BORE METHOD: NOT CONFIRMED — if bore crossings appear on the plans, flag them and ask the estimator to confirm wet vs. dry method before pricing casing.')
+    }
+
+    if (scopeNotes.trim()) {
+      lines.push(`SCOPE NOTES (confirmed by estimator): ${scopeNotes.trim()}`)
+      lines.push('Apply these scope notes when identifying misses — do not flag items the estimator has confirmed are excluded from their scope.')
+    }
+
+    return `\nJOB CONTEXT (confirmed by estimator before analysis):\n${lines.join('\n')}\n\n---\n\n`
+  }
+
   const handleFileUpload = useCallback(async (e) => {
     const files = Array.from(e.target.files)
     e.target.value = ''
@@ -293,7 +365,7 @@ INSTRUCTIONS:
       return new Promise((resolve, reject) => {
         const id = Math.random().toString(36).slice(2) + Date.now()
         pendingRef.current[id] = { resolve, reject }
-        workerRef.current.postMessage({ id, file_id: img.file_id, prompt, accessToken, maxTokens })
+        workerRef.current.postMessage({ id, file_id: img.file_id, specs_file_id: specsFileId || undefined, prompt, accessToken, maxTokens })
       })
     }
 
@@ -330,7 +402,7 @@ INSTRUCTIONS:
     return new Promise((resolve, reject) => {
       const id = Math.random().toString(36).slice(2) + Date.now()
       pendingRef.current[id] = { resolve, reject }
-      workerRef.current.postMessage({ id, fileBlock, prompt, accessToken, maxTokens })
+      workerRef.current.postMessage({ id, fileBlock, specs_file_id: specsFileId || undefined, prompt, accessToken, maxTokens })
     })
   }
 
@@ -497,18 +569,19 @@ INSTRUCTIONS:
     setError(null)
 
     try {
+      const jobCtx = buildJobContext()
       let prompt
       if (qaMode && uploadedTakeoffData) {
-        prompt = QA_SYSTEM_PROMPT +
-          `\n\n---\n\nESTIMATOR'S SUBMITTED TAKEOFF (${uploadedTakeoffName}):\n` +
+        prompt = QA_SYSTEM_PROMPT + jobCtx +
+          `ESTIMATOR'S SUBMITTED TAKEOFF (${uploadedTakeoffName}):\n` +
           JSON.stringify(uploadedTakeoffData, null, 2) +
           `\n\n---\n\nReview the plan sheet above against the estimator's takeoff. Produce the full Bid Risk Report. Respond ONLY with the JSON object, no other text.`
       } else if (qaMode) {
-        prompt = QA_SYSTEM_PROMPT +
-          `\n\n---\n\nNo estimator takeoff was uploaded. Read the plan sheet and produce the Bid Risk Report based on plan review alone. Flag all scope gaps and items an estimator should not miss. Respond ONLY with the JSON object, no other text.`
+        prompt = QA_SYSTEM_PROMPT + jobCtx +
+          `No estimator takeoff was uploaded. Read the plan sheet and produce the Bid Risk Report based on plan review alone. Flag all scope gaps and items an estimator should not miss. Respond ONLY with the JSON object, no other text.`
       } else {
-        prompt = SYSTEM_PROMPT +
-          `\n\n---\n\nAnalyze this construction plan sheet and produce a complete quantity takeoff. Extract every identifiable item. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.`
+        prompt = SYSTEM_PROMPT + jobCtx +
+          `Analyze this construction plan sheet and produce a complete quantity takeoff. Extract every identifiable item. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.`
       }
 
       const parsed = await callApi(img, prompt)
@@ -1310,6 +1383,55 @@ INSTRUCTIONS:
           <input ref={geotechInputRef} type="file" accept=".pdf,application/pdf" onChange={handleGeotechUpload} style={{ display: 'none' }} />
         </div>
 
+        {/* CITY / PROJECT SPECS UPLOAD */}
+        <div className="sidebar-geotech">
+          <div className="sidebar-geotech-header">
+            <span className="sidebar-geotech-title">City / Project Specs</span>
+          </div>
+          <div className="sidebar-geotech-body">
+            {!specsFileId && !specsUploading && (
+              <div className="geotech-empty" />
+            )}
+            {specsUploading && (
+              <div className="geotech-loading">
+                <div className="spinner spinner-sm" />
+                <span>Uploading specs...</span>
+              </div>
+            )}
+            {specsFileId && !specsUploading && (
+              <div className="geotech-loaded">
+                <div className="geotech-chip geotech-chip-ok">
+                  ✓ {specsFileName?.replace(/\.pdf$/i, '') || 'Specs loaded'}
+                </div>
+                <div className="geotech-mini-facts">
+                  <div className="geotech-mini-row">
+                    <span>Type</span>
+                    <strong>{jobType === 'public' ? 'City / Public Specs' : 'Project Specs'}</strong>
+                  </div>
+                </div>
+                <button className="btn btn-ghost" style={{ width: '100%', fontSize: '0.65rem', marginTop: 6 }}
+                  onClick={() => { setSpecsFileId(null); setSpecsFileName(null) }}>
+                  × Remove
+                </button>
+              </div>
+            )}
+          </div>
+          <button
+            className="btn btn-secondary"
+            style={{ width: 'calc(100% - 16px)', margin: '0 8px 8px', fontSize: '0.72rem' }}
+            onClick={() => specsInputRef.current?.click()}
+            disabled={specsUploading}
+          >
+            <Upload size={12} /> {specsFileId ? 'Replace Specs' : 'Upload Specs PDF'}
+          </button>
+          <input ref={specsInputRef} type="file" accept=".pdf,application/pdf"
+            onChange={e => { const f = e.target.files[0]; if (f) { e.target.value = ''; uploadSpecs(f) } }}
+            style={{ display: 'none' }} />
+          <div style={{ padding: '0 8px 8px', fontSize: '0.68rem', color: 'var(--titan-text-muted)' }}>
+            City specs, project specs, or owner requirements. AI cross-references plans against this doc.
+          </div>
+        </div>
+
         {/* QA TAKEOFF UPLOAD — only in QA Mode */}
         {qaMode && (
           <div className="sidebar-geotech">
@@ -1343,6 +1465,52 @@ INSTRUCTIONS:
             </div>
           </div>
         )}
+
+        {/* JOB CONTEXT */}
+        <div className="sidebar-job-context">
+          <div className="sidebar-geotech-header">
+            <span className="sidebar-geotech-title">Job Context</span>
+          </div>
+          <div className="job-context-body">
+            <div className="job-context-row">
+              <span className="job-context-label">Job Type</span>
+              <div className="job-type-toggle">
+                <button
+                  className={`job-type-btn ${jobType === 'private' ? 'active' : ''}`}
+                  onClick={() => setJobType('private')}
+                >Private</button>
+                <button
+                  className={`job-type-btn ${jobType === 'public' ? 'active' : ''}`}
+                  onClick={() => setJobType('public')}
+                >Public</button>
+              </div>
+            </div>
+            <div className="job-context-row">
+              <span className="job-context-label">Bore Method</span>
+              <select
+                className="job-context-select"
+                value={boreMethod}
+                onChange={e => setBoreMethod(e.target.value)}
+              >
+                <option value="unknown">Unknown</option>
+                <option value="none">No Bore Crossings</option>
+                <option value="wet">Wet Bore</option>
+                <option value="dry">Dry Bore</option>
+                <option value="mixed">Mixed (Wet + Dry)</option>
+              </select>
+            </div>
+            <div className="job-context-row job-context-row-col">
+              <span className="job-context-label">Scope Exclusions</span>
+              <textarea
+                className="job-context-textarea"
+                placeholder="e.g. not bidding grease trap, no pavement restoration"
+                value={scopeNotes}
+                onChange={e => setScopeNotes(e.target.value)}
+                rows={2}
+              />
+            </div>
+          </div>
+        </div>
 
         {/* JOB HISTORY */}
         {user && (

@@ -18,7 +18,7 @@ self.onmessage = async ({ data }) => {
   try {
     const payload = isChatMode
       ? { systemPrompt: data.systemPrompt, messages: data.messages, maxTokens }
-      : { file_id: data.file_id, fileBlock: data.fileBlock, prompt: data.prompt, maxTokens }
+      : { file_id: data.file_id, specs_file_id: data.specs_file_id, fileBlock: data.fileBlock, prompt: data.prompt, maxTokens }
 
     const response = await fetch('/api/analyze', {
       method: 'POST',
