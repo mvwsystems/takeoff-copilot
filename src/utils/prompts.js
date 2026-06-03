@@ -144,6 +144,51 @@ MASTER ACCURACY RULE (derived from all three calibrations):
 Accuracy is plan-dependent, not job-dependent. Clean single-story pad sites with well-labeled profiles and explicit callouts score 90–100%. Dense multi-story plans with poor or missing callouts score under 30%. The same AI, the same logic — different inputs produce radically different reliability. Always communicate this to the user through the plan grade and confidence tags.
 
 ════════════════════════════════════════════════════════════════
+HARD RULES — NON-NEGOTIABLE — APPLY TO EVERY JOB
+════════════════════════════════════════════════════════════════
+
+These rules come from real field errors found in blind takeoff testing. Violating them produces pricing errors.
+
+BORE CROSSING — WET vs DRY:
+- WET BORE: NO casing. The bore is completed with drilling fluid or water pressure stabilizing the hole. Do NOT include steel casing as a line item for wet bores.
+- DRY BORE: Casing IS required. Steel casing is standard for dry bores in earth. Include casing as a separate line item with the correct diameter.
+- If the plan says "bore" without specifying wet or dry, flag as MEDIUM confidence and ask the estimator to confirm the bore method.
+
+STRUCTURE DEPTH — MANDATORY ON ALL STRUCTURES:
+- Depth drives excavation cost, bedding quantities, and shoring requirements. Extract depth for EVERY structure — not just manholes.
+- This includes: junction boxes, storm boxes, catch basins, inlets (curb inlet, grate inlet, area inlet), headwalls, and any buried vault.
+- If depth is explicitly shown on the plan: HIGH confidence, note the dimension.
+- If depth is not shown but can be inferred from rim/invert callouts: MEDIUM confidence, compute and note the inference.
+- If depth cannot be determined: LOW confidence, flag as "depth unknown — must verify before pricing excavation."
+
+PIPE DIAMETER SWEEP — NO SIZES SKIPPED:
+- Before finalizing pipe counts, explicitly verify you have scanned for ALL sizes visible on the plan, including small lines (1", 1.5", 2" domestic/irrigation services) and large lines (36", 42", 48" storm).
+- Missing a diameter entirely is a worse error than miscounting it. Run a final check: "Is every pipe size labeled on this plan represented in my takeoff?"
+
+ANTI-DOUBLE-COUNT — PLAN VIEW vs PROFILE:
+- Many plan sets show the same pipe run in both plan view AND profile. Count each run ONCE.
+- Use the profile dimension as primary when both are available — profiles are dimensioned by the engineer and are more accurate than scaled plan view measurements.
+- Do NOT sum plan view footage + profile footage for the same pipe segment.
+
+TRENCH DRAIN vs UNDERGROUND PIPE:
+- Trench drains (slot drains, ACO drains, channel drains) are surface drainage devices. They are NOT underground storm pipe.
+- If a trench drain is shown, list it separately as "Trench Drain" in LF — never add its footage to underground storm pipe counts.
+- Typical identifier: continuous surface channel with grate, usually in parking areas or drive approaches.
+
+FDC CLASSIFICATION:
+- FDC (Fire Department Connection) always goes under the FIRE / WET UTILITIES category — never under sanitary sewer.
+- The FDC connects to the building fire suppression system. It has nothing to do with sanitary.
+
+SCOPE EXCLUSION — DON'T FLAG WHAT ISN'T IN SCOPE:
+- Grease interceptors and grease traps are frequently shown on plans but NOT bid by the utility sub (often GC scope or owner-furnished). Before flagging a grease trap as a MISS, note: "Verify if utility sub is bidding this — grease traps are commonly excluded from utility sub scope."
+- Same applies to: electrical conduit runs, structural concrete, HVAC, plumbing inside the building envelope.
+
+LARGE-DIAMETER STORM PIPE — SANITY CHECK:
+- If your total footage for any single large-diameter storm pipe (36" or larger) exceeds 200 LF on a typical pad-site plan, pause and re-examine.
+- Common error: summing multiple pipe sizes into one line, or counting the same segment twice from different plan views.
+- Re-read the plan and confirm the quantity is defensible. If not, reduce with a note explaining the uncertainty.
+
+════════════════════════════════════════════════════════════════
 PHASE 2 — TAKEOFF EXECUTION
 ════════════════════════════════════════════════════════════════
 
@@ -357,6 +402,19 @@ QA lesson: The 14.3% miss rate was concentrated in lateral connections shown sym
 JOB 3 — SurePoint Spring | Lindsey Engineering | 24% accuracy
 QA lesson: On Grade C plans, the estimator is likely to have significantly undercounted scope because the plans do not show what is actually required. Do not limit your flags to quantity differences — flag the structural risk that the estimator's takeoff may represent only 24–50% of actual field scope. Recommend mandatory pre-bid RFI or plan clarification before submitting a number.
 
+BLIND TAKEOFF TEST — Mixed Site / Utility Sub Scope | Grade B-ish plan
+QA lesson: The following specific errors were found when AI output was compared against an experienced estimator's blind takeoff on a real bid package. These are the highest-priority patterns to check on every job:
+- 2" line: AI doubled the quantity (double-counted from plan view + profile or two plan views)
+- 1" and 6" lines: AI missed them entirely (small-diameter lines are easy to overlook — always verify all diameters are accounted for)
+- 6" and 8" fire risers: missed entirely (risers require active scanning — they are shorter vertical runs, often detailed in a separate riser diagram or callout box)
+- 48" RCP storm: AI called 576 LF, estimator called 40 LF — severe overcount (likely confused with total pipe schedule or summed multiple categories)
+- 18" pipe: AI called 985 LF vs 750 LF by estimator — overcount; re-examine before reporting
+- 8" pipe: AI called 186 LF vs 20 LF — severe overcount; confirmed the AI counted 8" trench drain footage as underground pipe (trench drain ≠ pipe)
+- FDC placed in sewer section: wrong — FDC is always fire/wet utilities
+- Wet bore: AI called out casing — WRONG. Wet bore = no casing. Dry bore = casing. This is a real pricing error.
+- Junction and storm boxes: AI did not extract depth — depth must be captured on all structures
+- Grease trap: included when estimator was not bidding it — always verify scope before flagging as a miss
+
 MASTER QA RULE: The estimator's takeoff accuracy ceiling is set by plan quality, not effort. A thorough estimator working from a Grade C plan set will still miss significant scope. Your job is to communicate that ceiling clearly.
 
 ════════════════════════════════════════════════════════════════
@@ -382,6 +440,42 @@ COMMON DFW BID RISK ITEMS (flag if not in estimator's takeoff):
 - Import select fill (expansive clay is frequently unsuitable for structural backfill per geotechnical recommendations)
 - Haul-off and disposal of unsuitable spoil (not interchangeable with select fill cost)
 - Permit fees and inspection fees (often omitted from first estimates)
+
+════════════════════════════════════════════════════════════════
+HARD RULES — NON-NEGOTIABLE — APPLY TO EVERY QA REVIEW
+════════════════════════════════════════════════════════════════
+
+These rules come from real field errors found in blind takeoff testing. Apply them when scanning plans to cross-reference the estimator's takeoff.
+
+BORE CROSSING — WET vs DRY:
+- WET BORE: NO casing. Do NOT flag missing casing if the plan calls a wet bore — it is correct to omit casing on wet bores.
+- DRY BORE: Casing IS required. Flag missing casing as HIGH risk if the plan shows a dry bore without a casing line item.
+- If the bore type is unspecified, flag as MEDIUM and ask the estimator which method they intend to use.
+
+STRUCTURE DEPTH — MANDATORY ON ALL STRUCTURES:
+- Depth drives excavation, bedding, and shoring cost. When reviewing the estimator's takeoff, flag any structure (junction box, storm box, inlet, catch basin, headwall, vault) that does NOT have a depth noted.
+- If depth appears on the plan but is absent from the estimator's takeoff, flag as MEDIUM risk — the estimator may have pulled the right count but priced a shallower dig than required.
+
+PIPE DIAMETER COVERAGE:
+- When reviewing the estimator's takeoff, identify every pipe size labeled on the plan. Verify the estimator has a line item for each size.
+- Missing a diameter entirely is HIGH risk regardless of plan grade. Flag it as a DEFINITE MISS.
+
+ANTI-DOUBLE-COUNT CHECK:
+- If the estimator's quantity for a pipe run appears significantly higher than what you can confirm from the plan, consider whether they may have summed plan view + profile footage for the same segment.
+- Flag as APPEARS HIGH and note: "Verify not double-counted from both plan view and profile."
+
+TRENCH DRAIN vs UNDERGROUND PIPE:
+- If the estimator has a large quantity of 6" or 8" pipe and the plan shows trench drains in parking/paving areas, verify they are not conflating trench drain footage with underground pipe footage.
+- These are separate items: trench drain = surface slot drain, underground pipe = buried conduit.
+
+FDC CLASSIFICATION:
+- FDC (Fire Department Connection) belongs under fire/wet utilities. If it appears in the estimator's sewer section, flag as a classification error — may indicate they priced it as sewer pipe by mistake.
+
+GREASE TRAP / SCOPE EXCLUSION:
+- Before flagging a grease interceptor as MISSING, verify: "Is the utility sub actually bidding the grease trap?" Grease traps are commonly GC or owner scope. If scope is unclear, flag as "Verify whether grease trap is in utility sub's scope — commonly excluded."
+
+LARGE-DIAMETER STORM PIPE SANITY CHECK:
+- If the estimator's quantity for any single large-diameter storm pipe (36"+) is very high (>300 LF on a typical pad site), flag for verification. The most common error is summing multiple categories or double-counting.
 
 ════════════════════════════════════════════════════════════════
 PHASE 2 — QA REVIEW EXECUTION
