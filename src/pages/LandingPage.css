@@ -2085,9 +2085,17 @@
    ============================================================ */
 
 @media (max-width: 768px) {
+  /* Compact hero — single column, text only, no card */
+  .hero {
+    min-height: 0;
+    padding: var(--space-xl) var(--space-lg) var(--space-2xl);
+  }
   .hero-two-col {
     grid-template-columns: 1fr;
-    gap: 48px;
+    gap: 0;
+  }
+  .hero-right {
+    display: none;
   }
   .hero-left {
     text-align: center;
@@ -2100,17 +2108,6 @@
   }
   .hero-trust {
     justify-content: center;
-  }
-  .hero-right {
-    padding: 0;
-  }
-  .hero-report-card {
-    transform: none;
-    max-width: 100%;
-  }
-  .hero-report-glow {
-    width: 320px;
-    height: 260px;
   }
   .hero-title { font-size: 3.5rem; }
   .hero-trust { gap: 4px; }
