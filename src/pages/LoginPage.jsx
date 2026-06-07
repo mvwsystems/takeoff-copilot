@@ -32,7 +32,7 @@ export default function LoginPage() {
 
         <Auth
           supabaseClient={supabase}
-          providers={[]}
+          providers={['google', 'azure', 'apple']}
           redirectTo="https://takeoffcopilot.com/dashboard"
           appearance={{
             theme: ThemeSupa,
