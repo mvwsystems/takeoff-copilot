@@ -12,6 +12,14 @@
   path = "/api/analyze"
   function = "analyze"
 
+[[edge_functions]]
+  path = "/api/get-upload-url"
+  function = "get-upload-url"
+
+[[edge_functions]]
+  path = "/api/confirm-upload"
+  function = "confirm-upload"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

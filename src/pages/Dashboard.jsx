@@ -87,6 +87,50 @@ export default function Dashboard() {
     }
   }, [chatMessages])
 
+  // Supabase Realtime: watch processing_jobs for this user and update image state
+  useEffect(() => {
+    if (!user) return
+    const channel = supabase
+      .channel(`jobs-${user.id}`)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'processing_jobs',
+      }, async (payload) => {
+        const { id: jobId, stage, progress, error: jobError, project_id } = payload.new
+        setImages(prev => prev.map(img =>
+          img.job_id === jobId ? { ...img, jobStage: stage, jobProgress: progress, jobError } : img
+        ))
+        if (stage === 'ready') {
+          // Fetch sheet to get thumbnail path and Anthropic file_id
+          const { data: sheet } = await supabase
+            .from('sheets')
+            .select('storage_path, file_id')
+            .eq('project_id', project_id)
+            .eq('page_number', 1)
+            .maybeSingle()
+
+          if (sheet?.storage_path) {
+            const { data: signedData } = await supabase.storage
+              .from('plan-uploads')
+              .createSignedUrl(sheet.storage_path, 7200)
+            setImages(prev => prev.map(img =>
+              img.job_id === jobId
+                ? { ...img, preview: signedData?.signedUrl || null, file_id: sheet.file_id }
+                : img
+            ))
+          } else if (sheet?.file_id) {
+            setImages(prev => prev.map(img =>
+              img.job_id === jobId ? { ...img, file_id: sheet.file_id } : img
+            ))
+          }
+        }
+      })
+      .subscribe()
+
+    return () => supabase.removeChannel(channel)
+  }, [user])
+
   const buildChatSystemPrompt = (res) => {
     const questions = res.clarification_questions || []
     const misses = res.high_risk_misses || []
@@ -308,21 +352,49 @@ INSTRUCTIONS:
         setImages(prev => [...prev, { name: file.name, mediaType: 'application/pdf', preview: null, uploading: true, tempId }])
         try {
           const { data: { session } } = await supabase.auth.getSession()
-          const formData = new FormData()
-          formData.append('file', file, file.name)
-          const res = await fetch('/api/upload', {
+          const token = session?.access_token
+
+          // Step 1: Get signed upload URL + create DB records
+          const urlRes = await fetch('/api/get-upload-url', {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${session?.access_token}` },
-            body: formData,
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ filename: file.name }),
           })
-          if (!res.ok) {
-            const msg = await res.text()
-            throw new Error(`Upload failed (${res.status}): ${msg.slice(0, 120)}`)
+          if (!urlRes.ok) {
+            const msg = await urlRes.text()
+            throw new Error(`Could not get upload URL (${urlRes.status}): ${msg.slice(0, 120)}`)
           }
-          const { file_id } = await res.json()
+          const { upload_url, storage_path, project_id, sheet_id, job_id } = await urlRes.json()
+
+          // Step 2: Upload directly to Supabase Storage (no server hop — fast)
+          const putRes = await fetch(upload_url, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/pdf' },
+            body: file,
+          })
+          if (!putRes.ok) throw new Error(`Storage upload failed (${putRes.status})`)
+
+          // Step 3: Confirm upload → kicks off background processing
+          await fetch('/api/confirm-upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body: JSON.stringify({ job_id, sheet_id, storage_path, project_id }),
+          })
+
+          // Step 4: Update image state — Realtime will fill in file_id + preview when ready
           setImages(prev => prev.map(img =>
             img.tempId === tempId
-              ? { name: file.name, mediaType: 'application/pdf', preview: null, file_id }
+              ? {
+                  name: file.name,
+                  mediaType: 'application/pdf',
+                  preview: null,
+                  file_id: null,
+                  project_id,
+                  sheet_id,
+                  job_id,
+                  jobStage: 'uploaded',
+                  jobProgress: 10,
+                }
               : img
           ))
         } catch (err) {
@@ -1295,6 +1367,10 @@ INSTRUCTIONS:
                 <div className="sheet-status">
                   {img.uploading ? (
                     <span className="text-dim">Uploading...</span>
+                  ) : img.jobStage && img.jobStage !== 'ready' ? (
+                    img.jobStage === 'error'
+                      ? <span className="text-red" title={img.jobError}>⚠ Processing error</span>
+                      : <span className="text-dim">Processing {img.jobProgress || 0}%</span>
                   ) : results[i] ? (
                     <span className="text-green">✓ {results[i].items ? `${results[i].items.length} items` : 'QA report'}</span>
                   ) : screeningSheet === i ? (
@@ -1597,9 +1673,22 @@ INSTRUCTIONS:
                   <button
                     className="btn btn-primary"
                     onClick={() => screenings[activeImage] ? analyzeSheet(activeImage) : screenSheet(activeImage)}
-                    disabled={loading || screeningSheet === activeImage || images[activeImage]?.uploading}
+                    disabled={
+                      loading ||
+                      screeningSheet === activeImage ||
+                      images[activeImage]?.uploading ||
+                      (images[activeImage]?.job_id && images[activeImage]?.jobStage !== 'ready' && images[activeImage]?.jobStage !== 'error')
+                    }
                   >
-                    {images[activeImage]?.uploading ? 'Uploading...' : screeningSheet === activeImage ? 'Screening...' : loadingSheet === activeImage ? 'Analyzing...' : 'Analyze Sheet'}
+                    {images[activeImage]?.uploading
+                      ? 'Uploading...'
+                      : images[activeImage]?.job_id && images[activeImage]?.jobStage !== 'ready' && images[activeImage]?.jobStage !== 'error'
+                        ? `Processing ${images[activeImage]?.jobProgress || 0}%…`
+                        : screeningSheet === activeImage
+                          ? 'Screening...'
+                          : loadingSheet === activeImage
+                            ? 'Analyzing...'
+                            : 'Analyze Sheet'}
                   </button>
                 )}
                 {results[activeImage] && (
