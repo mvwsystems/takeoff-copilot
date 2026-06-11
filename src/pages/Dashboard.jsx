@@ -58,6 +58,8 @@ export default function Dashboard() {
   const chatScrollRef = useRef(null)
   const [sheetMaps, setSheetMaps] = useState({})    // { project_id: { sheets, loaded } }
   const [proceedingAnalysis, setProceedingAnalysis] = useState(false)
+  const imagesRef = useRef([])
+  useEffect(() => { imagesRef.current = images }, [images])
 
   // Spin up a Web Worker for API calls — workers are exempt from background-tab throttling
   useEffect(() => {
@@ -99,7 +101,41 @@ export default function Dashboard() {
         schema: 'public',
         table: 'processing_jobs',
       }, async (payload) => {
-        const { id: jobId, stage, progress, error: jobError, project_id } = payload.new
+        const { id: jobId, stage, progress, error: jobError, project_id, stage_detail } = payload.new
+
+        if (stage === 'complete') {
+          // Tiled multi-pass analysis finished — fetch the consolidated result
+          const { data: ar } = await supabase
+            .from('analysis_results')
+            .select('result_json')
+            .eq('job_id', jobId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+
+          const idx = imagesRef.current.findIndex(img => img.job_id === jobId)
+          setImages(prev => prev.map(img =>
+            img.job_id === jobId ? { ...img, jobStage: stage, jobProgress: 100, jobDetail: stage_detail } : img
+          ))
+          if (ar?.result_json && idx !== -1) {
+            setResults(prev => ({ ...prev, [idx]: ar.result_json }))
+            setActiveImage(idx)
+            setActiveTab('takeoff')
+            // Log to job history (same as the client-side analyze path)
+            if (user) {
+              supabase.from('jobs').insert({
+                user_id: user.id,
+                plan_filename: imagesRef.current[idx]?.name || null,
+                line_item_count: ar.result_json.items?.length || 0,
+                result_json: ar.result_json,
+              }).select('id').then(({ data }) => {
+                if (data?.[0]?.id) setActiveJobId(data[0].id)
+                loadHistory()
+              })
+            }
+          }
+          return
+        }
 
         if (stage === 'triage_complete') {
           // Fetch all classified sheets and their signed thumbnail URLs
@@ -126,7 +162,7 @@ export default function Dashboard() {
           ))
         } else {
           setImages(prev => prev.map(img =>
-            img.job_id === jobId ? { ...img, jobStage: stage, jobProgress: progress, jobError } : img
+            img.job_id === jobId ? { ...img, jobStage: stage, jobProgress: progress, jobError, jobDetail: stage_detail } : img
           ))
           // Legacy: handle 'ready' stage for any jobs processed before triage was added
           if (stage === 'ready') {
@@ -1292,44 +1328,44 @@ INSTRUCTIONS:
     await supabase.from('sheets').update({ included_in_analysis: newValue }).eq('id', sheetId)
   }
 
+  // Kicks off the server-side tiled multi-pass analysis pipeline.
+  // Progress flows back through the processing_jobs Realtime subscription.
   const proceedWithAnalysis = async (projectId, imgIdx) => {
     const map = sheetMaps[projectId]
     if (!map?.loaded) return
-    const selectedSheets = map.sheets.filter(s => s.included_in_analysis && s.preview_url)
-    if (selectedSheets.length === 0) return
     setProceedingAnalysis(true)
+    setError(null)
     try {
-      const newImages = []
-      for (const sheet of selectedSheets) {
-        const res = await fetch(sheet.preview_url)
-        const buffer = await res.arrayBuffer()
-        const uint8 = new Uint8Array(buffer)
-        let binary = ''
-        for (let i = 0; i < uint8.byteLength; i++) binary += String.fromCharCode(uint8[i])
-        const base64 = btoa(binary)
-        newImages.push({
-          name: sheet.sheet_title
-            ? `Sh ${sheet.page_number}: ${sheet.sheet_title}`
-            : `Sheet ${sheet.page_number} — ${formatClassification(sheet.classification)}`,
-          base64,
-          mediaType: 'image/png',
-          preview: sheet.preview_url,
-          project_id: projectId,
-          sheet_id: sheet.id,
-        })
-      }
-      setImages(prev => {
-        const next = [...prev]
-        next.splice(imgIdx, 1, ...newImages)
-        return next
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/start-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ project_id: projectId }),
       })
-      setActiveImage(imgIdx)
+      if (!res.ok) {
+        const msg = await res.text()
+        throw new Error(msg.slice(0, 160) || `start-analysis failed (${res.status})`)
+      }
+      const { job_id } = await res.json()
+      setImages(prev => prev.map((img, i) =>
+        i === imgIdx
+          ? { ...img, job_id, jobStage: 'analysis_queued', jobProgress: 0, jobDetail: 'Queued for analysis', jobError: null }
+          : img
+      ))
     } catch (err) {
-      setError(`Failed to load sheets: ${err.message}`)
+      setError(`Could not start analysis: ${err.message}`)
     } finally {
       setProceedingAnalysis(false)
     }
   }
+
+  const ANALYSIS_PASSES = [
+    ['analysis_pass_1', 'Plan quantities', 'Opus extracts every pipe, structure, fitting, valve, hydrant, and service from plan-view tiles'],
+    ['analysis_pass_2', 'Profiles', 'Reads rim/invert elevations, slopes, and run lengths from plan-profile sheets'],
+    ['analysis_pass_3', 'Merge + reconcile', 'Dedupes tile overlap zones; plan vs profile length mismatches >5% get flagged, never averaged'],
+    ['analysis_pass_4', 'Small-diameter sweep', 'Dedicated pass for 2" and smaller lines — domestic services, irrigation taps, small fire lines'],
+    ['analysis_pass_5', 'Engineer table check', 'Parses engineer quantity tables and builds a variance comparison'],
+  ]
 
   const result = results[activeImage]
   const isQAResult = !!(result && result.executive_risk_summary)
@@ -1468,7 +1504,11 @@ INSTRUCTIONS:
                     </span>
                   ) : img.jobStage === 'error' ? (
                     <span className="text-red" title={img.jobError}>⚠ Processing error</span>
-                  ) : img.jobStage && img.jobStage !== 'ready' ? (
+                  ) : img.jobStage === 'analysis_queued' || img.jobStage?.startsWith('analysis_pass') ? (
+                    <span className="text-dim" title={img.jobDetail}>
+                      {img.jobStage === 'analysis_queued' ? 'Analysis queued' : `Pass ${img.jobStage.slice(-1)}/5 — ${img.jobProgress || 0}%`}
+                    </span>
+                  ) : img.jobStage && img.jobStage !== 'ready' && img.jobStage !== 'complete' ? (
                     <span className="text-dim">Processing {img.jobProgress || 0}%</span>
                   ) : results[i] ? (
                     <span className="text-green">✓ {results[i].items ? `${results[i].items.length} items` : 'QA report'}</span>
@@ -1768,7 +1808,11 @@ INSTRUCTIONS:
                 </div>
               </div>
               <div className="sheet-header-actions">
-                {!results[activeImage] && screenings[activeImage]?.grade !== 'C' && (
+                {!results[activeImage] && screenings[activeImage]?.grade !== 'C' &&
+                  images[activeImage]?.jobStage !== 'triage_complete' &&
+                  images[activeImage]?.jobStage !== 'analysis_queued' &&
+                  !images[activeImage]?.jobStage?.startsWith('analysis_pass') &&
+                  images[activeImage]?.jobStage !== 'complete' && (
                   <button
                     className="btn btn-primary"
                     onClick={() => screenings[activeImage] ? analyzeSheet(activeImage) : screenSheet(activeImage)}
@@ -1777,17 +1821,13 @@ INSTRUCTIONS:
                       screeningSheet === activeImage ||
                       images[activeImage]?.uploading ||
                       (images[activeImage]?.job_id &&
-                        images[activeImage]?.jobStage !== 'ready' &&
-                        images[activeImage]?.jobStage !== 'error' &&
-                        images[activeImage]?.jobStage !== 'triage_complete')
+                        !['ready', 'error', 'triage_complete', 'complete'].includes(images[activeImage]?.jobStage))
                     }
                   >
                     {images[activeImage]?.uploading
                       ? 'Uploading...'
                       : images[activeImage]?.job_id &&
-                        images[activeImage]?.jobStage !== 'ready' &&
-                        images[activeImage]?.jobStage !== 'error' &&
-                        images[activeImage]?.jobStage !== 'triage_complete'
+                        !['ready', 'error', 'triage_complete', 'complete'].includes(images[activeImage]?.jobStage)
                         ? `Processing ${images[activeImage]?.jobProgress || 0}%…`
                         : screeningSheet === activeImage
                           ? 'Screening...'
@@ -1932,6 +1972,44 @@ INSTRUCTIONS:
                 )
               })()}
 
+              {/* ANALYSIS PIPELINE PROGRESS — server-side tiled multi-pass */}
+              {(images[activeImage]?.jobStage === 'analysis_queued' || images[activeImage]?.jobStage?.startsWith('analysis_pass')) && (() => {
+                const img = images[activeImage]
+                const currentPassIdx = ANALYSIS_PASSES.findIndex(([key]) => key === img.jobStage)
+                return (
+                  <div className="analysis-progress animate-fade">
+                    <div className="analysis-progress-head">
+                      <div className="spinner" />
+                      <div>
+                        <div className="analysis-progress-title">Deep Analysis Running</div>
+                        <div className="analysis-progress-sub">{img.jobDetail || 'Queued — the pipeline tiles each sheet and runs five extraction passes'}</div>
+                      </div>
+                      <div className="analysis-progress-pct">{img.jobProgress || 0}%</div>
+                    </div>
+                    <div className="analysis-progress-bar">
+                      <div className="analysis-progress-fill" style={{ width: `${img.jobProgress || 0}%` }} />
+                    </div>
+                    <div className="analysis-pass-list">
+                      {ANALYSIS_PASSES.map(([key, label, desc], i) => {
+                        const state = currentPassIdx === -1 ? 'pending' : i < currentPassIdx ? 'done' : i === currentPassIdx ? 'active' : 'pending'
+                        return (
+                          <div key={key} className={`pass-row pass-${state}`}>
+                            <span className="pass-marker">{state === 'done' ? '✓' : state === 'active' ? '●' : i + 1}</span>
+                            <div>
+                              <div className="pass-label">Pass {i + 1} — {label}</div>
+                              <div className="pass-desc">{desc}</div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <p className="analysis-progress-note">
+                      You can leave this page — results save to your project and will be here when you come back.
+                    </p>
+                  </div>
+                )
+              })()}
+
               {/* LOADING — SCREENING */}
               {screeningSheet === activeImage && (
                 <div className="loading-state">
@@ -2040,6 +2118,41 @@ INSTRUCTIONS:
                       </tbody>
                     </table>
                   </div>
+
+                  {/* ── ENGINEER QUANTITY VARIANCE (Pass 5 sanity check) ── */}
+                  {result.variance_table?.length > 0 && (
+                    <div className="variance-section">
+                      <div className="risk-flags-header">
+                        <span className="risk-flags-title">Engineer Quantity Comparison</span>
+                        <span className="risk-flags-subtitle">Our takeoff vs the engineer's printed quantity table</span>
+                      </div>
+                      <div className="table-wrap">
+                        <table className="titan-table">
+                          <thead>
+                            <tr>{['Status', 'Engineer Item', 'Engineer Qty', 'Our Qty', 'Unit', 'Diff'].map(h => <th key={h}>{h}</th>)}</tr>
+                          </thead>
+                          <tbody>
+                            {result.variance_table.map((v, i) => (
+                              <tr key={i}>
+                                <td>
+                                  <span className={`badge ${v.status === 'MATCHED' ? 'badge-high' : v.status === 'VARIANCE' ? 'badge-medium' : 'badge-low'}`}>
+                                    {v.status === 'MISSING_FROM_OURS' ? 'NOT IN OURS' : v.status}
+                                  </span>
+                                </td>
+                                <td style={{ maxWidth: 300 }}>{v.engineer_description}</td>
+                                <td className="text-mono">{v.engineer_quantity}</td>
+                                <td className="text-mono">{v.our_quantity ?? '—'}</td>
+                                <td className="text-mono text-dim">{v.unit}</td>
+                                <td className="text-mono" style={{ fontWeight: 600, color: v.pct_difference != null && Math.abs(v.pct_difference) > 5 ? 'var(--titan-red)' : 'inherit' }}>
+                                  {v.pct_difference != null ? `${v.pct_difference > 0 ? '+' : ''}${v.pct_difference}%` : '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
 
                   {/* ── RISK FLAGS ── */}
                   {(() => {

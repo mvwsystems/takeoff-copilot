@@ -5,7 +5,7 @@
   edge_functions = "netlify/edge-functions"
 
 [functions]
-  included_files = ["node_modules/mupdf/**"]
+  included_files = ["node_modules/mupdf/**", "server/prompts/**"]
 
 [[edge_functions]]
   path = "/api/upload"
@@ -22,6 +22,10 @@
 [[edge_functions]]
   path = "/api/confirm-upload"
   function = "confirm-upload"
+
+[[edge_functions]]
+  path = "/api/start-analysis"
+  function = "start-analysis"
 
 [[redirects]]
   from = "/*"

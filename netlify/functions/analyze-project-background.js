@@ -1,0 +1,670 @@
+// Background function: tiled, multi-pass takeoff analysis. The accuracy core.
+// Named with -background suffix → Netlify gives it a 15-minute timeout.
+// Called by start-analysis edge function (fire-and-forget).
+//
+// Passes (per project):
+//   1. Plan quantities  — Opus over plan-view tiles (utility/storm/sanitary/water/plan_profile)
+//   2. Profiles         — Opus over plan_profile tiles (runs, elevations, slopes)
+//   3. Merge + dedupe   — code reconciliation + Haiku overlap-zone dedupe
+//   4. Small-dia sweep  — Opus, lines 2" and smaller only (systematically missed in calibration)
+//   5. Sanity check     — Haiku parses engineer quantity tables → variance table
+//
+// Each pass's JSON is validated against a schema before anything touches line_items.
+// System prompt for heavy passes loads from server/prompts/takeoff-brain.md.
+//
+// Required env vars: VITE_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY
+// Request body: { job_id, project_id }
+
+const { createClient } = require('@supabase/supabase-js')
+const fs = require('fs')
+const path = require('path')
+
+const supabase = createClient(
+  process.env.VITE_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+)
+
+const OPUS = 'claude-opus-4-8'
+const HAIKU = 'claude-haiku-4-5-20251001'
+const API_CONCURRENCY = 4
+const DEADLINE_MS = 13 * 60 * 1000 // bail before Netlify's 15-min kill
+
+const PASS1_TYPES = new Set(['utility_plan', 'storm', 'sanitary', 'water', 'plan_profile', 'grading', 'paving', 'demo', 'erosion_control', 'landscape', 'electrical', 'other'])
+const DEPTH_BUCKETS = [['0-6', 0, 6], ['6-8', 6, 8], ['8-10', 8, 10], ['10-12', 10, 12], ['12+', 12, Infinity]]
+
+// ── Takeoff Brain prompt (editable without code changes) ───────
+let brainCache = null
+function loadBrain() {
+  if (brainCache) return brainCache
+  const candidates = [
+    path.join(__dirname, 'server/prompts/takeoff-brain.md'),
+    path.join(__dirname, '../../server/prompts/takeoff-brain.md'),
+    path.join(process.cwd(), 'server/prompts/takeoff-brain.md'),
+    path.join(process.env.LAMBDA_TASK_ROOT || '.', 'server/prompts/takeoff-brain.md'),
+  ]
+  for (const p of candidates) {
+    try {
+      brainCache = fs.readFileSync(p, 'utf8')
+      console.log('Takeoff Brain loaded from', p)
+      return brainCache
+    } catch { /* try next */ }
+  }
+  throw new Error(`takeoff-brain.md not found. Tried: ${candidates.join(' | ')}`)
+}
+
+// ── Pass task prompts (appended to the brain) ──────────────────
+const PASS1_TASK = `
+YOUR TASK (PASS 1 — PLAN QUANTITIES):
+Extract EVERY utility line item visible in this tile: pipe runs (diameter, material, length), structures (manholes, inlets, cleanouts, headwalls — with depth), fittings, valves, hydrants, FDCs, and service connections. Apply all hard rules.
+
+Respond ONLY with this JSON, no markdown, no preamble:
+{"items":[{"category":"PIPE|STRUCTURE|FITTING|EXCAVATION|SERVICE|TESTING|OTHER","description":"material, size, class/spec, purpose","quantity":number or null,"unit":"LF|EA|CY|SY|SF|LS|TON","diameter_in":number or null,"material":"string or null","location":"station / structure ID / street — REQUIRED for dedupe","confidence":"HIGH|MEDIUM|LOW","note":"why this confidence + what to verify","continues_beyond_tile":boolean}]}
+Empty tile (no utility content visible): {"items":[]}`
+
+const PASS2_TASK = `
+YOUR TASK (PASS 2 — PROFILES):
+This tile is from a plan-and-profile sheet. Extract ONLY profile (elevation view) data. For each pipe run visible in the profile: run identity (structure-to-structure or stationing), rim/finished-grade elevations, invert elevations at each structure, slope, and length. Compute depth at each structure (rim minus invert) when both are shown.
+
+Respond ONLY with this JSON, no markdown, no preamble:
+{"runs":[{"run_id":"e.g. 'SSMH-1 to SSMH-2' or line label","utility":"sanitary|storm|water|other","from_structure":"string or null","to_structure":"string or null","station_start":"string or null","station_end":"string or null","length_lf":number or null,"slope_pct":number or null,"diameter_in":number or null,"material":"string or null","structures":[{"id":"string","rim_elev":number or null,"invert_elev":number or null,"depth_ft":number or null}],"confidence":"HIGH|MEDIUM|LOW","note":"string","continues_beyond_tile":boolean}]}
+No profile visible in this tile: {"runs":[]}`
+
+const PASS4_TASK = `
+YOUR TASK (PASS 4 — SMALL-DIAMETER SWEEP):
+This is a dedicated sweep for lines 2 INCHES AND SMALLER ONLY — domestic water services, irrigation taps and laterals, small fire lines, air release lines, copper/PE service tubing. These were systematically missed in calibration testing because they are drawn thin and labeled small. Scan this tile slowly. Check building connections, meter boxes, hydrant legs, and irrigation points. Report ONLY lines with diameter ≤ 2" and their directly-associated fittings (corp stops, curb stops, meter setters, saddles).
+
+Respond ONLY with this JSON, no markdown, no preamble:
+{"items":[{"category":"PIPE|FITTING|SERVICE|OTHER","description":"material, size, purpose","quantity":number or null,"unit":"LF|EA","diameter_in":number or null,"material":"string or null","location":"station / structure ID / street — REQUIRED","confidence":"HIGH|MEDIUM|LOW","note":"why + what to verify","continues_beyond_tile":boolean}]}
+Nothing ≤ 2" visible: {"items":[]}`
+
+const PASS5_TASK = `You are reading a tile from a construction plan sheet. Determine whether this tile contains an ENGINEER'S QUANTITY TABLE (a tabulated summary of estimated quantities — columns like Item / Description / Qty / Unit). If yes, parse every legible row exactly as printed. Do not invent rows; skip illegible ones.
+
+Respond ONLY with this JSON, no markdown:
+{"table_found":boolean,"rows":[{"item_no":"string or null","description":"string","quantity":number,"unit":"string"}]}`
+
+const MERGE_TASK = `You are a takeoff data merger. Below is a JSON array of line items extracted from OVERLAPPING tiles of the same construction plan set. Tiles overlap by ~15%, so the same item often appears 2+ times (same description/size/material and same or adjacent location). Also, pipe runs crossing tile boundaries may appear as a callout-quantity entry in one tile and a "continues_beyond_tile" null-quantity entry in another — these are the SAME run.
+
+Merge rules:
+1. Same description + size + material + same/overlapping location → ONE item. Keep the entry with a real quantity and the most specific note; never sum duplicate sightings of the same run or structure.
+2. An entry with quantity null and continues_beyond_tile true merges into a matching entry that has a quantity. If NO matching entry has a quantity, keep one merged entry with quantity null and confidence LOW.
+3. Distinct segments/structures at clearly different locations are NOT duplicates — keep them all. When in doubt, keep both and set confidence LOW with a note saying possible duplicate.
+4. Never change quantities, units, or invent items. Only consolidate.
+
+Respond ONLY with this JSON, no markdown:
+{"items":[{"category":"...","description":"...","quantity":number or null,"unit":"...","diameter_in":number or null,"material":"string or null","location":"...","confidence":"HIGH|MEDIUM|LOW","note":"...","source_ids":[numbers — the input "id" values merged into this item]}]}`
+
+const PASS4_DEDUPE_TASK = `You are a takeoff data merger. EXISTING is the consolidated takeoff. CANDIDATES are items found by a dedicated small-diameter (≤2") sweep of the same plans. Return ONLY the candidates that are genuinely NEW — not already represented in EXISTING (same description/size/location = already represented). Consolidate duplicate candidates among themselves first (same merge rules: never sum duplicate sightings).
+
+Respond ONLY with this JSON, no markdown:
+{"new_items":[{"category":"...","description":"...","quantity":number or null,"unit":"...","diameter_in":number or null,"material":"string or null","location":"...","confidence":"HIGH|MEDIUM|LOW","note":"..."}]}`
+
+// ── Helpers ────────────────────────────────────────────────────
+async function updateJob(jobId, fields) {
+  await supabase.from('processing_jobs').update(fields).eq('id', jobId)
+}
+
+async function pool(items, limit, fn) {
+  const results = new Array(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const idx = next++
+      results[idx] = await fn(items[idx], idx)
+    }
+  })
+  await Promise.all(workers)
+  return results
+}
+
+async function callClaude({ model, system, content, maxTokens = 8192 }) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens,
+        ...(system ? { system } : {}),
+        messages: [{ role: 'user', content }],
+      }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      return data.content?.map(b => (b.type === 'text' ? b.text : '')).join('') || ''
+    }
+    const errText = await res.text()
+    if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+      console.warn(`Claude ${res.status}, retry ${attempt}`)
+      await new Promise(r => setTimeout(r, attempt * 5000))
+      continue
+    }
+    throw new Error(`Claude API ${res.status}: ${errText.slice(0, 200)}`)
+  }
+}
+
+function parseJson(text) {
+  const clean = text.replace(/```json\s?|```/g, '').trim()
+  try { return JSON.parse(clean) } catch { /* fall through */ }
+  const m = clean.match(/[{[][\s\S]*[}\]]/)
+  if (m) { try { return JSON.parse(m[0]) } catch { /* fall through */ } }
+  return null
+}
+
+// ── Schema validation — nothing unvalidated reaches line_items ─
+const CATEGORIES = new Set(['PIPE', 'STRUCTURE', 'FITTING', 'EXCAVATION', 'SERVICE', 'TESTING', 'OTHER'])
+const CONFIDENCES = new Set(['HIGH', 'MEDIUM', 'LOW'])
+
+function num(v) {
+  if (typeof v === 'number' && isFinite(v)) return v
+  if (typeof v === 'string' && v.trim() && isFinite(Number(v))) return Number(v)
+  return null
+}
+
+function validateItems(raw, passName) {
+  if (!Array.isArray(raw)) return []
+  const out = []
+  for (const it of raw) {
+    if (!it || typeof it.description !== 'string' || !it.description.trim()) {
+      console.warn(`${passName}: dropped item without description`); continue
+    }
+    out.push({
+      category: CATEGORIES.has(it.category) ? it.category : 'OTHER',
+      description: it.description.trim().slice(0, 500),
+      quantity: num(it.quantity),
+      unit: typeof it.unit === 'string' && it.unit.trim() ? it.unit.trim().toUpperCase().slice(0, 8) : 'EA',
+      diameter_in: num(it.diameter_in),
+      material: typeof it.material === 'string' ? it.material.slice(0, 80) : null,
+      location: typeof it.location === 'string' ? it.location.slice(0, 200) : '',
+      confidence: CONFIDENCES.has(it.confidence) ? it.confidence : 'LOW',
+      note: typeof it.note === 'string' ? it.note.slice(0, 1000) : '',
+      continues_beyond_tile: it.continues_beyond_tile === true,
+      source_ids: Array.isArray(it.source_ids) ? it.source_ids.filter(n => typeof n === 'number') : [],
+    })
+  }
+  return out
+}
+
+function validateRuns(raw, passName) {
+  if (!Array.isArray(raw)) return []
+  const out = []
+  for (const r of raw) {
+    if (!r || typeof r.run_id !== 'string' || !r.run_id.trim()) {
+      console.warn(`${passName}: dropped run without run_id`); continue
+    }
+    out.push({
+      run_id: r.run_id.trim().slice(0, 120),
+      utility: ['sanitary', 'storm', 'water'].includes(r.utility) ? r.utility : 'other',
+      from_structure: typeof r.from_structure === 'string' ? r.from_structure.slice(0, 60) : null,
+      to_structure: typeof r.to_structure === 'string' ? r.to_structure.slice(0, 60) : null,
+      station_start: typeof r.station_start === 'string' ? r.station_start.slice(0, 30) : null,
+      station_end: typeof r.station_end === 'string' ? r.station_end.slice(0, 30) : null,
+      length_lf: num(r.length_lf),
+      slope_pct: num(r.slope_pct),
+      diameter_in: num(r.diameter_in),
+      material: typeof r.material === 'string' ? r.material.slice(0, 80) : null,
+      structures: (Array.isArray(r.structures) ? r.structures : [])
+        .filter(s => s && typeof s.id === 'string')
+        .map(s => ({ id: s.id.slice(0, 60), rim_elev: num(s.rim_elev), invert_elev: num(s.invert_elev), depth_ft: num(s.depth_ft) })),
+      confidence: CONFIDENCES.has(r.confidence) ? r.confidence : 'LOW',
+      note: typeof r.note === 'string' ? r.note.slice(0, 1000) : '',
+    })
+  }
+  return out
+}
+
+function validateEngineerRows(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .filter(r => r && typeof r.description === 'string' && r.description.trim() && num(r.quantity) !== null)
+    .map(r => ({
+      item_no: typeof r.item_no === 'string' ? r.item_no.slice(0, 20) : null,
+      description: r.description.trim().slice(0, 300),
+      quantity: num(r.quantity),
+      unit: typeof r.unit === 'string' ? r.unit.trim().toUpperCase().slice(0, 8) : '',
+    }))
+}
+
+// ── Tiling ─────────────────────────────────────────────────────
+// Grid decided from hypothetical 250-DPI pixel dims. Each tile renders at its
+// own scale so the long edge lands at the API's 1568px max — equivalent to
+// "rasterize at 250 DPI then downscale" without an image-resize dependency.
+function gridFor(pageWpts, pageHpts) {
+  const longEdge250 = (Math.max(pageWpts, pageHpts) / 72) * 250
+  if (longEdge250 <= 1568) return { cols: 1, rows: 1 }
+  if (longEdge250 <= 10500) return { cols: 2, rows: 2 }   // 24x36 Arch D → 2x2
+  return { cols: 3, rows: 3 }                              // very dense / Arch E+
+}
+
+function tileName(row, col, rows, cols) {
+  if (rows === 1 && cols === 1) return 'full sheet'
+  const rowNames = rows === 2 ? ['top', 'bottom'] : ['top', 'middle', 'bottom']
+  const colNames = cols === 2 ? ['left', 'right'] : ['left', 'center', 'right']
+  return `${rowNames[row]}-${colNames[col]}${rows === 2 ? ' quadrant' : ''}`
+}
+
+function renderTiles(mupdf, doc, pageIndex) {
+  const page = doc.loadPage(pageIndex)
+  const [x0, y0, x1, y1] = page.getBounds()
+  const pageW = x1 - x0, pageH = y1 - y0
+  const { cols, rows } = gridFor(pageW, pageH)
+  const stepX = pageW / cols, stepY = pageH / rows
+  const ovX = 0.075 * stepX, ovY = 0.075 * stepY  // 15% total overlap between neighbors
+  const maxScale = 250 / 72
+  const tiles = []
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const tx0 = col * stepX - (col > 0 ? ovX : 0)
+      const tx1 = (col + 1) * stepX + (col < cols - 1 ? ovX : 0)
+      const ty0 = row * stepY - (row > 0 ? ovY : 0)
+      const ty1 = (row + 1) * stepY + (row < rows - 1 ? ovY : 0)
+      const scale = Math.min(1568 / Math.max(tx1 - tx0, ty1 - ty0), maxScale)
+      const matrix = mupdf.Matrix.scale(scale, scale)
+      const bbox = [Math.floor(tx0 * scale), Math.floor(ty0 * scale), Math.ceil(tx1 * scale), Math.ceil(ty1 * scale)]
+      const pixmap = new mupdf.Pixmap(mupdf.ColorSpace.DeviceRGB, bbox, false)
+      pixmap.clear(255)
+      const device = new mupdf.DrawDevice(matrix, pixmap)
+      page.run(device, mupdf.Matrix.identity)
+      device.close()
+      tiles.push({
+        base64: Buffer.from(pixmap.asPNG()).toString('base64'),
+        position: tileName(row, col, rows, cols),
+        grid: `${rows}x${cols}`,
+      })
+      pixmap.destroy()
+    }
+  }
+  page.destroy()
+  return tiles
+}
+
+function tileContext(sheet, tile) {
+  const label = [sheet.sheet_number, sheet.sheet_title].filter(Boolean).join(' — ') || `page ${sheet.page_number}`
+  return `CONTEXT: Sheet "${label}" (classification: ${sheet.classification || 'unknown'}). This image is the ${tile.position} of a ${tile.grid} tile grid; tiles overlap neighbors by ~15%.`
+}
+
+// Runs an extraction pass (1, 2 or 4) over [sheet × tile] with Opus.
+async function runTilePass({ mupdf, doc, sheets, task, validator, resultKey, passName, jobId, progressFrom, progressTo, deadline }) {
+  const brain = loadBrain()
+  const collected = []
+  let done = 0
+  // Build the full tile work list sheet-by-sheet (render once, free after queueing)
+  const work = []
+  for (const sheet of sheets) {
+    const tiles = renderTiles(mupdf, doc, sheet.page_number - 1)
+    tiles.forEach(t => work.push({ sheet, tile: t }))
+  }
+  if (work.length === 0) return []
+
+  await pool(work, API_CONCURRENCY, async ({ sheet, tile }) => {
+    if (Date.now() > deadline) throw new Error('deadline')
+    const content = [
+      { type: 'text', text: tileContext(sheet, tile) },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tile.base64 } },
+      { type: 'text', text: task },
+    ]
+    try {
+      const text = await callClaude({ model: OPUS, system: brain, content })
+      const parsed = parseJson(text)
+      const valid = validator(Array.isArray(parsed) ? parsed : parsed?.[resultKey], passName)
+      valid.forEach(v => collected.push({ ...v, sheet_id: sheet.id, sheet_label: sheet.sheet_number || `pg ${sheet.page_number}`, tile: tile.position }))
+    } catch (err) {
+      if (err.message === 'deadline') throw err
+      console.error(`${passName} tile error (${sheet.sheet_number || sheet.page_number}/${tile.position}):`, err.message)
+    }
+    done++
+    const progress = progressFrom + Math.round((done / work.length) * (progressTo - progressFrom))
+    await updateJob(jobId, { progress, stage_detail: `${passName} — tile ${done}/${work.length}` })
+  })
+  return collected
+}
+
+// ── Pass 3 code-side: profile run dedupe, depth math, reconciliation ──
+function normKey(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, '') }
+
+function dedupeRuns(runs) {
+  const byKey = new Map()
+  for (const r of runs) {
+    const key = normKey(r.from_structure && r.to_structure ? `${r.from_structure}>${r.to_structure}` : r.run_id)
+    const prev = byKey.get(key)
+    if (!prev) { byKey.set(key, r); continue }
+    // keep the record with more populated fields
+    const score = x => [x.length_lf, x.slope_pct, x.diameter_in, x.material].filter(v => v != null).length + x.structures.length
+    if (score(r) > score(prev)) byKey.set(key, { ...r, note: prev.note || r.note })
+  }
+  return [...byKey.values()]
+}
+
+function depthStats(run) {
+  const depths = run.structures
+    .map(s => s.depth_ft != null ? s.depth_ft : (s.rim_elev != null && s.invert_elev != null ? s.rim_elev - s.invert_elev : null))
+    .filter(d => d != null && d >= 0 && d < 100)
+  if (depths.length === 0) return null
+  const avg = depths.reduce((a, b) => a + b, 0) / depths.length
+  const max = Math.max(...depths)
+  // Bucket run length by depth, interpolating linearly between consecutive structures
+  let buckets = null
+  if (run.length_lf && depths.length >= 2) {
+    buckets = Object.fromEntries(DEPTH_BUCKETS.map(([k]) => [k, 0]))
+    const segLen = run.length_lf / (depths.length - 1)
+    for (let i = 0; i < depths.length - 1; i++) {
+      const d0 = depths[i], d1 = depths[i + 1]
+      // sample each segment at 10 points
+      for (let s = 0; s < 10; s++) {
+        const d = d0 + (d1 - d0) * (s + 0.5) / 10
+        const bucket = DEPTH_BUCKETS.find(([, lo, hi]) => d >= lo && d < hi)
+        if (bucket) buckets[bucket[0]] += segLen / 10
+      }
+    }
+    for (const k of Object.keys(buckets)) buckets[k] = Math.round(buckets[k])
+  }
+  return { avg: Math.round(avg * 10) / 10, max: Math.round(max * 10) / 10, buckets }
+}
+
+// Match a profile run to a merged plan item (same diameter + utility/material token overlap)
+function matchRunToItem(run, items, used) {
+  let best = null, bestScore = 0
+  for (let i = 0; i < items.length; i++) {
+    if (used.has(i) || items[i].category !== 'PIPE') continue
+    const it = items[i]
+    if (run.diameter_in != null && it.diameter_in != null && run.diameter_in !== it.diameter_in) continue
+    let score = run.diameter_in != null && it.diameter_in === run.diameter_in ? 2 : 0
+    const desc = it.description.toLowerCase()
+    if (run.utility !== 'other' && desc.includes(run.utility.slice(0, 5))) score += 2
+    if (run.material && desc.includes(run.material.toLowerCase())) score += 1
+    const loc = (it.location || '').toLowerCase()
+    if (run.from_structure && loc.includes(run.from_structure.toLowerCase())) score += 3
+    if (run.to_structure && loc.includes(run.to_structure.toLowerCase())) score += 3
+    if (score > bestScore) { bestScore = score; best = i }
+  }
+  return bestScore >= 2 ? best : null
+}
+
+// ── Pass 5 code-side: variance matching ────────────────────────
+function tokenize(s) {
+  return new Set((s || '').toLowerCase().replace(/["']/g, ' in ').split(/[^a-z0-9.]+/).filter(t => t.length > 1))
+}
+
+function buildVariance(engineerRows, items) {
+  // consolidate engineer rows seen in multiple tiles (same desc+unit → keep once)
+  const seen = new Map()
+  for (const row of engineerRows) {
+    const key = normKey(row.description) + '|' + row.unit
+    if (!seen.has(key)) seen.set(key, row)
+  }
+  const usedItems = new Set()
+  const variance = []
+  for (const eng of seen.values()) {
+    const engTokens = tokenize(eng.description)
+    let best = null, bestScore = 0
+    items.forEach((it, i) => {
+      if (usedItems.has(i)) return
+      if (eng.unit && it.unit && eng.unit !== it.unit) return
+      const itTokens = tokenize(it.description)
+      let overlap = 0
+      engTokens.forEach(t => { if (itTokens.has(t)) overlap++ })
+      const score = overlap / Math.max(engTokens.size, 1)
+      if (score > bestScore) { bestScore = score; best = i }
+    })
+    if (best != null && bestScore >= 0.4) {
+      usedItems.add(best)
+      const ours = items[best]
+      const pct = eng.quantity ? Math.round(((ours.quantity ?? 0) - eng.quantity) / eng.quantity * 1000) / 10 : null
+      variance.push({
+        engineer_description: eng.description, engineer_quantity: eng.quantity, unit: eng.unit,
+        our_description: ours.description, our_quantity: ours.quantity,
+        pct_difference: pct,
+        status: pct != null && Math.abs(pct) > 5 ? 'VARIANCE' : 'MATCHED',
+      })
+    } else {
+      variance.push({
+        engineer_description: eng.description, engineer_quantity: eng.quantity, unit: eng.unit,
+        our_description: null, our_quantity: null, pct_difference: null,
+        status: 'MISSING_FROM_OURS',
+      })
+    }
+  }
+  return variance
+}
+
+// ── Handler ────────────────────────────────────────────────────
+exports.handler = async (event) => {
+  if (event.httpMethod !== 'POST') return { statusCode: 405 }
+
+  let body
+  try { body = JSON.parse(event.body) } catch { return { statusCode: 400, body: 'Invalid JSON' } }
+  const { job_id, project_id } = body
+  if (!job_id || !project_id) return { statusCode: 400, body: 'Missing fields' }
+
+  const deadline = Date.now() + DEADLINE_MS
+
+  try {
+    loadBrain() // fail fast and loudly if the prompt file didn't ship
+
+    // ── Load analysis set ────────────────────────────────────
+    const { data: sheets, error: shErr } = await supabase
+      .from('sheets')
+      .select('id, page_number, classification, storage_path, sheet_number, sheet_title')
+      .eq('project_id', project_id)
+      .eq('included_in_analysis', true)
+      .order('page_number')
+    if (shErr || !sheets?.length) throw new Error(`No analysis sheets: ${shErr?.message || 'empty set'}`)
+
+    // Original PDF path derives from any page PNG path: {uid}/{pid}/pages/page_N.png
+    const pdfPath = sheets[0].storage_path.replace(/\/pages\/page_\d+\.png$/, '/original.pdf')
+    const { data: pdfBlob, error: dlErr } = await supabase.storage.from('plan-uploads').download(pdfPath)
+    if (dlErr) throw new Error(`PDF download failed: ${dlErr.message}`)
+    const pdfBuffer = Buffer.from(await pdfBlob.arrayBuffer())
+
+    const mupdf = await import('mupdf')
+    const doc = mupdf.Document.openDocument(pdfBuffer, 'application/pdf')
+
+    const p1Sheets = sheets.filter(s => PASS1_TYPES.has(s.classification))
+    const p2Sheets = sheets.filter(s => s.classification === 'plan_profile')
+
+    // ── PASS 1: plan quantities (Opus) ───────────────────────
+    await updateJob(job_id, { stage: 'analysis_pass_1', progress: 5, stage_detail: 'Pass 1/5 — extracting plan quantities' })
+    const p1Items = await runTilePass({
+      mupdf, doc, sheets: p1Sheets, task: PASS1_TASK, validator: validateItems,
+      resultKey: 'items', passName: 'Pass 1/5 plan quantities', jobId: job_id,
+      progressFrom: 5, progressTo: 38, deadline,
+    })
+
+    // ── PASS 2: profiles (Opus) ──────────────────────────────
+    await updateJob(job_id, { stage: 'analysis_pass_2', progress: 40, stage_detail: 'Pass 2/5 — reading profiles' })
+    const p2Raw = await runTilePass({
+      mupdf, doc, sheets: p2Sheets, task: PASS2_TASK, validator: validateRuns,
+      resultKey: 'runs', passName: 'Pass 2/5 profiles', jobId: job_id,
+      progressFrom: 40, progressTo: 56, deadline,
+    })
+    const runs = dedupeRuns(p2Raw)
+
+    // ── PASS 3: merge + dedupe (Haiku) + code reconciliation ─
+    await updateJob(job_id, { stage: 'analysis_pass_3', progress: 58, stage_detail: 'Pass 3/5 — merging tiles, reconciling plan vs profile' })
+    let merged = []
+    if (p1Items.length > 0) {
+      const numbered = p1Items.map((it, i) => ({ id: i, sheet: it.sheet_label, tile: it.tile, ...it, sheet_id: undefined }))
+      const text = await callClaude({
+        model: HAIKU, maxTokens: 16384,
+        content: [{ type: 'text', text: `${MERGE_TASK}\n\nITEMS:\n${JSON.stringify(numbered)}` }],
+      })
+      merged = validateItems(parseJson(text)?.items, 'Pass 3/5 merge')
+      if (merged.length === 0 && p1Items.length > 0) {
+        console.warn('Merge returned nothing — falling back to unmerged items')
+        merged = p1Items.map(it => ({ ...it, source_ids: [] }))
+      }
+      // Re-attach sheet_id from merged source_ids (first source wins)
+      merged.forEach(m => {
+        const src = m.source_ids.length ? p1Items[m.source_ids[0]] : null
+        m.sheet_id = src?.sheet_id || p1Items[0]?.sheet_id || null
+      })
+    }
+
+    // Reconcile plan lengths vs profile lengths. Mismatch >5% becomes a flagged
+    // item with both values shown — never silently averaged.
+    const usedItemIdx = new Set()
+    const reconciliations = []
+    for (const run of runs) {
+      const idx = matchRunToItem(run, merged, usedItemIdx)
+      const stats = depthStats(run)
+      if (idx == null) {
+        // Profile run with no plan-view match → add it as its own line item
+        if (run.length_lf) {
+          merged.push({
+            category: 'PIPE',
+            description: `${run.diameter_in ? `${run.diameter_in}" ` : ''}${run.material || ''} ${run.utility !== 'other' ? run.utility : ''} (${run.run_id})`.replace(/\s+/g, ' ').trim(),
+            quantity: run.length_lf, unit: 'LF', diameter_in: run.diameter_in, material: run.material,
+            location: run.run_id, confidence: run.confidence,
+            note: `From profile only — not matched to a plan-view item. ${run.note}`.trim(),
+            sheet_id: p2Sheets[0]?.id || null, source_ids: [],
+            depth: stats, status: 'active',
+          })
+        }
+        continue
+      }
+      usedItemIdx.add(idx)
+      const item = merged[idx]
+      if (stats) item.depth = stats
+      if (run.length_lf != null && item.quantity != null) {
+        const planLf = item.quantity
+        const pct = Math.abs(planLf - run.length_lf) / run.length_lf * 100
+        if (pct > 5) {
+          item.status = 'flagged'
+          item.confidence = 'LOW'
+          item.quantity = run.length_lf // profile is engineer-dimensioned → primary
+          item.note = `LENGTH MISMATCH: plan view shows ${Math.round(planLf)} LF, profile shows ${run.length_lf} LF (${Math.round(pct)}% apart). Profile value used — verify before pricing. ${item.note}`.slice(0, 1000)
+          reconciliations.push({ run: run.run_id, plan_lf: planLf, profile_lf: run.length_lf, pct_diff: Math.round(pct) })
+        }
+      } else if (run.length_lf != null && item.quantity == null) {
+        item.quantity = run.length_lf
+        item.note = `Length taken from profile (${run.run_id}). ${item.note}`.slice(0, 1000)
+      }
+    }
+
+    // ── PASS 4: small-diameter sweep (Opus) ──────────────────
+    await updateJob(job_id, { stage: 'analysis_pass_4', progress: 68, stage_detail: 'Pass 4/5 — small-diameter sweep (≤2")' })
+    const p4Items = await runTilePass({
+      mupdf, doc, sheets: p1Sheets, task: PASS4_TASK, validator: validateItems,
+      resultKey: 'items', passName: 'Pass 4/5 small-dia sweep', jobId: job_id,
+      progressFrom: 68, progressTo: 86, deadline,
+    })
+    if (p4Items.length > 0) {
+      const existingBrief = merged.map(m => ({ description: m.description, quantity: m.quantity, unit: m.unit, location: m.location }))
+      const candidates = p4Items.map((it, i) => ({ id: i, sheet: it.sheet_label, tile: it.tile, ...it, sheet_id: undefined }))
+      const text = await callClaude({
+        model: HAIKU, maxTokens: 8192,
+        content: [{ type: 'text', text: `${PASS4_DEDUPE_TASK}\n\nEXISTING:\n${JSON.stringify(existingBrief)}\n\nCANDIDATES:\n${JSON.stringify(candidates)}` }],
+      })
+      const fresh = validateItems(parseJson(text)?.new_items, 'Pass 4/5 dedupe')
+      fresh.forEach(f => merged.push({
+        ...f,
+        note: `Found in dedicated small-diameter sweep. ${f.note}`.slice(0, 1000),
+        sheet_id: p4Items[0]?.sheet_id || null, status: 'active',
+      }))
+    }
+
+    // ── PASS 5: engineer quantity table sanity check (Haiku) ─
+    await updateJob(job_id, { stage: 'analysis_pass_5', progress: 88, stage_detail: 'Pass 5/5 — checking for engineer quantity tables' })
+    const engineerRows = []
+    const p5Work = []
+    for (const sheet of sheets) {
+      renderTiles(mupdf, doc, sheet.page_number - 1).forEach(t => p5Work.push({ sheet, tile: t }))
+    }
+    await pool(p5Work, API_CONCURRENCY, async ({ sheet, tile }) => {
+      if (Date.now() > deadline) throw new Error('deadline')
+      try {
+        const text = await callClaude({
+          model: HAIKU, maxTokens: 4096,
+          content: [
+            { type: 'text', text: tileContext(sheet, tile) },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tile.base64 } },
+            { type: 'text', text: PASS5_TASK },
+          ],
+        })
+        const parsed = parseJson(text)
+        if (parsed?.table_found) engineerRows.push(...validateEngineerRows(parsed.rows))
+      } catch (err) {
+        if (err.message === 'deadline') throw err
+        console.error('Pass 5 tile error:', err.message)
+      }
+    })
+    const variance = engineerRows.length > 0 ? buildVariance(engineerRows, merged) : []
+
+    // ── Write results ────────────────────────────────────────
+    await updateJob(job_id, { progress: 96, stage_detail: 'Writing line items' })
+
+    await supabase.from('line_items').delete().eq('project_id', project_id)
+    if (merged.length > 0) {
+      const rows = merged.map(m => ({
+        project_id,
+        category: m.category,
+        description: m.description,
+        quantity: m.quantity,
+        unit: m.unit,
+        confidence: m.confidence,
+        confidence_note: m.note || null,
+        depth_avg: m.depth?.avg ?? null,
+        depth_max: m.depth?.max ?? null,
+        depth_bucket_json: m.depth?.buckets ?? null,
+        source_sheet: m.sheet_id || null,
+        status: m.status === 'flagged' ? 'flagged' : 'active',
+      }))
+      const { error: insErr } = await supabase.from('line_items').insert(rows)
+      if (insErr) throw new Error(`line_items insert failed: ${insErr.message}`)
+    }
+
+    // Consolidated result for the dashboard (shaped like the existing takeoff JSON)
+    const items = merged.map((m, i) => ({
+      item_no: i + 1,
+      category: m.category,
+      description: m.description,
+      unit: m.unit,
+      quantity: m.quantity ?? 0,
+      confidence: m.confidence,
+      notes: [
+        m.status === 'flagged' ? '⚠ FLAGGED.' : null,
+        m.depth ? `Depth avg ${m.depth.avg} ft / max ${m.depth.max} ft.` : null,
+        m.note,
+      ].filter(Boolean).join(' '),
+    }))
+    const counts = { HIGH: 0, MEDIUM: 0, LOW: 0 }
+    merged.forEach(m => { counts[m.confidence] = (counts[m.confidence] || 0) + 1 })
+
+    const resultJson = {
+      items,
+      summary: {
+        total_items: items.length,
+        high_confidence_count: counts.HIGH,
+        medium_confidence_count: counts.MEDIUM,
+        low_confidence_count: counts.LOW,
+        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
+      },
+      variance_table: variance,
+      reconciliations,
+      profile_runs: runs,
+      pass_stats: {
+        sheets_analyzed: sheets.length,
+        pass1_raw_items: p1Items.length,
+        pass2_runs: runs.length,
+        merged_items: merged.length,
+        pass4_raw_items: p4Items.length,
+        engineer_rows: engineerRows.length,
+      },
+    }
+
+    await supabase.from('analysis_results').insert({ project_id, job_id, result_json: resultJson })
+    await updateJob(job_id, { stage: 'complete', progress: 100, stage_detail: `${items.length} line items — analysis complete` })
+    return { statusCode: 200 }
+  } catch (err) {
+    console.error('Analysis pipeline error:', err)
+    const msg = err.message === 'deadline'
+      ? 'Analysis hit the 15-minute processing limit. Reduce the number of sheets in the analysis set and re-run.'
+      : `Analysis failed: ${err.message}`
+    await updateJob(job_id, { stage: 'error', error: msg, stage_detail: null })
+    return { statusCode: 200 }
+  }
+}

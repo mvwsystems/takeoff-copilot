@@ -123,6 +123,30 @@ Note: `mupdf` lives in root `dependencies` but is never imported by client code,
 
 ---
 
+## Tiled Multi-Pass Analysis Pipeline (the accuracy core)
+
+When the user clicks **Proceed with N sheets** on the sheet map, `/api/start-analysis` creates a `processing_jobs` row (`kind = 'analysis'`) and fires `analyze-project-background.js`, which runs five passes over the selected sheets:
+
+| Pass | Model | What it does |
+|------|-------|--------------|
+| 1. Plan quantities | `claude-opus-4-8` | Every pipe/structure/fitting/valve/hydrant/FDC/service from plan-view tiles |
+| 2. Profiles | `claude-opus-4-8` | Per run: stationing, rim + invert elevations, slope, length from plan-profile tiles |
+| 3. Merge + reconcile | `claude-haiku-4-5` + code | Dedupes overlap-zone duplicates; plan-vs-profile length mismatch >5% → flagged item showing both values (never averaged); computes depth avg/max/buckets from rim−invert |
+| 4. Small-diameter sweep | `claude-opus-4-8` | Dedicated pass for ≤2" lines (systematically missed in calibration) |
+| 5. Engineer table check | `claude-haiku-4-5` | Parses engineer quantity tables → variance table (ours vs engineer, % diff) |
+
+**Tiling**: each sheet's grid is decided from its hypothetical 250-DPI pixel size (≤1568px → 1 tile, Arch D → 2×2, Arch E+ → 3×3) with 15% overlap. Each tile renders at its own scale so the long edge lands at the API's 1568px max — equivalent to rasterize-then-downscale with no image-resize dependency. Every tile is sent with sheet title, classification, and tile position context.
+
+**Schema validation**: every pass's JSON is validated (types, enums, required fields) before anything is written to `line_items`. Invalid entries are dropped and logged, never inserted.
+
+**The Takeoff Brain prompt** lives at `server/prompts/takeoff-brain.md` — edit it and redeploy; no code changes needed. It ships with the function via `included_files` in `netlify.toml`.
+
+**Results**: line items land in `line_items` (with `depth_avg`, `depth_max`, `depth_bucket_json`, `status = 'flagged'` for mismatches). The consolidated report (variance table, reconciliations, pass stats) lands in `analysis_results.result_json` — kept out of the Realtime publication on purpose, since large rows break Realtime delivery. The dashboard fetches it when the job hits `stage = 'complete'`.
+
+**Limits**: the background function bails gracefully at ~13 minutes (Netlify kills at 15). Very large analysis sets (roughly 25+ sheets) may hit this — the error message tells the user to trim the sheet set. The Railway/Fly.io worker fallback plan still applies if this becomes routine.
+
+---
+
 ## Existing `jobs` Table
 
 The original `jobs` table (used for job history in the sidebar) is **unchanged**. It still stores `{ user_id, plan_filename, screening_grade, result_json, ... }` and the dashboard history panel continues to use it as before.
