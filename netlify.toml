@@ -4,6 +4,9 @@
   functions = "netlify/functions"
   edge_functions = "netlify/edge-functions"
 
+[functions]
+  included_files = ["node_modules/mupdf/**"]
+
 [[edge_functions]]
   path = "/api/upload"
   function = "upload"

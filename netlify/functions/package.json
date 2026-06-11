@@ -1,9 +1,0 @@
-{
-  "name": "takeoff-copilot-functions",
-  "version": "1.0.0",
-  "description": "Netlify background functions for Takeoff Copilot",
-  "dependencies": {
-    "@supabase/supabase-js": "^2.103.0",
-    "pdf-to-img": "^4.2.0"
-  }
-}

@@ -8,7 +8,6 @@
 // Request body: { job_id, sheet_id, storage_path, project_id }
 
 const { createClient } = require('@supabase/supabase-js')
-const pdf = require('pdf-to-img')
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -83,16 +82,23 @@ exports.handler = async (event) => {
 
   await updateJob(job_id, { progress: 40 })
 
-  // ── 3. Rasterize pages with pdf-to-img (MuPDF WASM) ─────────
+  // ── 3. Rasterize pages with MuPDF (WASM — no native deps) ───
+  // Chosen over pdf-to-img, whose `canvas` native module is unreliable on Lambda.
   const baseStoragePath = storage_path.replace('/original.pdf', '')
 
   try {
-    const document = await pdf(pdfBuffer, { scale: 1.5 })
-    const pageCount = document.length
-    let pageNum = 0
+    const mupdf = await import('mupdf')
+    const doc = mupdf.Document.openDocument(pdfBuffer, 'application/pdf')
+    const pageCount = doc.countPages()
 
-    for await (const pageImage of document) {
-      pageNum++
+    for (let i = 0; i < pageCount; i++) {
+      const pageNum = i + 1
+      const page = doc.loadPage(i)
+      // scale 1.5 ≈ 108 DPI — keeps large-format plan sheets under Lambda memory limits
+      const pixmap = page.toPixmap(mupdf.Matrix.scale(1.5, 1.5), mupdf.ColorSpace.DeviceRGB)
+      const pageImage = Buffer.from(pixmap.asPNG())
+      pixmap.destroy()
+      page.destroy()
 
       const pagePath = `${baseStoragePath}/pages/page_${pageNum}.png`
 
@@ -111,7 +117,7 @@ exports.handler = async (event) => {
       if (pageNum === 1) {
         // Update the original sheet record with first-page thumbnail path
         await supabase.from('sheets')
-          .update({ storage_path: pagePath, dpi: 150, page_number: 1 })
+          .update({ storage_path: pagePath, dpi: 108, page_number: 1 })
           .eq('id', sheet_id)
       } else {
         // Create additional sheet records for pages 2+
@@ -119,7 +125,7 @@ exports.handler = async (event) => {
           project_id,
           page_number: pageNum,
           storage_path: pagePath,
-          dpi: 150,
+          dpi: 108,
           file_id, // same PDF file_id for all pages
         })
       }

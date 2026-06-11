@@ -104,38 +104,22 @@ In Supabase dashboard → **Database → Replication**, confirm `processing_jobs
 
 ---
 
+## Rasterizer Choice: MuPDF WASM
+
+The background function rasterizes with the **`mupdf` npm package (WebAssembly)**, not `pdf-to-img`.
+
+Why: `pdf-to-img` hard-depends on `canvas`, a natively-compiled module that frequently fails at runtime on Netlify's Lambda environment (missing system libraries). MuPDF compiled to WASM has **zero native dependencies** — it runs anywhere Node 18+ runs, including Lambda, with no build-environment coupling. Render quality and speed are excellent (MuPDF is the same engine commercial PDF tools use).
+
+Pages render at scale 1.5 (~108 DPI) to keep large-format plan sheets (Arch D/E) within Lambda memory limits. Netlify background functions get 15 minutes and 1 GB — sufficient for typical plan sets. If users start uploading 200+ page sets and hitting limits, the fallback plan is a small Railway/Fly.io worker consuming the same `processing_jobs` table; the schema already supports it (nothing in the DB is Netlify-specific).
+
 ## npm Changes
 
 `pdfjs-dist` removed (no longer needed — rasterization moved to server).
-`pdf-to-img` added to `netlify/functions` only (server-side, not bundled into the Vite build).
+`mupdf` added to the **root** `package.json` — Netlify functions resolve dependencies from the project root; a function-level `package.json` is NOT auto-installed (caused a failed deploy on the first attempt).
 
-Install the background function dependency:
-```bash
-cd netlify/functions
-npm init -y
-npm install pdf-to-img @supabase/supabase-js
-```
+`netlify.toml` sets `included_files = ["node_modules/mupdf/**"]` under `[functions]` so the `.wasm` binary ships with the function (the dynamic `import('mupdf')` inside the CommonJS handler isn't statically traceable).
 
-Or add a separate `netlify/functions/package.json` (see below).
-
----
-
-## Background Function Dependencies
-
-The background function (`process-plan-background.js`) uses CommonJS `require()` and runs in Node.js 18. It needs its own `package.json` in `netlify/functions/`:
-
-```json
-{
-  "name": "takeoff-copilot-functions",
-  "version": "1.0.0",
-  "dependencies": {
-    "@supabase/supabase-js": "^2.103.0",
-    "pdf-to-img": "^4.2.0"
-  }
-}
-```
-
-Netlify automatically installs dependencies from this file during build.
+Note: `mupdf` lives in root `dependencies` but is never imported by client code, so Vite excludes it from the browser bundle entirely.
 
 ---
 
