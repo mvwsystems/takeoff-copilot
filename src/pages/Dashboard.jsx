@@ -56,6 +56,8 @@ export default function Dashboard() {
   const workerRef = useRef(null)
   const pendingRef = useRef({})
   const chatScrollRef = useRef(null)
+  const [sheetMaps, setSheetMaps] = useState({})    // { project_id: { sheets, loaded } }
+  const [proceedingAnalysis, setProceedingAnalysis] = useState(false)
 
   // Spin up a Web Worker for API calls — workers are exempt from background-tab throttling
   useEffect(() => {
@@ -98,31 +100,56 @@ export default function Dashboard() {
         table: 'processing_jobs',
       }, async (payload) => {
         const { id: jobId, stage, progress, error: jobError, project_id } = payload.new
-        setImages(prev => prev.map(img =>
-          img.job_id === jobId ? { ...img, jobStage: stage, jobProgress: progress, jobError } : img
-        ))
-        if (stage === 'ready') {
-          // Fetch sheet to get thumbnail path and Anthropic file_id
-          const { data: sheet } = await supabase
-            .from('sheets')
-            .select('storage_path, file_id')
-            .eq('project_id', project_id)
-            .eq('page_number', 1)
-            .maybeSingle()
 
-          if (sheet?.storage_path) {
-            const { data: signedData } = await supabase.storage
+        if (stage === 'triage_complete') {
+          // Fetch all classified sheets and their signed thumbnail URLs
+          const { data: sheets } = await supabase
+            .from('sheets')
+            .select('id, page_number, classification, included_in_analysis, storage_path, sheet_number, sheet_title')
+            .eq('project_id', project_id)
+            .order('page_number')
+
+          const sheetsWithUrls = await Promise.all((sheets || []).map(async (sheet) => {
+            if (!sheet.storage_path) return { ...sheet, preview_url: null }
+            const { data: signed } = await supabase.storage
               .from('plan-uploads')
               .createSignedUrl(sheet.storage_path, 7200)
-            setImages(prev => prev.map(img =>
-              img.job_id === jobId
-                ? { ...img, preview: signedData?.signedUrl || null, file_id: sheet.file_id }
-                : img
-            ))
-          } else if (sheet?.file_id) {
-            setImages(prev => prev.map(img =>
-              img.job_id === jobId ? { ...img, file_id: sheet.file_id } : img
-            ))
+            return { ...sheet, preview_url: signed?.signedUrl || null }
+          }))
+
+          const page1 = sheetsWithUrls.find(s => s.page_number === 1)
+          setSheetMaps(prev => ({ ...prev, [project_id]: { sheets: sheetsWithUrls, loaded: true } }))
+          setImages(prev => prev.map(img =>
+            img.job_id === jobId
+              ? { ...img, jobStage: stage, jobProgress: progress, jobError, preview: page1?.preview_url }
+              : img
+          ))
+        } else {
+          setImages(prev => prev.map(img =>
+            img.job_id === jobId ? { ...img, jobStage: stage, jobProgress: progress, jobError } : img
+          ))
+          // Legacy: handle 'ready' stage for any jobs processed before triage was added
+          if (stage === 'ready') {
+            const { data: sheet } = await supabase
+              .from('sheets')
+              .select('storage_path, file_id')
+              .eq('project_id', project_id)
+              .eq('page_number', 1)
+              .maybeSingle()
+            if (sheet?.storage_path) {
+              const { data: signedData } = await supabase.storage
+                .from('plan-uploads')
+                .createSignedUrl(sheet.storage_path, 7200)
+              setImages(prev => prev.map(img =>
+                img.job_id === jobId
+                  ? { ...img, preview: signedData?.signedUrl || null, file_id: sheet.file_id }
+                  : img
+              ))
+            } else if (sheet?.file_id) {
+              setImages(prev => prev.map(img =>
+                img.job_id === jobId ? { ...img, file_id: sheet.file_id } : img
+              ))
+            }
           }
         }
       })
@@ -1236,6 +1263,74 @@ INSTRUCTIONS:
     win.onload = () => { URL.revokeObjectURL(url); win.focus(); win.print() }
   }
 
+  // ── Sheet triage helpers ─────────────────────────────────────
+  const TRIAGE_ANALYSIS_TYPES = new Set(['utility_plan', 'plan_profile', 'storm', 'sanitary', 'water', 'details'])
+
+  const formatClassification = (cls) => {
+    const labels = {
+      cover: 'Cover', sheet_index: 'Sheet Index', general_notes: 'Gen. Notes',
+      demo: 'Demo', grading: 'Grading', paving: 'Paving',
+      utility_plan: 'Utility Plan', plan_profile: 'Plan-Profile',
+      storm: 'Storm', sanitary: 'Sanitary', water: 'Water',
+      details: 'Details', erosion_control: 'Erosion Ctrl',
+      landscape: 'Landscape', electrical: 'Electrical', other: 'Other',
+    }
+    return labels[cls] || cls || 'Unknown'
+  }
+
+  const toggleSheetAnalysis = async (projectId, sheetId, currentValue) => {
+    const newValue = !currentValue
+    setSheetMaps(prev => ({
+      ...prev,
+      [projectId]: {
+        ...prev[projectId],
+        sheets: prev[projectId].sheets.map(s =>
+          s.id === sheetId ? { ...s, included_in_analysis: newValue } : s
+        ),
+      },
+    }))
+    await supabase.from('sheets').update({ included_in_analysis: newValue }).eq('id', sheetId)
+  }
+
+  const proceedWithAnalysis = async (projectId, imgIdx) => {
+    const map = sheetMaps[projectId]
+    if (!map?.loaded) return
+    const selectedSheets = map.sheets.filter(s => s.included_in_analysis && s.preview_url)
+    if (selectedSheets.length === 0) return
+    setProceedingAnalysis(true)
+    try {
+      const newImages = []
+      for (const sheet of selectedSheets) {
+        const res = await fetch(sheet.preview_url)
+        const buffer = await res.arrayBuffer()
+        const uint8 = new Uint8Array(buffer)
+        let binary = ''
+        for (let i = 0; i < uint8.byteLength; i++) binary += String.fromCharCode(uint8[i])
+        const base64 = btoa(binary)
+        newImages.push({
+          name: sheet.sheet_title
+            ? `Sh ${sheet.page_number}: ${sheet.sheet_title}`
+            : `Sheet ${sheet.page_number} — ${formatClassification(sheet.classification)}`,
+          base64,
+          mediaType: 'image/png',
+          preview: sheet.preview_url,
+          project_id: projectId,
+          sheet_id: sheet.id,
+        })
+      }
+      setImages(prev => {
+        const next = [...prev]
+        next.splice(imgIdx, 1, ...newImages)
+        return next
+      })
+      setActiveImage(imgIdx)
+    } catch (err) {
+      setError(`Failed to load sheets: ${err.message}`)
+    } finally {
+      setProceedingAnalysis(false)
+    }
+  }
+
   const result = results[activeImage]
   const isQAResult = !!(result && result.executive_risk_summary)
   const analyzedCount = Object.keys(results).length
@@ -1367,10 +1462,14 @@ INSTRUCTIONS:
                 <div className="sheet-status">
                   {img.uploading ? (
                     <span className="text-dim">Uploading...</span>
+                  ) : img.jobStage === 'triage_complete' ? (
+                    <span className="text-green">
+                      ✓ {sheetMaps[img.project_id]?.sheets?.length || 0} sheets classified
+                    </span>
+                  ) : img.jobStage === 'error' ? (
+                    <span className="text-red" title={img.jobError}>⚠ Processing error</span>
                   ) : img.jobStage && img.jobStage !== 'ready' ? (
-                    img.jobStage === 'error'
-                      ? <span className="text-red" title={img.jobError}>⚠ Processing error</span>
-                      : <span className="text-dim">Processing {img.jobProgress || 0}%</span>
+                    <span className="text-dim">Processing {img.jobProgress || 0}%</span>
                   ) : results[i] ? (
                     <span className="text-green">✓ {results[i].items ? `${results[i].items.length} items` : 'QA report'}</span>
                   ) : screeningSheet === i ? (
@@ -1677,12 +1776,18 @@ INSTRUCTIONS:
                       loading ||
                       screeningSheet === activeImage ||
                       images[activeImage]?.uploading ||
-                      (images[activeImage]?.job_id && images[activeImage]?.jobStage !== 'ready' && images[activeImage]?.jobStage !== 'error')
+                      (images[activeImage]?.job_id &&
+                        images[activeImage]?.jobStage !== 'ready' &&
+                        images[activeImage]?.jobStage !== 'error' &&
+                        images[activeImage]?.jobStage !== 'triage_complete')
                     }
                   >
                     {images[activeImage]?.uploading
                       ? 'Uploading...'
-                      : images[activeImage]?.job_id && images[activeImage]?.jobStage !== 'ready' && images[activeImage]?.jobStage !== 'error'
+                      : images[activeImage]?.job_id &&
+                        images[activeImage]?.jobStage !== 'ready' &&
+                        images[activeImage]?.jobStage !== 'error' &&
+                        images[activeImage]?.jobStage !== 'triage_complete'
                         ? `Processing ${images[activeImage]?.jobProgress || 0}%…`
                         : screeningSheet === activeImage
                           ? 'Screening...'
@@ -1742,6 +1847,91 @@ INSTRUCTIONS:
 
             {/* TAB CONTENT */}
             <div className="tab-content">
+
+              {/* SHEET MAP — shown after triage, before analysis pass */}
+              {images[activeImage]?.jobStage === 'triage_complete' && (() => {
+                const projectId = images[activeImage]?.project_id
+                const map = sheetMaps[projectId]
+                if (!map?.loaded) {
+                  return (
+                    <div className="loading-state">
+                      <div className="spinner" />
+                      <p>Building sheet map...</p>
+                    </div>
+                  )
+                }
+                const selectedCount = map.sheets.filter(s => s.included_in_analysis).length
+                return (
+                  <div className="sheet-map animate-fade">
+                    <div className="sheet-map-header">
+                      <div>
+                        <div className="sheet-map-title">Sheet Triage Complete</div>
+                        <div className="sheet-map-subtitle">
+                          {map.sheets.length} page{map.sheets.length !== 1 ? 's' : ''} classified —&nbsp;
+                          <span className="sheet-map-accent">{selectedCount} queued for analysis</span>
+                          <span className="text-dim"> (click thumbnails to toggle)</span>
+                        </div>
+                      </div>
+                      <div className="sheet-map-legend">
+                        <span className="sml-item sml-analyze"><span className="sml-dot" /> Analyze</span>
+                        <span className="sml-item sml-skip"><span className="sml-dot sml-dot-skip" /> Skip</span>
+                      </div>
+                    </div>
+
+                    <div className="sheet-map-grid">
+                      {map.sheets.map((sheet) => {
+                        const isAnalysis = TRIAGE_ANALYSIS_TYPES.has(sheet.classification)
+                        return (
+                          <div
+                            key={sheet.id}
+                            className={`smi ${sheet.included_in_analysis ? 'smi-on' : 'smi-off'}`}
+                            onClick={() => toggleSheetAnalysis(projectId, sheet.id, sheet.included_in_analysis)}
+                            title={`Page ${sheet.page_number}${sheet.sheet_number ? ` — ${sheet.sheet_number}` : ''}${sheet.sheet_title ? `: ${sheet.sheet_title}` : ''}\nClick to ${sheet.included_in_analysis ? 'exclude' : 'include'}`}
+                          >
+                            <div className="smi-thumb-wrap">
+                              {sheet.preview_url
+                                ? <img src={sheet.preview_url} alt="" className="smi-thumb" />
+                                : <div className="smi-thumb smi-thumb-empty">{sheet.page_number}</div>
+                              }
+                              <div className={`smi-check ${sheet.included_in_analysis ? 'smi-check-on' : 'smi-check-off'}`}>
+                                {sheet.included_in_analysis ? '✓' : '—'}
+                              </div>
+                            </div>
+                            <div className="smi-info">
+                              <span className={`cls-badge cls-${sheet.classification || 'other'} ${isAnalysis ? 'cls-analysis' : ''}`}>
+                                {formatClassification(sheet.classification)}
+                              </span>
+                              {sheet.sheet_number && (
+                                <span className="smi-num">{sheet.sheet_number}</span>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    <div className="proceed-bar">
+                      <div className="proceed-info">
+                        {selectedCount === 0
+                          ? <span className="text-dim">No sheets selected — toggle some above</span>
+                          : <><strong>{selectedCount}</strong> sheet{selectedCount !== 1 ? 's' : ''} will be analyzed</>
+                        }
+                      </div>
+                      <button
+                        className="btn btn-primary"
+                        disabled={selectedCount === 0 || proceedingAnalysis}
+                        onClick={() => proceedWithAnalysis(projectId, images.findIndex(img => img.project_id === projectId && img.jobStage === 'triage_complete'))}
+                      >
+                        {proceedingAnalysis
+                          ? 'Loading sheets...'
+                          : `Proceed with ${selectedCount} sheet${selectedCount !== 1 ? 's' : ''}`
+                        }
+                      </button>
+                    </div>
+                  </div>
+                )
+              })()}
+
               {/* LOADING — SCREENING */}
               {screeningSheet === activeImage && (
                 <div className="loading-state">

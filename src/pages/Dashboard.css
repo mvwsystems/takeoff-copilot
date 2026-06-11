@@ -1454,3 +1454,219 @@
   .qa-score-card { width: 100%; }
   .qa-bottom-row { grid-template-columns: 1fr; }
 }
+
+/* —— SHEET MAP (triage result) —— */
+.sheet-map {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.sheet-map-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--titan-border);
+  flex-shrink: 0;
+}
+
+.sheet-map-title {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  letter-spacing: 1px;
+  color: var(--titan-white);
+  margin-bottom: 4px;
+}
+
+.sheet-map-subtitle {
+  font-size: 0.75rem;
+  color: var(--titan-text-muted);
+  font-family: var(--font-mono);
+}
+
+.sheet-map-accent {
+  color: var(--titan-red);
+}
+
+.sheet-map-legend {
+  display: flex;
+  gap: 12px;
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  color: var(--titan-text-muted);
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.sml-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.sml-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--titan-red);
+  display: inline-block;
+}
+
+.sml-dot-skip {
+  background: var(--titan-border-light);
+}
+
+.sheet-map-grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+  padding: 16px 24px;
+  align-content: start;
+}
+
+/* Individual sheet map item */
+.smi {
+  cursor: pointer;
+  border-radius: 3px;
+  border: 2px solid transparent;
+  transition: border-color 0.15s, opacity 0.15s;
+  user-select: none;
+}
+
+.smi:hover {
+  border-color: var(--titan-border-light);
+}
+
+.smi-on {
+  border-color: var(--titan-red);
+  background: rgba(0, 87, 255, 0.04);
+}
+
+.smi-off {
+  opacity: 0.45;
+}
+
+.smi-off:hover {
+  opacity: 0.75;
+}
+
+.smi-thumb-wrap {
+  position: relative;
+}
+
+.smi-thumb {
+  width: 100%;
+  aspect-ratio: 3/2;
+  object-fit: cover;
+  display: block;
+  border-radius: 1px;
+  background: var(--titan-surface);
+}
+
+.smi-thumb-empty {
+  width: 100%;
+  aspect-ratio: 3/2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--titan-surface);
+  color: var(--titan-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+.smi-check {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+.smi-check-on {
+  background: var(--titan-red);
+  color: #fff;
+}
+
+.smi-check-off {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--titan-text-muted);
+  border: 1px solid var(--titan-border);
+}
+
+.smi-info {
+  padding: 5px 6px 6px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.smi-num {
+  font-size: 0.6rem;
+  font-family: var(--font-mono);
+  color: var(--titan-text-muted);
+}
+
+/* Classification badge */
+.cls-badge {
+  font-size: 0.58rem;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: var(--titan-surface);
+  color: var(--titan-text-muted);
+  border: 1px solid var(--titan-border);
+  white-space: nowrap;
+}
+
+/* Analysis types get accent color */
+.cls-analysis {
+  background: rgba(0, 87, 255, 0.12);
+  color: var(--titan-red);
+  border-color: rgba(0, 87, 255, 0.3);
+}
+
+/* Proceed bar */
+.proceed-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  border-top: 1px solid var(--titan-border);
+  background: var(--titan-dark);
+  flex-shrink: 0;
+}
+
+.proceed-info {
+  font-size: 0.78rem;
+  color: var(--titan-text-dim);
+}
+
+.proceed-info strong {
+  color: var(--titan-white);
+}
+
+@media (max-width: 768px) {
+  .sheet-map-grid {
+    grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+    gap: 8px;
+    padding: 12px;
+  }
+  .sheet-map-header { flex-direction: column; gap: 8px; }
+  .proceed-bar { flex-direction: column; gap: 10px; align-items: stretch; }
+  .proceed-bar .btn { width: 100%; }
+}
