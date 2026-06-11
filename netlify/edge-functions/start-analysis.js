@@ -68,12 +68,28 @@ export default async (request) => {
     })
   }
 
-  const bgUrl = `${Deno.env.get('URL')}/.netlify/functions/analyze-project-background`
-  fetch(bgUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ job_id: job.id, project_id }),
-  }).catch(() => {})
+  // MUST await — edge isolates freeze on return, killing un-awaited fetches.
+  // Background functions ack with 202 immediately.
+  const siteUrl = Deno.env.get('URL') || new URL(request.url).origin
+  const bgUrl = `${siteUrl}/.netlify/functions/analyze-project-background`
+  try {
+    const bgRes = await fetch(bgUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: job.id, project_id }),
+    })
+    if (!bgRes.ok && bgRes.status !== 202) {
+      throw new Error(`background function returned ${bgRes.status}`)
+    }
+  } catch (err) {
+    await supabase
+      .from('processing_jobs')
+      .update({ stage: 'error', error: `Could not start analysis: ${err.message}` })
+      .eq('id', job.id)
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 502, headers: { 'Content-Type': 'application/json' },
+    })
+  }
 
   return new Response(JSON.stringify({ job_id: job.id, sheet_count: count }), {
     status: 200, headers: { 'Content-Type': 'application/json' },

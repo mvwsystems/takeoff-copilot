@@ -342,19 +342,44 @@ INSTRUCTIONS:
     }
   }
 
+  // Uploads a PDF to the Anthropic Files API via Supabase Storage — the file
+  // goes straight to Storage (100 MB limit), never through Netlify, which caps
+  // request bodies and 500s on large PDFs.
+  const uploadDocToFiles = async (file) => {
+    const { data: { session } } = await supabase.auth.getSession()
+    const token = session?.access_token
+    const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }
+
+    const signRes = await fetch('/api/doc-upload', {
+      method: 'POST', headers,
+      body: JSON.stringify({ action: 'sign', filename: file.name }),
+    })
+    if (!signRes.ok) throw new Error(`Could not get upload URL (${signRes.status})`)
+    const { upload_url, storage_path } = await signRes.json()
+
+    const putRes = await fetch(upload_url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/pdf' },
+      body: file,
+    })
+    if (!putRes.ok) throw new Error(`Storage upload failed (${putRes.status})`)
+
+    const regRes = await fetch('/api/doc-upload', {
+      method: 'POST', headers,
+      body: JSON.stringify({ action: 'register', storage_path }),
+    })
+    if (!regRes.ok) {
+      const msg = await regRes.text()
+      throw new Error(`Register failed (${regRes.status}): ${msg.slice(0, 120)}`)
+    }
+    const { file_id } = await regRes.json()
+    return file_id
+  }
+
   const uploadSpecs = async (file) => {
     setSpecsUploading(true)
     try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const formData = new FormData()
-      formData.append('file', file, file.name)
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${session?.access_token}` },
-        body: formData,
-      })
-      if (!res.ok) throw new Error(`Upload failed (${res.status})`)
-      const { file_id } = await res.json()
+      const file_id = await uploadDocToFiles(file)
       setSpecsFileId(file_id)
       setSpecsFileName(file.name)
     } catch (err) {
@@ -588,16 +613,7 @@ INSTRUCTIONS:
     setGeotechFileName(file.name)
     setGeotechResult(null)
     try {
-      const { data: { session } } = await supabase.auth.getSession()
-      const formData = new FormData()
-      formData.append('file', file, file.name)
-      const uploadRes = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${session?.access_token}` },
-        body: formData,
-      })
-      if (!uploadRes.ok) throw new Error(`Upload failed (${uploadRes.status})`)
-      const { file_id } = await uploadRes.json()
+      const file_id = await uploadDocToFiles(file)
       const result = await callApi(
         { file_id, name: file.name, mediaType: 'application/pdf' },
         GEOTECH_PROMPT + '\n\nExtract all geotechnical data from this report. Respond ONLY with the JSON object, no other text.',

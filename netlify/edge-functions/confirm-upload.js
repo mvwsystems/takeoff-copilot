@@ -40,14 +40,30 @@ export default async (request) => {
     .update({ stage: 'uploaded', progress: 10 })
     .eq('id', job_id)
 
-  // Fire background function (fire-and-forget — don't await)
-  const siteUrl = Deno.env.get('URL') || ''
+  // Trigger background function. MUST be awaited — edge isolates freeze the
+  // moment the response is returned, killing any in-flight fetch. Background
+  // functions return 202 immediately, so this only costs a round trip.
+  const siteUrl = Deno.env.get('URL') || new URL(request.url).origin
   const bgUrl = `${siteUrl}/.netlify/functions/process-plan-background`
-  fetch(bgUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ job_id, sheet_id, storage_path, project_id }),
-  }).catch(() => { /* ignore — background function responds with 202 */ })
+  try {
+    const bgRes = await fetch(bgUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id, sheet_id, storage_path, project_id }),
+    })
+    if (!bgRes.ok && bgRes.status !== 202) {
+      throw new Error(`background function returned ${bgRes.status}`)
+    }
+  } catch (err) {
+    await supabase
+      .from('processing_jobs')
+      .update({ stage: 'error', error: `Could not start processing: ${err.message}` })
+      .eq('id', job_id)
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 502,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
 
   return new Response(JSON.stringify({ ok: true }), {
     status: 200,
