@@ -12,10 +12,20 @@
 
 const { createClient } = require('@supabase/supabase-js')
 
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-)
+// Client is created lazily inside the handler — a module-level createClient
+// with a missing env var throws at cold start BEFORE any logging or DB write,
+// which makes the failure invisible (job stays stuck at 'uploaded').
+let supabase = null
+function getSupabase() {
+  if (supabase) return supabase
+  const url = process.env.VITE_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) {
+    throw new Error(`Missing env: ${!url ? 'VITE_SUPABASE_URL ' : ''}${!key ? 'SUPABASE_SERVICE_ROLE_KEY' : ''}`.trim())
+  }
+  supabase = createClient(url, key)
+  return supabase
+}
 
 // Sheet types that proceed to the heavy analysis pass.
 // All others default to included_in_analysis = false.
@@ -119,6 +129,13 @@ async function classifyBatch(batchImages) {
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405 }
+  }
+
+  try {
+    getSupabase() // populates module-level `supabase` for all code below
+  } catch (err) {
+    console.error('FATAL — cannot start:', err.message)
+    return { statusCode: 500, body: err.message }
   }
 
   let body
