@@ -5,6 +5,10 @@
   edge_functions = "netlify/edge-functions"
 
 [functions]
+  node_bundler = "esbuild"
+  # mupdf must stay external: its WASM loader uses top-level await, which
+  # esbuild cannot inline. included_files ships the actual module files.
+  external_node_modules = ["mupdf"]
   included_files = ["node_modules/mupdf/**", "server/prompts/**"]
 
 [[edge_functions]]
