@@ -15,9 +15,14 @@
 // Required env vars: VITE_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY
 // Request body: { job_id, project_id }
 
-const { createClient } = require('@supabase/supabase-js')
-const fs = require('fs')
-const path = require('path')
+// ESM (.mjs): root package.json has "type":"module" and ships in the function
+// bundle, so CommonJS .js files die at load with "module is not defined".
+import { createClient } from '@supabase/supabase-js'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // Lazy client — module-level createClient with a missing env var dies at cold
 // start before any logging, leaving jobs invisibly stuck.
@@ -441,7 +446,7 @@ function buildVariance(engineerRows, items) {
 }
 
 // ── Handler ────────────────────────────────────────────────────
-exports.handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405 }
 
   try {

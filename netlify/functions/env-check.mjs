@@ -1,7 +1,7 @@
 // Temporary diagnostic: reports which env vars the FUNCTIONS runtime can see.
 // Returns booleans only — never values. Safe to leave deployed; remove after debugging.
 
-exports.handler = async () => {
+export const handler = async () => {
   let mupdfOk = false
   let mupdfErr = null
   try {
@@ -14,7 +14,7 @@ exports.handler = async () => {
   let supabaseOk = false
   let supabaseErr = null
   try {
-    const { createClient } = require('@supabase/supabase-js')
+    const { createClient } = await import('@supabase/supabase-js')
     supabaseOk = typeof createClient === 'function'
   } catch (e) {
     supabaseErr = e.message

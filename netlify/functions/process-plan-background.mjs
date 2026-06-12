@@ -10,7 +10,9 @@
 //
 // Stages emitted: processing → triage_complete | error
 
-const { createClient } = require('@supabase/supabase-js')
+// ESM (.mjs): root package.json has "type":"module" and ships in the function
+// bundle, so CommonJS .js files die at load with "module is not defined".
+import { createClient } from '@supabase/supabase-js'
 
 // Client is created lazily inside the handler — a module-level createClient
 // with a missing env var throws at cold start BEFORE any logging or DB write,
@@ -126,7 +128,7 @@ async function classifyBatch(batchImages) {
   return batchImages.map(() => ({ classification: 'other', sheet_number: null, sheet_title: null }))
 }
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405 }
   }
