@@ -1343,10 +1343,25 @@ INSTRUCTIONS:
     setError(null)
     try {
       const { data: { session } } = await supabase.auth.getSession()
+      // If a geotech report is loaded, pass rock/groundwater depths so the depth
+      // engine can cross-reference run depths against them.
+      let geotech = null
+      if (geotechResult) {
+        const gs = geotechResult.summary || {}
+        const rock = gs.rock_encountered ? gs.shallowest_rock_ft : null
+        const gw = gs.shallowest_groundwater_ft
+        if (rock != null || gw != null) {
+          geotech = {
+            rock_depth_ft: rock ?? null,
+            groundwater_depth_ft: gw ?? null,
+            summary: geotechFileName || 'Geotech report',
+          }
+        }
+      }
       const res = await fetch('/api/start-analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ project_id: projectId }),
+        body: JSON.stringify({ project_id: projectId, geotech }),
       })
       if (!res.ok) {
         const msg = await res.text()
@@ -2104,7 +2119,10 @@ INSTRUCTIONS:
                     <table className="titan-table">
                       <thead>
                         <tr>
-                          {['#', 'Cat', 'Description', 'Unit', 'Qty', 'Conf', 'Notes'].map(h => (
+                          {(result.depth_summary
+                            ? ['#', 'Cat', 'Description', 'Unit', 'Qty', 'Conf', 'Depth Avg', 'Depth Max', 'Notes']
+                            : ['#', 'Cat', 'Description', 'Unit', 'Qty', 'Conf', 'Notes']
+                          ).map(h => (
                             <th key={h}>{h}</th>
                           ))}
                         </tr>
@@ -2118,12 +2136,112 @@ INSTRUCTIONS:
                             <td className="text-mono text-dim">{item.unit}</td>
                             <td className="text-mono" style={{ fontWeight: 600, color: 'var(--titan-white)', fontSize: '0.9rem' }}>{item.quantity}</td>
                             <td><span className={`badge ${confidenceColor(item.confidence)}`}>{item.confidence}</span></td>
+                            {result.depth_summary && (
+                              item.depth_unavailable ? (
+                                <td colSpan={2} className="depth-unavail">DEPTH UNAVAILABLE — verify from profiles</td>
+                              ) : (
+                                <>
+                                  <td className="text-mono text-dim">{item.depth_avg != null ? `${item.depth_avg} ft` : '—'}</td>
+                                  <td className="text-mono" style={{ fontWeight: item.depth_max > 10 ? 700 : 400, color: item.depth_max > 10 ? 'var(--titan-red)' : 'inherit' }}>{item.depth_max != null ? `${item.depth_max} ft` : '—'}</td>
+                                </>
+                              )
+                            )}
                             <td className="text-dim" style={{ maxWidth: 240, fontSize: '0.75rem', lineHeight: 1.4 }}>{item.notes}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
+
+                  {/* ── DEPTH SUMMARY (depth engine) ── */}
+                  {result.depth_summary && (() => {
+                    const ds = result.depth_summary
+                    const order = ds.bucket_order || ['0-6', '6-8', '8-10', '10+']
+                    return (
+                      <div className="depth-section">
+                        <div className="risk-flags-header">
+                          <span className="risk-flags-title">Depth Summary</span>
+                          <span className="risk-flags-subtitle">Excavation depths from profile elevations — trench safety, deep runs, and geotech cross-reference</span>
+                        </div>
+
+                        {/* Headline stats */}
+                        <div className="depth-stats-row">
+                          <div className="depth-stat">
+                            <div className="depth-stat-num">{ds.trench_safety_lf || 0}<span className="depth-stat-unit"> LF</span></div>
+                            <div className="depth-stat-label">Trench Safety (&gt;5 ft, OSHA)</div>
+                          </div>
+                          <div className="depth-stat">
+                            <div className="depth-stat-num" style={{ color: ds.deep_runs?.length ? 'var(--titan-red)' : undefined }}>{ds.deep_runs?.length || 0}</div>
+                            <div className="depth-stat-label">Deep Runs (&gt;10 ft)</div>
+                          </div>
+                          {ds.geotech && (
+                            <div className="depth-stat">
+                              <div className="depth-stat-num" style={{ color: ds.geotech.rock_excavation_total_lf ? 'var(--titan-red)' : undefined }}>
+                                {ds.geotech.rock_excavation_total_lf || 0}<span className="depth-stat-unit"> LF</span>
+                              </div>
+                              <div className="depth-stat-label">Est. Rock Excavation{ds.geotech.rock_depth_ft != null ? ` (rock @ ${ds.geotech.rock_depth_ft} ft)` : ''}</div>
+                            </div>
+                          )}
+                          {ds.crossings?.length > 0 && (
+                            <div className="depth-stat">
+                              <div className="depth-stat-num">{ds.crossings.length}</div>
+                              <div className="depth-stat-label">Utility Crossings</div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Per-run depth buckets */}
+                        {ds.runs?.length > 0 && (
+                          <div className="table-wrap">
+                            <table className="titan-table">
+                              <thead>
+                                <tr>
+                                  {['Run', 'Utility', 'Avg', 'Max', ...order.map(o => `${o} ft`), 'LF >5'].map(h => <th key={h}>{h}</th>)}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {ds.runs.map((r, i) => (
+                                  <tr key={i}>
+                                    <td>{r.run_id}</td>
+                                    <td className="text-dim">{r.utility}</td>
+                                    <td className="text-mono">{r.depth_avg != null ? `${r.depth_avg}` : '—'}</td>
+                                    <td className="text-mono" style={{ fontWeight: r.depth_max > 10 ? 700 : 400, color: r.depth_max > 10 ? 'var(--titan-red)' : 'inherit' }}>{r.depth_max != null ? `${r.depth_max}` : '—'}</td>
+                                    {order.map(o => <td key={o} className="text-mono text-dim">{r.buckets?.[o] ? `${r.buckets[o]}` : '—'}</td>)}
+                                    <td className="text-mono">{r.lf_over_5 != null ? r.lf_over_5 : '—'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
+                        {/* Geotech cross-reference flags */}
+                        {ds.geotech?.groundwater_runs?.length > 0 && (
+                          <div className="depth-flag depth-flag-warn">
+                            <strong>Groundwater:</strong> {ds.geotech.groundwater_runs.length} run{ds.geotech.groundwater_runs.length > 1 ? 's' : ''} reach the water table at {ds.geotech.groundwater_depth_ft} ft — dewatering likely required ({ds.geotech.groundwater_runs.map(r => r.run_id).join(', ')}).
+                          </div>
+                        )}
+
+                        {/* Crossings */}
+                        {ds.crossings?.length > 0 && (
+                          <div className="depth-crossings">
+                            {ds.crossings.map((c, i) => (
+                              <div key={i} className="depth-flag">
+                                <strong>Crossing @ {c.structure}:</strong> {c.utilities.join(' × ')} — controlling depth {c.controlling_depth} ft.
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {/* Depth-unavailable runs */}
+                        {ds.unavailable_runs?.length > 0 && (
+                          <div className="depth-flag depth-flag-muted">
+                            <strong>Depth unavailable</strong> for {ds.unavailable_runs.length} run{ds.unavailable_runs.length > 1 ? 's' : ''} (profile missing/illegible — verify): {ds.unavailable_runs.map(r => r.run_id).join(', ')}.
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
 
                   {/* ── ENGINEER QUANTITY VARIANCE (Pass 5 sanity check) ── */}
                   {result.variance_table?.length > 0 && (

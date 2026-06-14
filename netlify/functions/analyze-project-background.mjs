@@ -73,7 +73,9 @@ const API_CONCURRENCY = 8
 const CHAIN_AFTER_MS = 12 * 60 * 1000
 
 const PASS1_TYPES = new Set(['utility_plan', 'storm', 'sanitary', 'water', 'plan_profile', 'grading', 'paving', 'demo', 'erosion_control', 'landscape', 'electrical', 'other'])
-const DEPTH_BUCKETS = [['0-6', 0, 6], ['6-8', 6, 8], ['8-10', 8, 10], ['10-12', 10, 12], ['12+', 12, Infinity]]
+const DEPTH_BUCKETS = [['0-6', 0, 6], ['6-8', 6, 8], ['8-10', 8, 10], ['10+', 10, Infinity]]
+const TRENCH_SAFETY_FT = 5  // OSHA 1926 Subpart P trigger
+const DEEP_EXCAVATION_FT = 10
 
 // ── Takeoff Brain prompt (editable without code changes) ───────
 let brainCache = null
@@ -437,30 +439,168 @@ function dedupeRuns(runs) {
   return [...byKey.values()]
 }
 
+function structureDepth(s) {
+  if (s.depth_ft != null) return s.depth_ft
+  if (s.rim_elev != null && s.invert_elev != null) return s.rim_elev - s.invert_elev
+  return null
+}
+
 function depthStats(run) {
-  const depths = run.structures
-    .map(s => s.depth_ft != null ? s.depth_ft : (s.rim_elev != null && s.invert_elev != null ? s.rim_elev - s.invert_elev : null))
-    .filter(d => d != null && d >= 0 && d < 100)
+  const depths = run.structures.map(structureDepth).filter(d => d != null && d >= 0 && d < 100)
   if (depths.length === 0) return null
   const avg = depths.reduce((a, b) => a + b, 0) / depths.length
   const max = Math.max(...depths)
-  // Bucket run length by depth, interpolating linearly between consecutive structures
-  let buckets = null
-  if (run.length_lf && depths.length >= 2) {
-    buckets = Object.fromEntries(DEPTH_BUCKETS.map(([k]) => [k, 0]))
-    const segLen = run.length_lf / (depths.length - 1)
-    for (let i = 0; i < depths.length - 1; i++) {
-      const d0 = depths[i], d1 = depths[i + 1]
-      // sample each segment at 10 points
-      for (let s = 0; s < 10; s++) {
-        const d = d0 + (d1 - d0) * (s + 0.5) / 10
-        const bucket = DEPTH_BUCKETS.find(([, lo, hi]) => d >= lo && d < hi)
-        if (bucket) buckets[bucket[0]] += segLen / 10
+
+  // Distribute the run's length across depth samples by linear interpolation
+  // between consecutive structures. Enables LF-by-depth math (buckets, trench
+  // safety LF, rock-excavation LF) for any threshold. A single-structure run
+  // is treated as uniform depth over its full length.
+  let samples = null
+  if (run.length_lf) {
+    samples = []
+    if (depths.length === 1) {
+      samples.push({ depth: depths[0], lf: run.length_lf })
+    } else {
+      const segLen = run.length_lf / (depths.length - 1)
+      for (let i = 0; i < depths.length - 1; i++) {
+        const d0 = depths[i], d1 = depths[i + 1]
+        for (let s = 0; s < 10; s++) {
+          samples.push({ depth: d0 + (d1 - d0) * (s + 0.5) / 10, lf: segLen / 10 })
+        }
       }
     }
-    for (const k of Object.keys(buckets)) buckets[k] = Math.round(buckets[k])
   }
-  return { avg: Math.round(avg * 10) / 10, max: Math.round(max * 10) / 10, buckets }
+
+  let buckets = null, lfOver5 = null
+  if (samples) {
+    buckets = Object.fromEntries(DEPTH_BUCKETS.map(([k]) => [k, 0]))
+    lfOver5 = 0
+    for (const { depth, lf } of samples) {
+      const b = DEPTH_BUCKETS.find(([, lo, hi]) => depth >= lo && depth < hi)
+      if (b) buckets[b[0]] += lf
+      if (depth > TRENCH_SAFETY_FT) lfOver5 += lf
+    }
+    for (const k of Object.keys(buckets)) buckets[k] = Math.round(buckets[k])
+    lfOver5 = Math.round(lfOver5)
+  }
+  return { avg: Math.round(avg * 10) / 10, max: Math.round(max * 10) / 10, buckets, lf_over_5: lfOver5, samples }
+}
+
+// LF of a run deeper than a threshold (e.g. rock line), from the depth samples.
+function lfOverThreshold(stats, threshold) {
+  if (!stats?.samples) return null
+  let lf = 0
+  for (const { depth, lf: segLf } of stats.samples) if (depth > threshold) lf += segLf
+  return Math.round(lf)
+}
+
+// ── Depth engine: derived flags + biddable items from profile depths ──
+// Consumes runs (each carrying ._stats from depthStats and ._itemIdx = the
+// matched merged line item, if any). Mutates merged to flag deep/unavailable
+// runs; returns derived line items + a depth_summary for the report UI.
+function buildDepthEngine(runs, merged, geotech) {
+  const rockDepth = geotech?.rock_depth_ft ?? null
+  const gwDepth = geotech?.groundwater_depth_ft ?? null
+
+  let trenchSafetyLf = 0
+  const runSummaries = [], deepRuns = [], rockHits = [], groundwaterRuns = [], unavailableRuns = []
+
+  for (const run of runs) {
+    const st = run._stats
+    if (!st) {
+      // Gravity run with no usable elevation data — never guess.
+      unavailableRuns.push({ run_id: run.run_id, utility: run.utility })
+      if (run._itemIdx != null && merged[run._itemIdx]) {
+        const it = merged[run._itemIdx]
+        it.note = `DEPTH UNAVAILABLE — verify from profiles. ${it.note || ''}`.trim().slice(0, 1000)
+      }
+      continue
+    }
+
+    trenchSafetyLf += st.lf_over_5 || 0
+    runSummaries.push({
+      run_id: run.run_id, utility: run.utility, length_lf: run.length_lf ?? null,
+      depth_avg: st.avg, depth_max: st.max, buckets: st.buckets, lf_over_5: st.lf_over_5 ?? null,
+    })
+
+    if (st.max > DEEP_EXCAVATION_FT) {
+      deepRuns.push({ run_id: run.run_id, utility: run.utility, depth_max: st.max, length_lf: run.length_lf ?? null })
+      if (run._itemIdx != null && merged[run._itemIdx]) {
+        const it = merged[run._itemIdx]
+        it.status = 'flagged'
+        it.note = `DEEP EXCAVATION (HIGH RISK): ${st.max} ft max depth (>${DEEP_EXCAVATION_FT} ft) — shoring/benching and confined-space considerations. ${it.note || ''}`.trim().slice(0, 1000)
+      }
+    }
+
+    if (rockDepth != null && st.max >= rockDepth) {
+      const rockLf = lfOverThreshold(st, rockDepth)
+      if (rockLf > 0) rockHits.push({ run_id: run.run_id, utility: run.utility, depth_max: st.max, rock_lf: rockLf })
+    }
+    if (gwDepth != null && st.max >= gwDepth) {
+      groundwaterRuns.push({ run_id: run.run_id, utility: run.utility, depth_max: st.max })
+    }
+  }
+
+  // Crossings: structures shared by runs of two or more different utilities.
+  const structMap = new Map()
+  for (const run of runs) {
+    if (!run._stats) continue
+    for (const s of run.structures) {
+      const d = structureDepth(s)
+      const key = normKey(s.id)
+      if (d == null || !key) continue
+      if (!structMap.has(key)) structMap.set(key, [])
+      structMap.get(key).push({ utility: run.utility, depth: Math.round(d * 10) / 10, run_id: run.run_id, struct: s.id })
+    }
+  }
+  const crossings = []
+  for (const arr of structMap.values()) {
+    if (new Set(arr.map(a => a.utility)).size >= 2) {
+      const controlling = arr.reduce((a, b) => (b.depth > a.depth ? b : a))
+      crossings.push({ structure: arr[0].struct, utilities: [...new Set(arr.map(a => a.utility))], controlling_depth: controlling.depth, legs: arr })
+    }
+  }
+
+  // Derived biddable line items
+  const derivedItems = []
+  if (trenchSafetyLf > 0) {
+    derivedItems.push({
+      category: 'EXCAVATION',
+      description: `Trench safety / OSHA protective system (depth > ${TRENCH_SAFETY_FT} ft)`,
+      quantity: Math.round(trenchSafetyLf), unit: 'LF', diameter_in: null, material: null,
+      location: 'Project-wide (from profiles)', confidence: 'MEDIUM',
+      note: `Total trenching deeper than ${TRENCH_SAFETY_FT} ft — OSHA 1926 Subpart P requires shoring, sloping, or a trench shield. Summed from profile-derived depths across all gravity runs; verify against final profiles.`,
+      status: 'active', sheet_id: null, isDerived: true,
+    })
+  }
+  let rockTotal = 0
+  for (const r of rockHits) {
+    rockTotal += r.rock_lf
+    derivedItems.push({
+      category: 'EXCAVATION',
+      description: `Rock excavation (est.) — ${r.run_id}`,
+      quantity: r.rock_lf, unit: 'LF', diameter_in: null, material: null,
+      location: r.run_id, confidence: 'LOW',
+      note: `${r.run_id}: ${r.depth_max} ft max depth vs rock at ${rockDepth} ft — est. ${r.rock_lf} LF below the rock line. Rough estimate from profile interpolation; confirm against geotech borings and rock-excavation unit pricing.`,
+      status: 'flagged', sheet_id: null, isDerived: true,
+    })
+  }
+
+  const depthSummary = {
+    bucket_order: DEPTH_BUCKETS.map(b => b[0]),
+    runs: runSummaries,
+    trench_safety_lf: Math.round(trenchSafetyLf),
+    deep_runs: deepRuns,
+    crossings,
+    unavailable_runs: unavailableRuns,
+    geotech: (rockDepth != null || gwDepth != null) ? {
+      rock_depth_ft: rockDepth,
+      groundwater_depth_ft: gwDepth,
+      rock_excavation_total_lf: Math.round(rockTotal),
+      groundwater_runs: groundwaterRuns,
+    } : null,
+  }
+  return { depthSummary, derivedItems }
 }
 
 // Match a profile run to a merged plan item (same diameter + utility/material token overlap)
@@ -623,11 +763,14 @@ export const handler = async (event) => {
 
     // Reconcile plan lengths vs profile lengths. Mismatch >5% becomes a flagged
     // item with both values shown — never silently averaged.
+    // Depth stats per run, computed once and reused by the depth engine below.
+    runs.forEach(r => { r._stats = depthStats(r); r._itemIdx = null })
+
     const usedItemIdx = new Set()
     const reconciliations = []
     for (const run of runs) {
       const idx = matchRunToItem(run, merged, usedItemIdx)
-      const stats = depthStats(run)
+      const stats = run._stats
       if (idx == null) {
         // Profile run with no plan-view match → add it as its own line item
         if (run.length_lf) {
@@ -640,10 +783,12 @@ export const handler = async (event) => {
             sheet_id: p2Sheets[0]?.id || null, source_ids: [],
             depth: stats, status: 'active',
           })
+          run._itemIdx = merged.length - 1
         }
         continue
       }
       usedItemIdx.add(idx)
+      run._itemIdx = idx
       const item = merged[idx]
       if (stats) item.depth = stats
       if (run.length_lf != null && item.quantity != null) {
@@ -683,6 +828,18 @@ export const handler = async (event) => {
     // ── PASS 5 variance: engineerRows came from resumable pass5 tiles above ──
     const variance = engineerRows.length > 0 ? buildVariance(engineerRows, merged) : []
 
+    // ── DEPTH ENGINE: trench safety, deep excavation, crossings, geotech ──
+    await updateJob(job_id, { progress: 94, stage_detail: 'Computing depth engine (trench safety, geotech)' })
+    const { data: projGeo } = await supabase
+      .from('projects')
+      .select('geotech_rock_depth_ft, geotech_groundwater_depth_ft')
+      .eq('id', project_id).single()
+    const geotech = (projGeo && (projGeo.geotech_rock_depth_ft != null || projGeo.geotech_groundwater_depth_ft != null))
+      ? { rock_depth_ft: projGeo.geotech_rock_depth_ft, groundwater_depth_ft: projGeo.geotech_groundwater_depth_ft }
+      : null
+    const { depthSummary, derivedItems } = buildDepthEngine(runs, merged, geotech)
+    derivedItems.forEach(d => merged.push(d))
+
     // ── Write results ────────────────────────────────────────
     await updateJob(job_id, { progress: 96, stage_detail: 'Writing line items' })
 
@@ -707,6 +864,7 @@ export const handler = async (event) => {
     }
 
     // Consolidated result for the dashboard (shaped like the existing takeoff JSON)
+    const GRAVITY = new Set(['sanitary', 'storm'])
     const items = merged.map((m, i) => ({
       item_no: i + 1,
       category: m.category,
@@ -714,6 +872,12 @@ export const handler = async (event) => {
       unit: m.unit,
       quantity: m.quantity ?? 0,
       confidence: m.confidence,
+      depth_avg: m.depth?.avg ?? null,
+      depth_max: m.depth?.max ?? null,
+      // Gravity pipe with no profile depth → explicit "unavailable" rather than blank.
+      depth_unavailable: m.category === 'PIPE' && !m.depth &&
+        GRAVITY.has((m.description || '').toLowerCase().includes('sanitary') ? 'sanitary'
+          : (m.description || '').toLowerCase().includes('storm') ? 'storm' : ''),
       notes: [
         m.status === 'flagged' ? '⚠ FLAGGED.' : null,
         m.depth ? `Depth avg ${m.depth.avg} ft / max ${m.depth.max} ft.` : null,
@@ -730,11 +894,12 @@ export const handler = async (event) => {
         high_confidence_count: counts.HIGH,
         medium_confidence_count: counts.MEDIUM,
         low_confidence_count: counts.LOW,
-        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
+        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (>5 ft).` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
       },
+      depth_summary: depthSummary,
       variance_table: variance,
       reconciliations,
-      profile_runs: runs,
+      profile_runs: runs.map(({ _stats, _itemIdx, ...r }) => r),
       pass_stats: {
         sheets_analyzed: sheets.length,
         pass1_raw_items: p1Items.length,
@@ -742,6 +907,7 @@ export const handler = async (event) => {
         merged_items: merged.length,
         pass4_raw_items: p4Items.length,
         engineer_rows: engineerRows.length,
+        trench_safety_lf: depthSummary.trench_safety_lf,
       },
     }
 

@@ -1807,3 +1807,81 @@
 .variance-section {
   margin-top: 24px;
 }
+
+/* —— DEPTH SUMMARY (depth engine) —— */
+.depth-section {
+  margin-top: 24px;
+}
+
+.depth-stats-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0 16px;
+}
+
+.depth-stat {
+  flex: 1;
+  min-width: 150px;
+  background: var(--titan-surface);
+  border: 1px solid var(--titan-border);
+  border-left: 3px solid var(--titan-red);
+  border-radius: 3px;
+  padding: 12px 14px;
+}
+
+.depth-stat-num {
+  font-family: var(--font-display);
+  font-size: 1.6rem;
+  line-height: 1;
+  color: var(--titan-white);
+}
+
+.depth-stat-unit {
+  font-size: 0.9rem;
+  color: var(--titan-text-muted);
+}
+
+.depth-stat-label {
+  font-size: 0.66rem;
+  font-family: var(--font-mono);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  margin-top: 5px;
+}
+
+.depth-unavail {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--titan-yellow, #d4a017);
+  text-align: center;
+  letter-spacing: 0.3px;
+}
+
+.depth-flag {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  padding: 8px 12px;
+  border-left: 3px solid var(--titan-border-light);
+  background: var(--titan-surface);
+  border-radius: 2px;
+  margin-top: 8px;
+  color: var(--titan-text-dim);
+}
+
+.depth-flag strong { color: var(--titan-white); }
+
+.depth-flag-warn {
+  border-left-color: var(--titan-red);
+  background: rgba(0, 87, 255, 0.06);
+}
+
+.depth-flag-muted {
+  border-left-color: var(--titan-border-light);
+  color: var(--titan-text-muted);
+}
+
+.depth-crossings {
+  margin-top: 4px;
+}

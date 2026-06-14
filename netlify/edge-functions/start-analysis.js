@@ -38,9 +38,19 @@ export default async (request) => {
   } catch {
     return new Response('Invalid JSON', { status: 400 })
   }
-  const { project_id } = body
+  const { project_id, geotech } = body
   if (!project_id) {
     return new Response('Missing project_id', { status: 400 })
+  }
+
+  // Persist geotech findings (rock depth, groundwater depth) on the project so
+  // the depth engine can cross-reference them server-side across resumable runs.
+  if (geotech && (geotech.rock_depth_ft != null || geotech.groundwater_depth_ft != null)) {
+    await supabase.from('projects').update({
+      geotech_rock_depth_ft: geotech.rock_depth_ft ?? null,
+      geotech_groundwater_depth_ft: geotech.groundwater_depth_ft ?? null,
+      geotech_summary: geotech.summary ?? null,
+    }).eq('id', project_id)
   }
 
   // RLS guarantees this only returns the user's own sheets
