@@ -38,6 +38,30 @@ function getSupabase() {
   return supabase
 }
 
+// Updates a job via the raw Supabase REST API — independent of the supabase-js
+// client, so it still works if createClient() itself failed. Used for the
+// handler heartbeat and the top-level error reporter so failures are never
+// invisible (a silently-stuck job is the worst failure mode).
+async function rawJobUpdate(jobId, fields) {
+  try {
+    const url = process.env.VITE_SUPABASE_URL
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+    const res = await fetch(`${url}/rest/v1/processing_jobs?id=eq.${jobId}`, {
+      method: 'PATCH',
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        'Content-Type': 'application/json',
+        Prefer: 'return=minimal',
+      },
+      body: JSON.stringify(fields),
+    })
+    if (!res.ok) console.error('rawJobUpdate non-OK:', res.status, await res.text())
+  } catch (e) {
+    console.error('rawJobUpdate threw:', e.message)
+  }
+}
+
 const OPUS = 'claude-opus-4-8'
 const HAIKU = 'claude-haiku-4-5-20251001'
 const API_CONCURRENCY = 4
@@ -449,21 +473,19 @@ function buildVariance(engineerRows, items) {
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405 }
 
-  try {
-    getSupabase() // populates module-level `supabase` for all code below
-  } catch (err) {
-    console.error('FATAL — cannot start:', err.message)
-    return { statusCode: 500, body: err.message }
-  }
-
   let body
   try { body = JSON.parse(event.body) } catch { return { statusCode: 400, body: 'Invalid JSON' } }
   const { job_id, project_id } = body
   if (!job_id || !project_id) return { statusCode: 400, body: 'Missing fields' }
 
+  // Heartbeat via raw REST — proves the handler actually started. If the job
+  // never leaves this state, the crash is at module load / cold start.
+  await rawJobUpdate(job_id, { stage: 'analysis_pass_1', progress: 1, stage_detail: 'Starting — initializing' })
+
   const deadline = Date.now() + DEADLINE_MS
 
   try {
+    getSupabase() // populates module-level `supabase` for all code below
     loadBrain() // fail fast and loudly if the prompt file didn't ship
 
     // ── Load analysis set ────────────────────────────────────
@@ -685,7 +707,8 @@ export const handler = async (event) => {
     const msg = err.message === 'deadline'
       ? 'Analysis hit the 15-minute processing limit. Reduce the number of sheets in the analysis set and re-run.'
       : `Analysis failed: ${err.message}`
-    await updateJob(job_id, { stage: 'error', error: msg, stage_detail: null })
+    // Raw REST — works even if the supabase-js client is what failed.
+    await rawJobUpdate(job_id, { stage: 'error', error: msg, stage_detail: null })
     return { statusCode: 200 }
   }
 }
