@@ -66,8 +66,11 @@ async function rawJobUpdate(jobId, fields) {
 
 const OPUS = 'claude-opus-4-8'
 const HAIKU = 'claude-haiku-4-5-20251001'
-const API_CONCURRENCY = 4
-const DEADLINE_MS = 13 * 60 * 1000 // bail before Netlify's 15-min kill
+const API_CONCURRENCY = 8
+// Re-chain to a fresh invocation at 12 min, leaving buffer before Netlify's
+// 15-min hard kill. Per-tile results are persisted, so the next invocation
+// resumes exactly where this one stopped.
+const CHAIN_AFTER_MS = 12 * 60 * 1000
 
 const PASS1_TYPES = new Set(['utility_plan', 'storm', 'sanitary', 'water', 'plan_profile', 'grading', 'paving', 'demo', 'erosion_control', 'landscape', 'electrical', 'other'])
 const DEPTH_BUCKETS = [['0-6', 0, 6], ['6-8', 6, 8], ['8-10', 8, 10], ['10-12', 10, 12], ['12+', 12, Infinity]]
@@ -272,6 +275,12 @@ function validateEngineerRows(raw) {
     }))
 }
 
+// Pass 5 tile validator: only keep rows when the model confirmed a table.
+function validateEngineerTile(parsed) {
+  if (!parsed || parsed.table_found !== true) return []
+  return validateEngineerRows(parsed.rows)
+}
+
 // ── Tiling ─────────────────────────────────────────────────────
 // Grid decided from hypothetical 250-DPI pixel dims. Each tile renders at its
 // own scale so the long edge lands at the API's 1568px max — equivalent to
@@ -331,40 +340,85 @@ function tileContext(sheet, tile) {
   return `CONTEXT: Sheet "${label}" (classification: ${sheet.classification || 'unknown'}). This image is the ${tile.position} of a ${tile.grid} tile grid; tiles overlap neighbors by ~15%.`
 }
 
-// Runs an extraction pass (1, 2 or 4) over [sheet × tile] with Opus.
-async function runTilePass({ mupdf, doc, sheets, task, validator, resultKey, passName, jobId, progressFrom, progressTo, deadline }) {
-  const brain = loadBrain()
-  const collected = []
-  let done = 0
-  // Build the full tile work list sheet-by-sheet (render once, free after queueing)
+// Runs a tile-extraction pass (1, 2, 4, or 5) resumably. Each tile's validated
+// result is persisted to analysis_tiles as it completes, so a later invocation
+// skips tiles already done. When the chain deadline is hit, it stops scheduling
+// new work and returns { incomplete: true } — the caller re-invokes the function.
+async function runTilePassResumable({ mupdf, doc, sheets, task, system, model, validator, resultKey, passKey, passName, jobId, progressFrom, progressTo, chainDeadline }) {
+  // Which tiles are already done (from a prior invocation)?
+  const done = new Set()
+  const { data: doneRows } = await supabase
+    .from('analysis_tiles').select('tile_key').eq('job_id', jobId).eq('pass', passKey)
+  ;(doneRows || []).forEach(r => done.add(r.tile_key))
+
+  // Build the remaining work list. Skip rendering pages whose every tile is done.
   const work = []
   for (const sheet of sheets) {
     const tiles = renderTiles(mupdf, doc, sheet.page_number - 1)
-    tiles.forEach(t => work.push({ sheet, tile: t }))
+    for (const tile of tiles) {
+      const tile_key = `${sheet.id}:${tile.position}`
+      if (!done.has(tile_key)) work.push({ sheet, tile, tile_key })
+    }
   }
-  if (work.length === 0) return []
 
-  await pool(work, API_CONCURRENCY, async ({ sheet, tile }) => {
-    if (Date.now() > deadline) throw new Error('deadline')
+  const total = done.size + work.length
+  let completed = done.size
+  if (work.length === 0) return { incomplete: false, total, completed }
+
+  let hitDeadline = false
+  await pool(work, API_CONCURRENCY, async ({ sheet, tile, tile_key }) => {
+    if (Date.now() > chainDeadline) { hitDeadline = true; return }
     const content = [
       { type: 'text', text: tileContext(sheet, tile) },
       { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tile.base64 } },
       { type: 'text', text: task },
     ]
+    let valid = []
     try {
-      const text = await callClaude({ model: OPUS, system: brain, content })
+      const text = await callClaude({ model, system, content })
       const parsed = parseJson(text)
-      const valid = validator(Array.isArray(parsed) ? parsed : parsed?.[resultKey], passName)
-      valid.forEach(v => collected.push({ ...v, sheet_id: sheet.id, sheet_label: sheet.sheet_number || `pg ${sheet.page_number}`, tile: tile.position }))
+      // resultKey null → hand the whole parsed object to the validator (Pass 5
+      // needs to see table_found); otherwise extract the named array.
+      const raw = Array.isArray(parsed) ? parsed : (resultKey ? parsed?.[resultKey] : parsed)
+      valid = validator(raw, passName)
+        .map(v => ({ ...v, sheet_id: sheet.id, sheet_label: sheet.sheet_number || `pg ${sheet.page_number}`, tile: tile.position }))
     } catch (err) {
-      if (err.message === 'deadline') throw err
-      console.error(`${passName} tile error (${sheet.sheet_number || sheet.page_number}/${tile.position}):`, err.message)
+      // Persist an empty result so a hard-failing tile isn't retried forever.
+      console.error(`${passName} tile error (${tile_key}):`, err.message)
+      valid = []
     }
-    done++
-    const progress = progressFrom + Math.round((done / work.length) * (progressTo - progressFrom))
-    await updateJob(jobId, { progress, stage_detail: `${passName} — tile ${done}/${work.length}` })
+    await supabase.from('analysis_tiles').upsert(
+      { job_id: jobId, pass: passKey, tile_key, result_json: valid },
+      { onConflict: 'job_id,pass,tile_key' },
+    )
+    completed++
+    const progress = progressFrom + Math.round((completed / total) * (progressTo - progressFrom))
+    await updateJob(jobId, { progress, stage_detail: `${passName} — ${completed}/${total} tiles` })
   })
-  return collected
+  return { incomplete: hitDeadline, total, completed }
+}
+
+// Reads back every persisted tile result for a pass, flattened.
+async function loadPassResults(jobId, passKey) {
+  const { data } = await supabase
+    .from('analysis_tiles').select('result_json').eq('job_id', jobId).eq('pass', passKey)
+  return (data || []).flatMap(r => Array.isArray(r.result_json) ? r.result_json : [])
+}
+
+// Re-invokes this background function to continue a paused job (fire-and-forget;
+// background functions ack 202 immediately).
+async function reinvokeSelf(jobId, projectId) {
+  const site = process.env.URL || process.env.DEPLOY_PRIME_URL
+  if (!site) { console.error('reinvokeSelf: no site URL env'); return }
+  try {
+    await fetch(`${site}/.netlify/functions/analyze-project-background`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId, project_id: projectId }),
+    })
+  } catch (e) {
+    console.error('reinvokeSelf failed:', e.message)
+  }
 }
 
 // ── Pass 3 code-side: profile run dedupe, depth math, reconciliation ──
@@ -488,8 +542,6 @@ export const handler = async (event) => {
   // never leaves this state, the crash is at module load / cold start.
   await rawJobUpdate(job_id, { stage: 'analysis_pass_1', progress: 1, stage_detail: 'Starting — initializing' })
 
-  const deadline = Date.now() + DEADLINE_MS
-
   try {
     getSupabase() // populates module-level `supabase` for all code below
     loadBrain() // fail fast and loudly if the prompt file didn't ship
@@ -515,25 +567,40 @@ export const handler = async (event) => {
     const p1Sheets = sheets.filter(s => PASS1_TYPES.has(s.classification))
     const p2Sheets = sheets.filter(s => s.classification === 'plan_profile')
 
-    // ── PASS 1: plan quantities (Opus) ───────────────────────
-    await updateJob(job_id, { stage: 'analysis_pass_1', progress: 5, stage_detail: 'Pass 1/5 — extracting plan quantities' })
-    const p1Items = await runTilePass({
-      mupdf, doc, sheets: p1Sheets, task: PASS1_TASK, validator: validateItems,
-      resultKey: 'items', passName: 'Pass 1/5 plan quantities', jobId: job_id,
-      progressFrom: 5, progressTo: 38, deadline,
-    })
+    const chainDeadline = Date.now() + CHAIN_AFTER_MS
+    const brain = loadBrain()
 
-    // ── PASS 2: profiles (Opus) ──────────────────────────────
-    await updateJob(job_id, { stage: 'analysis_pass_2', progress: 40, stage_detail: 'Pass 2/5 — reading profiles' })
-    const p2Raw = await runTilePass({
-      mupdf, doc, sheets: p2Sheets, task: PASS2_TASK, validator: validateRuns,
-      resultKey: 'runs', passName: 'Pass 2/5 profiles', jobId: job_id,
-      progressFrom: 40, progressTo: 56, deadline,
-    })
+    // ── Tile-extraction passes (1, 2, 4, 5) — resumable & self-chaining ──
+    // Each persists per-tile results to analysis_tiles. If the chain deadline is
+    // hit mid-pass, we re-invoke the function and return; it resumes here, skips
+    // done tiles, and continues. Pass 3 (merge/reconcile) is code+Haiku assembly
+    // that runs only once all tile passes are complete.
+    const TILE_PASSES = [
+      { passKey: 'pass1', passName: 'Pass 1/5 plan quantities', stage: 'analysis_pass_1', sheets: p1Sheets, task: PASS1_TASK, system: brain, model: OPUS, validator: validateItems, resultKey: 'items', progressFrom: 2, progressTo: 40 },
+      { passKey: 'pass2', passName: 'Pass 2/5 profiles', stage: 'analysis_pass_2', sheets: p2Sheets, task: PASS2_TASK, system: brain, model: OPUS, validator: validateRuns, resultKey: 'runs', progressFrom: 40, progressTo: 52 },
+      { passKey: 'pass4', passName: 'Pass 4/5 small-dia sweep', stage: 'analysis_pass_4', sheets: p1Sheets, task: PASS4_TASK, system: brain, model: OPUS, validator: validateItems, resultKey: 'items', progressFrom: 52, progressTo: 78 },
+      { passKey: 'pass5', passName: 'Pass 5/5 engineer tables', stage: 'analysis_pass_5', sheets, task: PASS5_TASK, system: null, model: HAIKU, validator: validateEngineerTile, resultKey: null, progressFrom: 78, progressTo: 88 },
+    ]
+
+    for (const tp of TILE_PASSES) {
+      await updateJob(job_id, { stage: tp.stage, stage_detail: `${tp.passName} — scanning` })
+      const r = await runTilePassResumable({ mupdf, doc, ...tp, jobId: job_id, chainDeadline })
+      if (r.incomplete) {
+        await updateJob(job_id, { stage_detail: `${tp.passName} — ${r.completed}/${r.total} tiles, continuing in a fresh run…` })
+        await reinvokeSelf(job_id, project_id)
+        return { statusCode: 200 }
+      }
+    }
+
+    // All tiles done — assemble from persisted scratch.
+    const p1Items = await loadPassResults(job_id, 'pass1')
+    const p2Raw = await loadPassResults(job_id, 'pass2')
+    const p4Items = await loadPassResults(job_id, 'pass4')
+    const engineerRows = await loadPassResults(job_id, 'pass5')
     const runs = dedupeRuns(p2Raw)
 
     // ── PASS 3: merge + dedupe (Haiku) + code reconciliation ─
-    await updateJob(job_id, { stage: 'analysis_pass_3', progress: 58, stage_detail: 'Pass 3/5 — merging tiles, reconciling plan vs profile' })
+    await updateJob(job_id, { stage: 'analysis_pass_3', progress: 90, stage_detail: 'Pass 3/5 — merging tiles, reconciling plan vs profile' })
     let merged = []
     if (p1Items.length > 0) {
       const numbered = p1Items.map((it, i) => ({ id: i, sheet: it.sheet_label, tile: it.tile, ...it, sheet_id: undefined }))
@@ -594,13 +661,9 @@ export const handler = async (event) => {
       }
     }
 
-    // ── PASS 4: small-diameter sweep (Opus) ──────────────────
-    await updateJob(job_id, { stage: 'analysis_pass_4', progress: 68, stage_detail: 'Pass 4/5 — small-diameter sweep (≤2")' })
-    const p4Items = await runTilePass({
-      mupdf, doc, sheets: p1Sheets, task: PASS4_TASK, validator: validateItems,
-      resultKey: 'items', passName: 'Pass 4/5 small-dia sweep', jobId: job_id,
-      progressFrom: 68, progressTo: 86, deadline,
-    })
+    // ── PASS 4 dedupe: fold small-diameter sweep into merged set (Haiku) ──
+    // p4Items came from the resumable pass4 tiles loaded above.
+    await updateJob(job_id, { progress: 92, stage_detail: 'Folding in small-diameter findings' })
     if (p4Items.length > 0) {
       const existingBrief = merged.map(m => ({ description: m.description, quantity: m.quantity, unit: m.unit, location: m.location }))
       const candidates = p4Items.map((it, i) => ({ id: i, sheet: it.sheet_label, tile: it.tile, ...it, sheet_id: undefined }))
@@ -616,31 +679,7 @@ export const handler = async (event) => {
       }))
     }
 
-    // ── PASS 5: engineer quantity table sanity check (Haiku) ─
-    await updateJob(job_id, { stage: 'analysis_pass_5', progress: 88, stage_detail: 'Pass 5/5 — checking for engineer quantity tables' })
-    const engineerRows = []
-    const p5Work = []
-    for (const sheet of sheets) {
-      renderTiles(mupdf, doc, sheet.page_number - 1).forEach(t => p5Work.push({ sheet, tile: t }))
-    }
-    await pool(p5Work, API_CONCURRENCY, async ({ sheet, tile }) => {
-      if (Date.now() > deadline) throw new Error('deadline')
-      try {
-        const text = await callClaude({
-          model: HAIKU, maxTokens: 4096,
-          content: [
-            { type: 'text', text: tileContext(sheet, tile) },
-            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tile.base64 } },
-            { type: 'text', text: PASS5_TASK },
-          ],
-        })
-        const parsed = parseJson(text)
-        if (parsed?.table_found) engineerRows.push(...validateEngineerRows(parsed.rows))
-      } catch (err) {
-        if (err.message === 'deadline') throw err
-        console.error('Pass 5 tile error:', err.message)
-      }
-    })
+    // ── PASS 5 variance: engineerRows came from resumable pass5 tiles above ──
     const variance = engineerRows.length > 0 ? buildVariance(engineerRows, merged) : []
 
     // ── Write results ────────────────────────────────────────
@@ -706,15 +745,14 @@ export const handler = async (event) => {
     }
 
     await supabase.from('analysis_results').insert({ project_id, job_id, result_json: resultJson })
+    // Scratch tiles no longer needed once the result is persisted.
+    await supabase.from('analysis_tiles').delete().eq('job_id', job_id)
     await updateJob(job_id, { stage: 'complete', progress: 100, stage_detail: `${items.length} line items — analysis complete` })
     return { statusCode: 200 }
   } catch (err) {
     console.error('Analysis pipeline error:', err)
-    const msg = err.message === 'deadline'
-      ? 'Analysis hit the 15-minute processing limit. Reduce the number of sheets in the analysis set and re-run.'
-      : `Analysis failed: ${err.message}`
     // Raw REST — works even if the supabase-js client is what failed.
-    await rawJobUpdate(job_id, { stage: 'error', error: msg, stage_detail: null })
+    await rawJobUpdate(job_id, { stage: 'error', error: `Analysis failed: ${err.message}`, stage_detail: null })
     return { statusCode: 200 }
   }
 }
