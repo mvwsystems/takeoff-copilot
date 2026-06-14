@@ -20,9 +20,11 @@
 import { createClient } from '@supabase/supabase-js'
 import fs from 'fs'
 import path from 'path'
-import { fileURLToPath } from 'url'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+// NOTE: do NOT use import.meta.url here. Netlify's esbuild bundles these .mjs
+// functions to CommonJS, where import.meta.url is undefined — fileURLToPath()
+// then throws at module load, crashing the function before the handler runs
+// (an invisible cold-start failure). The CJS bundle provides __dirname natively.
 
 // Lazy client — module-level createClient with a missing env var dies at cold
 // start before any logging, leaving jobs invisibly stuck.
@@ -74,12 +76,16 @@ const DEPTH_BUCKETS = [['0-6', 0, 6], ['6-8', 6, 8], ['8-10', 8, 10], ['10-12', 
 let brainCache = null
 function loadBrain() {
   if (brainCache) return brainCache
-  const candidates = [
-    path.join(__dirname, 'server/prompts/takeoff-brain.md'),
-    path.join(__dirname, '../../server/prompts/takeoff-brain.md'),
-    path.join(process.cwd(), 'server/prompts/takeoff-brain.md'),
-    path.join(process.env.LAMBDA_TASK_ROOT || '.', 'server/prompts/takeoff-brain.md'),
-  ]
+  // __dirname is the CJS-bundled function dir (e.g. /var/task/netlify/functions);
+  // included_files places server/prompts/** under the task root (/var/task).
+  const dir = typeof __dirname !== 'undefined' ? __dirname : process.cwd()
+  const roots = [
+    process.env.LAMBDA_TASK_ROOT,
+    process.cwd(),
+    dir,
+    path.join(dir, '..', '..'),
+  ].filter(Boolean)
+  const candidates = roots.map(r => path.join(r, 'server/prompts/takeoff-brain.md'))
   for (const p of candidates) {
     try {
       brainCache = fs.readFileSync(p, 'utf8')

@@ -6,12 +6,10 @@
 import { createClient } from '@supabase/supabase-js'
 import fs from 'fs'
 import path from 'path'
-import { fileURLToPath } from 'url'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export const handler = async () => {
-  const report = { ok: true, dirname: __dirname, steps: {} }
+  const dir = typeof __dirname !== 'undefined' ? __dirname : process.cwd()
+  const report = { ok: true, dirname: dir, steps: {} }
 
   // 1. createClient
   try {
@@ -21,8 +19,8 @@ export const handler = async () => {
 
   // 2. brain file load — try every candidate path, report which exist
   const candidates = [
-    path.join(__dirname, 'server/prompts/takeoff-brain.md'),
-    path.join(__dirname, '../../server/prompts/takeoff-brain.md'),
+    path.join(dir, 'server/prompts/takeoff-brain.md'),
+    path.join(dir, '../../server/prompts/takeoff-brain.md'),
     path.join(process.cwd(), 'server/prompts/takeoff-brain.md'),
     path.join(process.env.LAMBDA_TASK_ROOT || '.', 'server/prompts/takeoff-brain.md'),
   ]
