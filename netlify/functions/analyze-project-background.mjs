@@ -540,7 +540,8 @@ export const handler = async (event) => {
 
   // Heartbeat via raw REST — proves the handler actually started. If the job
   // never leaves this state, the crash is at module load / cold start.
-  await rawJobUpdate(job_id, { stage: 'analysis_pass_1', progress: 1, stage_detail: 'Starting — initializing' })
+  // Clear any stale error from a prior failed attempt on this job.
+  await rawJobUpdate(job_id, { stage: 'analysis_pass_1', progress: 1, error: null, stage_detail: 'Starting — initializing' })
 
   try {
     getSupabase() // populates module-level `supabase` for all code below
