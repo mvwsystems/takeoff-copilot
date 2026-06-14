@@ -121,19 +121,9 @@ export default function Dashboard() {
             setResults(prev => ({ ...prev, [idx]: ar.result_json }))
             setActiveImage(idx)
             setActiveTab('takeoff')
-            // Log to job history (same as the client-side analyze path)
-            if (user) {
-              supabase.from('jobs').insert({
-                user_id: user.id,
-                plan_filename: imagesRef.current[idx]?.name || null,
-                line_item_count: ar.result_json.items?.length || 0,
-                result_json: ar.result_json,
-              }).select('id').then(({ data }) => {
-                if (data?.[0]?.id) setActiveJobId(data[0].id)
-                loadHistory()
-              })
-            }
           }
+          // History is written server-side on completion; refresh the list.
+          loadHistory()
           return
         }
 

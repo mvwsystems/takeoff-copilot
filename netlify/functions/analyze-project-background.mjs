@@ -746,6 +746,21 @@ export const handler = async (event) => {
     }
 
     await supabase.from('analysis_results').insert({ project_id, job_id, result_json: resultJson })
+
+    // Write a job-history row server-side so the result is always reachable from
+    // "Recent Jobs" — even if the user's browser wasn't open at completion (the
+    // Realtime event only fires for open sessions).
+    const { data: proj } = await supabase.from('projects').select('user_id, name').eq('id', project_id).single()
+    if (proj?.user_id) {
+      await supabase.from('jobs').insert({
+        user_id: proj.user_id,
+        plan_filename: proj.name || 'Plan Set',
+        line_item_count: items.length,
+        risk_flag_count: reconciliations.length,
+        result_json: resultJson,
+      })
+    }
+
     // Scratch tiles no longer needed once the result is persisted.
     await supabase.from('analysis_tiles').delete().eq('job_id', job_id)
     await updateJob(job_id, { stage: 'complete', progress: 100, stage_detail: `${items.length} line items — analysis complete` })
