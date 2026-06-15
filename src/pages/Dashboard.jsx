@@ -58,6 +58,8 @@ export default function Dashboard() {
   const chatScrollRef = useRef(null)
   const [sheetMaps, setSheetMaps] = useState({})    // { project_id: { sheets, loaded } }
   const [proceedingAnalysis, setProceedingAnalysis] = useState(false)
+  const [materialsMap, setMaterialsMap] = useState({})   // slug -> material row
+  const [materialCard, setMaterialCard] = useState(null) // open material slug
   const imagesRef = useRef([])
   useEffect(() => { imagesRef.current = images }, [images])
 
@@ -255,6 +257,13 @@ INSTRUCTIONS:
   }
 
   useEffect(() => { localStorage.setItem('tc_job_type', jobType) }, [jobType])
+
+  // Materials catalog (reference data) — fetched once, keyed by slug for thumbnails.
+  useEffect(() => {
+    supabase.from('materials').select('slug, name, category, image_path, spec_summary').then(({ data }) => {
+      if (data) setMaterialsMap(Object.fromEntries(data.map(m => [m.slug, m])))
+    })
+  }, [])
 
   // Skip onboarding for users who already have a Supabase profile
   useEffect(() => {
@@ -869,10 +878,23 @@ INSTRUCTIONS:
     const gradeColor = sc?.grade === 'A' ? '#2ECC71' : sc?.grade === 'B' ? '#F1C40F' : '#E8372C'
     const confColor = c => c === 'HIGH' ? '#2ECC71' : c === 'MEDIUM' ? '#F1C40F' : '#E8372C'
 
+    // Material thumbnails — absolute URLs so they resolve in the print window
+    // (the export opens a blob document whose origin can't resolve relative paths).
+    const origin = window.location.origin
+    const hasMat = res.items?.some(it => it.material_slug && materialsMap[it.material_slug])
+    const thumbCell = (item) => {
+      if (!hasMat) return ''
+      const mat = item.material_slug && materialsMap[item.material_slug]
+      return mat
+        ? `<td class="center"><img src="${origin}${mat.image_path}" width="22" height="22" alt=""/></td>`
+        : `<td></td>`
+    }
+
     const itemRows = res.items.map(item => `
       <tr>
         <td class="mono muted">${item.item_no}</td>
         <td><span class="cat">${item.category}</span></td>
+        ${thumbCell(item)}
         <td>${item.description}</td>
         <td class="mono center">${item.unit}</td>
         <td class="mono bold center">${item.quantity}</td>
@@ -1051,7 +1073,7 @@ INSTRUCTIONS:
     <div class="section-head">Quantity Takeoff — ${res.items.length} Items // ${res.summary?.high_confidence_count || 0} High // ${res.summary?.medium_confidence_count || 0} Medium // ${res.summary?.low_confidence_count || 0} Low</div>
     <table>
       <thead>
-        <tr><th>#</th><th>Cat</th><th>Description</th><th>Unit</th><th>Qty</th><th>Conf</th><th>Notes</th></tr>
+        <tr><th>#</th><th>Cat</th>${hasMat ? '<th>Mat</th>' : ''}<th>Description</th><th>Unit</th><th>Qty</th><th>Conf</th><th>Notes</th></tr>
       </thead>
       <tbody>${itemRows}</tbody>
     </table>
@@ -1405,6 +1427,46 @@ INSTRUCTIONS:
 
   return (
     <div className="dashboard">
+      {/* MATERIAL CARD MODAL */}
+      {materialCard && materialsMap[materialCard] && (() => {
+        const mat = materialsMap[materialCard]
+        const usedBy = (result?.items || []).filter(it => it.material_slug === materialCard)
+        return (
+          <div className="modal-overlay" onClick={() => setMaterialCard(null)}>
+            <div className="modal card material-card" onClick={e => e.stopPropagation()}>
+              <button className="material-card-close" onClick={() => setMaterialCard(null)}><X size={16} /></button>
+              <div className="material-card-head">
+                <img src={mat.image_path} className="material-card-img" alt={mat.name} />
+                <div>
+                  <div className="material-card-cat">{mat.category}</div>
+                  <div className="material-card-name">{mat.name}</div>
+                  <div className="material-card-spec">{mat.spec_summary}</div>
+                </div>
+              </div>
+              <div className="material-card-usage-label">
+                On this job — {usedBy.length} line item{usedBy.length === 1 ? '' : 's'}
+              </div>
+              <div className="table-wrap" style={{ maxHeight: 280, overflowY: 'auto' }}>
+                <table className="titan-table">
+                  <thead><tr>{['Description', 'Qty', 'Unit', 'Conf'].map(h => <th key={h}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {usedBy.map((it, i) => (
+                      <tr key={i}>
+                        <td style={{ maxWidth: 360 }}>{it.description}</td>
+                        <td className="text-mono" style={{ fontWeight: 600 }}>{it.quantity}</td>
+                        <td className="text-mono text-dim">{it.unit}</td>
+                        <td><span className={`badge ${confidenceColor(it.confidence)}`}>{it.confidence}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="material-card-note">Placeholder illustration — swap <code>{mat.image_path}</code> for a product photo anytime.</div>
+            </div>
+          </div>
+        )
+      })()}
+
       {/* ONBOARDING MODAL */}
       {showOnboarding && (
         <div className="modal-overlay">
@@ -2133,7 +2195,7 @@ INSTRUCTIONS:
                       <thead>
                         <tr>
                           {(result.depth_summary
-                            ? ['#', 'Cat', 'Description', 'Unit', 'Qty', 'Conf', 'Depth Avg', 'Depth Max', 'Notes']
+                            ? ['#', 'Cat', 'Mat', 'Description', 'Unit', 'Qty', 'Conf', 'Depth Avg', 'Depth Max', 'Notes']
                             : ['#', 'Cat', 'Description', 'Unit', 'Qty', 'Conf', 'Notes']
                           ).map(h => (
                             <th key={h}>{h}</th>
@@ -2145,6 +2207,19 @@ INSTRUCTIONS:
                           <tr key={i}>
                             <td className="text-muted">{item.item_no}</td>
                             <td><span className="cat-badge">{categoryIcon(item.category)} {item.category}</span></td>
+                            {result.depth_summary && (
+                              <td className="mat-cell">
+                                {item.material_slug && materialsMap[item.material_slug] ? (
+                                  <img
+                                    src={materialsMap[item.material_slug].image_path}
+                                    className="mat-thumb"
+                                    alt={materialsMap[item.material_slug].name}
+                                    title={`${materialsMap[item.material_slug].name} — click for details`}
+                                    onClick={() => setMaterialCard(item.material_slug)}
+                                  />
+                                ) : <span className="mat-thumb-empty">—</span>}
+                              </td>
+                            )}
                             <td style={{ maxWidth: 320 }}>{item.description}</td>
                             <td className="text-mono text-dim">{item.unit}</td>
                             <td className="text-mono" style={{ fontWeight: 600, color: 'var(--titan-white)', fontSize: '0.9rem' }}>{item.quantity}</td>

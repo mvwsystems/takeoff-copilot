@@ -1924,3 +1924,107 @@
   color: var(--titan-text-muted);
   line-height: 1.45;
 }
+
+/* —— MATERIAL THUMBNAILS + CARD —— */
+.mat-cell { text-align: center; width: 40px; }
+
+.mat-thumb {
+  width: 30px;
+  height: 30px;
+  border-radius: 4px;
+  border: 1px solid var(--titan-border);
+  background: var(--titan-surface);
+  padding: 3px;
+  cursor: pointer;
+  transition: border-color var(--duration-fast), transform var(--duration-fast);
+  vertical-align: middle;
+}
+.mat-thumb:hover {
+  border-color: var(--titan-red);
+  transform: scale(1.12);
+}
+
+.mat-thumb-empty {
+  color: var(--titan-text-muted);
+  font-size: 0.7rem;
+}
+
+.material-card {
+  max-width: 540px;
+  width: 92vw;
+  position: relative;
+}
+
+.material-card-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: none;
+  border: none;
+  color: var(--titan-text-muted);
+  cursor: pointer;
+}
+.material-card-close:hover { color: var(--titan-white); }
+
+.material-card-head {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.material-card-img {
+  width: 92px;
+  height: 92px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  border: 1px solid var(--titan-border);
+  background: var(--titan-surface);
+  padding: 10px;
+}
+
+.material-card-cat {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--titan-red);
+}
+
+.material-card-name {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  letter-spacing: 0.5px;
+  color: var(--titan-white);
+  margin: 2px 0 6px;
+}
+
+.material-card-spec {
+  font-size: 0.8rem;
+  line-height: 1.5;
+  color: var(--titan-text-dim);
+}
+
+.material-card-usage-label {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  border-bottom: 1px solid var(--titan-border);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+}
+
+.material-card-note {
+  margin-top: 12px;
+  font-size: 0.66rem;
+  color: var(--titan-text-muted);
+  font-family: var(--font-mono);
+}
+.material-card-note code {
+  color: var(--titan-text-dim);
+  background: var(--titan-surface);
+  padding: 1px 4px;
+  border-radius: 2px;
+}

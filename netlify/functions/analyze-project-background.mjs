@@ -757,6 +757,74 @@ function buildVariance(engineerRows, items) {
   return variance
 }
 
+// ── Material matching ────────────────────────────────────────────
+// Maps each line item to a material slug: alias/regex first (cheap, exact),
+// then one Haiku call for whatever's left ambiguous.
+function buildMaterialTerms(materials) {
+  const terms = []
+  for (const m of materials) {
+    const aliases = Array.isArray(m.aliases_json) ? m.aliases_json : []
+    const all = new Set([...aliases, m.name].map(s => String(s).toLowerCase().trim()).filter(s => s.length >= 3))
+    for (const term of all) terms.push({ term, slug: m.slug, len: term.length })
+  }
+  terms.sort((a, b) => b.len - a.len) // longest (most specific) wins
+  return terms
+}
+
+function regexMatchSlug(desc, terms) {
+  const d = (desc || '').toLowerCase()
+  // Prefer the material term that appears EARLIEST in the description (the head
+  // noun is the real material — "concrete collar at sanitary manhole" is a
+  // collar, not a manhole); break ties by longer (more specific) term.
+  let best = null, bestPos = Infinity, bestLen = 0
+  for (const { term, slug } of terms) {
+    const esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const m = d.match(new RegExp(`(^|[^a-z0-9])(${esc})([^a-z0-9]|$)`, 'i'))
+    if (!m) continue
+    const pos = m.index
+    if (pos < bestPos || (pos === bestPos && term.length > bestLen)) {
+      best = slug; bestPos = pos; bestLen = term.length
+    }
+  }
+  return best
+}
+
+async function matchMaterials(items, materials) {
+  if (!materials.length) return items.map(() => null)
+  const terms = buildMaterialTerms(materials)
+  const slugs = items.map(it => regexMatchSlug(it.description, terms))
+
+  // Haiku pass for the leftovers — one batched call.
+  const unresolved = []
+  slugs.forEach((s, i) => { if (!s) unresolved.push(i) })
+  if (unresolved.length) {
+    const catalog = materials.map(m => `${m.slug}: ${m.name}`).join('\n')
+    const batch = unresolved.map(i => ({ i, description: items[i].description, category: items[i].category })).slice(0, 200)
+    try {
+      const text = await callClaude({
+        model: HAIKU, maxTokens: 4096,
+        content: [{ type: 'text', text: `You map construction takeoff line items to a material catalog. For each item, return the single best material slug, or null if no catalog material fits (labor/excavation/testing items usually have no material).
+
+CATALOG (slug: name):
+${catalog}
+
+ITEMS:
+${JSON.stringify(batch)}
+
+Respond ONLY with JSON: {"matches":[{"i":<index>,"slug":"<slug-or-null>"}]}` }],
+      })
+      const parsed = parseJson(text)
+      const valid = new Set(materials.map(m => m.slug))
+      for (const m of parsed?.matches || []) {
+        if (typeof m.i === 'number' && valid.has(m.slug)) slugs[m.i] = m.slug
+      }
+    } catch (err) {
+      console.error('material Haiku match failed:', err.message)
+    }
+  }
+  return slugs
+}
+
 // ── Handler ────────────────────────────────────────────────────
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405 }
@@ -961,6 +1029,12 @@ export const handler = async (event) => {
     const { depthSummary, derivedItems } = buildDepthEngine(runs, merged, geotech)
     derivedItems.forEach(d => merged.push(d))
 
+    // ── Material matching: every line item → a catalog material slug ──
+    await updateJob(job_id, { progress: 95, stage_detail: 'Matching materials' })
+    const { data: materials } = await supabase.from('materials').select('slug, name, aliases_json')
+    const matchedSlugs = await matchMaterials(merged, materials || [])
+    merged.forEach((m, i) => { m.material_slug = matchedSlugs[i] || null })
+
     // ── Write results ────────────────────────────────────────
     await updateJob(job_id, { progress: 96, stage_detail: 'Writing line items' })
 
@@ -979,6 +1053,7 @@ export const handler = async (event) => {
         depth_bucket_json: m.depth?.buckets ?? null,
         source_sheet: m.sheet_id || null,
         status: m.status === 'flagged' ? 'flagged' : 'active',
+        material_slug: m.material_slug || null,
       }))
       const { error: insErr } = await supabase.from('line_items').insert(rows)
       if (insErr) throw new Error(`line_items insert failed: ${insErr.message}`)
@@ -993,6 +1068,7 @@ export const handler = async (event) => {
       unit: m.unit,
       quantity: m.quantity ?? 0,
       confidence: m.confidence,
+      material_slug: m.material_slug || null,
       depth_avg: m.depth?.avg ?? null,
       depth_max: m.depth?.max ?? null,
       // Gravity pipe with no profile depth → explicit "unavailable" rather than blank.
