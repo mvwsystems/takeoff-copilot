@@ -329,6 +329,7 @@ function renderTiles(mupdf, doc, pageIndex) {
         base64: Buffer.from(pixmap.asPNG()).toString('base64'),
         position: tileName(row, col, rows, cols),
         grid: `${rows}x${cols}`,
+        pageBBox: [tx0, ty0, tx1, ty1],  // page-space (points) — matches text-layer coords
       })
       pixmap.destroy()
     }
@@ -342,11 +343,89 @@ function tileContext(sheet, tile) {
   return `CONTEXT: Sheet "${label}" (classification: ${sheet.classification || 'unknown'}). This image is the ${tile.position} of a ${tile.grid} tile grid; tiles overlap neighbors by ~15%.`
 }
 
+// ── Embedded text layer (MuPDF structured text) ──────────────────
+// We reuse MuPDF (already bundled for rasterization) instead of adding pdf.js
+// (a dependency we removed) or pdfplumber (a separate Python runtime). MuPDF's
+// structured-text coordinates share the same page space as our tile bboxes, so
+// mapping text → tile is a direct rectangle intersection — no re-projection.
+//
+// Returns { runs: [{text, x0,y0,x1,y1}], tables: [{rows:[[cell]], bbox}] }
+// in page-space points. Lines are kept individually (for tile attachment) and
+// alignment-clustered blocks are reconstructed as tables (for Pass 5).
+function extractPageText(mupdf, doc, pageIndex) {
+  const page = doc.loadPage(pageIndex)
+  const runs = []
+  const tables = []
+  try {
+    const st = page.toStructuredText('preserve-whitespace')
+    const json = JSON.parse(st.asJSON())
+    for (const b of json.blocks || []) {
+      const blockLines = []
+      for (const ln of b.lines || []) {
+        const text = (ln.text != null ? ln.text : (ln.spans || []).map(s => s.text).join('')) || ''
+        const bb = ln.bbox
+        if (!text.trim() || !bb) continue
+        const run = { text: text.replace(/\s+$/, ''), x0: bb.x, y0: bb.y, x1: bb.x + bb.w, y1: bb.y + bb.h }
+        runs.push(run)
+        blockLines.push(run)
+      }
+      const table = detectTable(blockLines)
+      if (table) tables.push(table)
+    }
+  } catch (e) {
+    console.error(`text extract page ${pageIndex}:`, e.message)
+  }
+  page.destroy()
+  return { runs, tables }
+}
+
+// Schedule/quantity tables read as alignment: a block of >=3 lines where most
+// lines split (on runs of 2+ spaces) into the same number of >=2 columns.
+function detectTable(lines) {
+  if (lines.length < 3) return null
+  const split = lines.map(l => l.text.split(/\s{2,}/).map(c => c.trim()).filter(Boolean))
+  const counts = {}
+  split.forEach(cells => { if (cells.length >= 2) counts[cells.length] = (counts[cells.length] || 0) + 1 })
+  let modeCols = 0, modeN = 0
+  for (const [c, n] of Object.entries(counts)) if (n > modeN) { modeN = n; modeCols = +c }
+  if (modeCols < 2 || modeN < Math.max(3, Math.ceil(lines.length * 0.5))) return null
+  const rows = split.filter(cells => cells.length === modeCols)
+  const xs = lines.map(l => l.x0), ys = lines.map(l => l.y0)
+  return { rows, bbox: [Math.min(...xs), Math.min(...ys), Math.max(...lines.map(l => l.x1)), Math.max(...ys)] }
+}
+
+// Text-run rectangle vs tile bbox [x0,y0,x1,y1] — any overlap counts.
+function runInTile(r, bbox) {
+  return r.x0 < bbox[2] && r.x1 > bbox[0] && r.y0 < bbox[3] && r.y1 > bbox[1]
+}
+
+// Best-effort: turn a detected table into engineer quantity rows for Pass 5.
+// Picks a numeric "quantity" column, an adjacent unit-ish column, and the
+// longest text column as the description.
+const UNIT_RE = /^(LF|EA|CY|SY|SF|LS|TON|GAL|HR|VF|AC)$/i
+function tableToEngineerRows(table) {
+  const out = []
+  for (const cells of table.rows) {
+    let qtyIdx = -1
+    for (let i = 0; i < cells.length; i++) {
+      const n = Number((cells[i] || '').replace(/[$,]/g, ''))
+      if (isFinite(n) && /\d/.test(cells[i]) && n !== 0) { qtyIdx = i; break }
+    }
+    if (qtyIdx < 0) continue
+    const qty = Number(cells[qtyIdx].replace(/[$,]/g, ''))
+    let unit = ''
+    for (const c of cells) if (UNIT_RE.test(c)) { unit = c.toUpperCase(); break }
+    const desc = cells.filter((c, i) => i !== qtyIdx && !UNIT_RE.test(c)).sort((a, b) => b.length - a.length)[0] || ''
+    if (desc && desc.length > 2) out.push({ item_no: null, description: desc.slice(0, 300), quantity: qty, unit })
+  }
+  return out
+}
+
 // Runs a tile-extraction pass (1, 2, 4, or 5) resumably. Each tile's validated
 // result is persisted to analysis_tiles as it completes, so a later invocation
 // skips tiles already done. When the chain deadline is hit, it stops scheduling
 // new work and returns { incomplete: true } — the caller re-invokes the function.
-async function runTilePassResumable({ mupdf, doc, sheets, task, system, model, validator, resultKey, passKey, passName, jobId, progressFrom, progressTo, chainDeadline }) {
+async function runTilePassResumable({ mupdf, doc, sheets, task, system, model, validator, resultKey, passKey, passName, jobId, progressFrom, progressTo, chainDeadline, getPageText }) {
   // Which tiles are already done (from a prior invocation)?
   const done = new Set()
   const { data: doneRows } = await supabase
@@ -354,12 +433,17 @@ async function runTilePassResumable({ mupdf, doc, sheets, task, system, model, v
   ;(doneRows || []).forEach(r => done.add(r.tile_key))
 
   // Build the remaining work list. Skip rendering pages whose every tile is done.
+  // Attach the PDF text-layer runs that fall inside each tile's page-space bbox.
   const work = []
   for (const sheet of sheets) {
-    const tiles = renderTiles(mupdf, doc, sheet.page_number - 1)
+    const pageIndex = sheet.page_number - 1
+    const textRuns = getPageText ? getPageText(pageIndex).runs : []
+    const tiles = renderTiles(mupdf, doc, pageIndex)
     for (const tile of tiles) {
       const tile_key = `${sheet.id}:${tile.position}`
-      if (!done.has(tile_key)) work.push({ sheet, tile, tile_key })
+      if (done.has(tile_key)) continue
+      const embeddedText = textRuns.filter(r => runInTile(r, tile.pageBBox)).map(r => r.text)
+      work.push({ sheet, tile, tile_key, embeddedText })
     }
   }
 
@@ -368,10 +452,14 @@ async function runTilePassResumable({ mupdf, doc, sheets, task, system, model, v
   if (work.length === 0) return { incomplete: false, total, completed }
 
   let hitDeadline = false
-  await pool(work, API_CONCURRENCY, async ({ sheet, tile, tile_key }) => {
+  await pool(work, API_CONCURRENCY, async ({ sheet, tile, tile_key, embeddedText }) => {
     if (Date.now() > chainDeadline) { hitDeadline = true; return }
     const content = [
       { type: 'text', text: tileContext(sheet, tile) },
+      ...(embeddedText && embeddedText.length ? [{
+        type: 'text',
+        text: `EMBEDDED TEXT — extracted from the PDF's own text layer within this tile's bounds. Treat these as GROUND TRUTH for numbers, pipe diameters, materials, class/spec, station and elevation callouts (the PDF contains them exactly; do not re-read them from the pixels and do not contradict them). Use the IMAGE for geometry, symbols, line work, counts, and anything not present below:\n${embeddedText.map(t => `• ${t}`).join('\n')}`,
+      }] : []),
       { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tile.base64 } },
       { type: 'text', text: task },
     ]
@@ -711,6 +799,27 @@ export const handler = async (event) => {
     const chainDeadline = Date.now() + CHAIN_AFTER_MS
     const brain = loadBrain()
 
+    // ── Embedded text layer ──────────────────────────────────
+    // Extract each analyzed page's text layer once per invocation, keyed by page
+    // index (safe: a single invocation only touches one project). getPageText is
+    // handed to the tile passes so each tile can attach the text within its bounds.
+    const textByPage = new Map()
+    const getPageText = (pageIndex) => {
+      if (!textByPage.has(pageIndex)) textByPage.set(pageIndex, extractPageText(mupdf, doc, pageIndex))
+      return textByPage.get(pageIndex)
+    }
+    // Raster-only detection: if the analyzed sheets carry essentially no text
+    // layer, the set is scanned/vector-flattened and quantities must come from
+    // vision. Surface that so confidence is read accordingly.
+    let totalRuns = 0, sheetsWithText = 0
+    for (const s of sheets) {
+      const n = getPageText(s.page_number - 1).runs.length
+      totalRuns += n
+      if (n >= 5) sheetsWithText++
+    }
+    const textMode = sheetsWithText >= Math.max(1, Math.ceil(sheets.length * 0.25)) ? 'hybrid' : 'raster-only'
+    await updateJob(job_id, { stage_detail: `Text layer: ${textMode} (${totalRuns} runs across ${sheetsWithText}/${sheets.length} sheets)` })
+
     // ── Tile-extraction passes (1, 2, 4, 5) — resumable & self-chaining ──
     // Each persists per-tile results to analysis_tiles. If the chain deadline is
     // hit mid-pass, we re-invoke the function and return; it resumes here, skips
@@ -725,7 +834,7 @@ export const handler = async (event) => {
 
     for (const tp of TILE_PASSES) {
       await updateJob(job_id, { stage: tp.stage, stage_detail: `${tp.passName} — scanning` })
-      const r = await runTilePassResumable({ mupdf, doc, ...tp, jobId: job_id, chainDeadline })
+      const r = await runTilePassResumable({ mupdf, doc, ...tp, jobId: job_id, chainDeadline, getPageText })
       if (r.incomplete) {
         await updateJob(job_id, { stage_detail: `${tp.passName} — ${r.completed}/${r.total} tiles, continuing in a fresh run…` })
         await reinvokeSelf(job_id, project_id)
@@ -737,8 +846,20 @@ export const handler = async (event) => {
     const p1Items = await loadPassResults(job_id, 'pass1')
     const p2Raw = await loadPassResults(job_id, 'pass2')
     const p4Items = await loadPassResults(job_id, 'pass4')
-    const engineerRows = await loadPassResults(job_id, 'pass5')
+    const visionEngineerRows = await loadPassResults(job_id, 'pass5')
     const runs = dedupeRuns(p2Raw)
+
+    // Pass 5 structured-data path: schedule/quantity tables reconstructed from the
+    // text layer feed the variance check directly (more reliable than vision).
+    // Merge with the vision reads, de-duping by description.
+    const textTables = sheets.flatMap(s => getPageText(s.page_number - 1).tables)
+    const tableEngineerRows = textTables.flatMap(tableToEngineerRows)
+    const engineerSeen = new Set()
+    const engineerRows = [...tableEngineerRows, ...visionEngineerRows].filter(r => {
+      const k = normKey(r.description) + '|' + (r.unit || '')
+      if (engineerSeen.has(k)) return false
+      engineerSeen.add(k); return true
+    })
 
     // ── PASS 3: merge + dedupe (Haiku) + code reconciliation ─
     await updateJob(job_id, { stage: 'analysis_pass_3', progress: 90, stage_detail: 'Pass 3/5 — merging tiles, reconciling plan vs profile' })
@@ -894,7 +1015,15 @@ export const handler = async (event) => {
         high_confidence_count: counts.HIGH,
         medium_confidence_count: counts.MEDIUM,
         low_confidence_count: counts.LOW,
-        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (>5 ft).` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
+        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (>5 ft).` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
+      },
+      text_layer: {
+        mode: textMode,
+        total_runs: totalRuns,
+        sheets_with_text: sheetsWithText,
+        sheets_total: sheets.length,
+        tables_detected: textTables.length,
+        table_rows_to_pass5: tableEngineerRows.length,
       },
       depth_summary: depthSummary,
       variance_table: variance,

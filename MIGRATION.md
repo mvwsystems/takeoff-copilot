@@ -147,6 +147,22 @@ When the user clicks **Proceed with N sheets** on the sheet map, `/api/start-ana
 
 ---
 
+## Embedded Text-Layer Extraction
+
+Most engineering PDFs carry a real text layer — the pipe/size/material callouts, station and elevation numbers, and quantity schedules are *in the file as text*, not just pixels. The pipeline extracts that text and uses it as ground truth instead of re-reading numbers from the image.
+
+**Why MuPDF (not pdf.js or pdfplumber):** MuPDF is already bundled for rasterization, so this adds **zero new dependencies and no new runtime**. Its `page.toStructuredText('preserve-whitespace').asJSON()` returns text lines with bounding boxes **in the same page-space coordinates we already tile in** — so mapping a text run to a tile is a plain rectangle intersection, no re-projection. `pdf.js` (`pdfjs-dist`) would re-add a dependency we deliberately removed during the client→server migration, and `pdfplumber` would require standing up a separate Python service (the whole pipeline is one Node function). MuPDF wins on all three axes: fewer deps, shared coordinate space, single runtime.
+
+**Flow:**
+- Per analyzed page, `extractPageText()` returns `{ runs: [{text, x0,y0,x1,y1}], tables }` (page-space points), cached once per invocation.
+- Each tile request attaches the text runs whose box intersects the tile's `pageBBox`, with the instruction: *treat embedded text as ground truth for numbers/diameters/materials/callouts; use the image for geometry, symbols, and anything not in the text.*
+- **Table parsing:** alignment-clustered text blocks (≥3 lines splitting into the same ≥2 columns on 2+ space gaps) are reconstructed as tables. Quantity-like rows feed Pass 5's engineer variance check directly as structured data, deduped against the vision reads.
+- **Raster-only detection:** if the analyzed sheets carry essentially no text layer (scanned plans), the result is marked `text_layer.mode = 'raster-only'` and a banner warns that all quantities are vision reads and extractability is lower. Hybrid sets show `'hybrid'` with the run/table counts.
+
+`result_json.text_layer = { mode, total_runs, sheets_with_text, sheets_total, tables_detected, table_rows_to_pass5 }`.
+
+---
+
 ## Existing `jobs` Table
 
 The original `jobs` table (used for job history in the sidebar) is **unchanged**. It still stores `{ user_id, plan_filename, screening_grade, result_json, ... }` and the dashboard history panel continues to use it as before.

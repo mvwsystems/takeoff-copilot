@@ -2087,6 +2087,19 @@ INSTRUCTIONS:
               {/* TAKEOFF TAB */}
               {activeTab === 'takeoff' && result && (
                 <div className="takeoff-content animate-fade">
+                  {/* TEXT-LAYER / EXTRACTABILITY BANNER */}
+                  {result.text_layer && (
+                    <div className={`textlayer-banner ${result.text_layer.mode === 'raster-only' ? 'textlayer-raster' : 'textlayer-hybrid'}`}>
+                      <span className="textlayer-badge">
+                        {result.text_layer.mode === 'raster-only' ? '⚠ Raster-only — vision mode' : '✓ Hybrid — text layer used'}
+                      </span>
+                      <span className="textlayer-detail">
+                        {result.text_layer.mode === 'raster-only'
+                          ? `No PDF text layer on the analyzed sheets — all quantities are vision reads. Treat extractability as lower and field-verify numbers.`
+                          : `${result.text_layer.total_runs} embedded text runs across ${result.text_layer.sheets_with_text}/${result.text_layer.sheets_total} sheets used as ground truth for numbers, sizes, and materials.${result.text_layer.tables_detected ? ` ${result.text_layer.tables_detected} schedule/quantity table${result.text_layer.tables_detected === 1 ? '' : 's'} parsed from text${result.text_layer.table_rows_to_pass5 ? ` (${result.text_layer.table_rows_to_pass5} rows fed to the engineer check).` : '.'}` : ''}`}
+                      </span>
+                    </div>
+                  )}
                   {/* PLAN GRADE BANNER */}
                   {(screenings[activeImage] || result.plan_screening) && (() => {
                     const sc = screenings[activeImage] || result.plan_screening

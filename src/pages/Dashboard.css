@@ -1885,3 +1885,42 @@
 .depth-crossings {
   margin-top: 4px;
 }
+
+/* —— TEXT-LAYER / EXTRACTABILITY BANNER —— */
+.textlayer-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 14px;
+  border-radius: 3px;
+  margin-bottom: 12px;
+  font-size: 0.72rem;
+  border: 1px solid var(--titan-border);
+}
+
+.textlayer-hybrid {
+  background: rgba(46, 204, 113, 0.06);
+  border-left: 3px solid var(--titan-green);
+}
+
+.textlayer-raster {
+  background: rgba(232, 55, 44, 0.06);
+  border-left: 3px solid var(--titan-red);
+}
+
+.textlayer-badge {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.textlayer-hybrid .textlayer-badge { color: var(--titan-green); }
+.textlayer-raster .textlayer-badge { color: var(--titan-red); }
+
+.textlayer-detail {
+  color: var(--titan-text-muted);
+  line-height: 1.45;
+}
