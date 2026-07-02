@@ -119,7 +119,7 @@ export default function LoginPage() {
 
         <div className="login-footer">
           <span className="text-muted" style={{ fontSize: '0.72rem' }}>
-            Need access? <a href="mailto:matt@growwithtitan.com" style={{ color: 'var(--titan-red)' }}>Contact 6 Signal</a>
+            Need access? <a href="mailto:hello@6signal.co" style={{ color: 'var(--titan-red)' }}>Contact Us</a>
           </span>
         </div>
       </div>
