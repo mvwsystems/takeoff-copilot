@@ -66,11 +66,24 @@ async function rawJobUpdate(jobId, fields) {
 
 const OPUS = 'claude-opus-4-8'
 const HAIKU = 'claude-haiku-4-5-20251001'
-const API_CONCURRENCY = 8
 // Re-chain to a fresh invocation at 12 min, leaving buffer before Netlify's
 // 15-min hard kill. Per-tile results are persisted, so the next invocation
 // resumes exactly where this one stopped.
 const CHAIN_AFTER_MS = 12 * 60 * 1000
+const MAX_CHAINS = 150            // hard stop — batches max out at 24h anyway
+const BATCH_POLL_MS = 15_000
+const BATCH_CHUNK = 60            // tiles per batch — keeps request bodies ~50MB
+const BLANK_PNG_BYTES = 15_000    // a 1568px tile that compresses under this is empty
+const MAX_RESUBMITS = 2
+
+// $/MTok at Message Batches pricing (50% of standard). Assembly Haiku calls
+// (merge/dedupe/materials) run synchronously at full price but cost pennies.
+const PRICES = {
+  opus: { in: 5 * 0.5, out: 25 * 0.5 },
+  haiku: { in: 1 * 0.5, out: 5 * 0.5 },
+}
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
 const PASS1_TYPES = new Set(['utility_plan', 'storm', 'sanitary', 'water', 'plan_profile', 'grading', 'paving', 'demo', 'erosion_control', 'landscape', 'electrical', 'other'])
 const DEPTH_BUCKETS = [['0-6', 0, 6], ['6-8', 6, 8], ['8-10', 8, 10], ['10+', 10, Infinity]]
@@ -107,7 +120,7 @@ YOUR TASK (PASS 1 — PLAN QUANTITIES):
 Extract EVERY utility line item visible in this tile: pipe runs (diameter, material, length), structures (manholes, inlets, cleanouts, headwalls — with depth), fittings, valves, hydrants, FDCs, and service connections. Apply all hard rules.
 
 Respond ONLY with this JSON, no markdown, no preamble:
-{"items":[{"category":"PIPE|STRUCTURE|FITTING|EXCAVATION|SERVICE|TESTING|OTHER","description":"material, size, class/spec, purpose","quantity":number or null,"unit":"LF|EA|CY|SY|SF|LS|TON","diameter_in":number or null,"material":"string or null","location":"station / structure ID / street — REQUIRED for dedupe","confidence":"HIGH|MEDIUM|LOW","note":"why this confidence + what to verify","continues_beyond_tile":boolean}]}
+{"items":[{"category":"PIPE|STRUCTURE|FITTING|EXCAVATION|SERVICE|TESTING|OTHER","description":"material, size, class/spec, purpose","quantity":number or null,"unit":"LF|EA|CY|SY|SF|LS|TON","diameter_in":number or null,"material":"string or null","location":"station / structure ID / street — REQUIRED for dedupe","confidence":"HIGH|MEDIUM|LOW","note":"HIGH: one clause citing the callout location, max 15 words. MEDIUM/LOW: why + what to verify, max 30 words","continues_beyond_tile":boolean}]}
 Empty tile (no utility content visible): {"items":[]}`
 
 const PASS2_TASK = `
@@ -115,7 +128,7 @@ YOUR TASK (PASS 2 — PROFILES):
 This tile is from a plan-and-profile sheet. Extract ONLY profile (elevation view) data. For each pipe run visible in the profile: run identity (structure-to-structure or stationing), rim/finished-grade elevations, invert elevations at each structure, slope, and length. Compute depth at each structure (rim minus invert) when both are shown.
 
 Respond ONLY with this JSON, no markdown, no preamble:
-{"runs":[{"run_id":"e.g. 'SSMH-1 to SSMH-2' or line label","utility":"sanitary|storm|water|other","from_structure":"string or null","to_structure":"string or null","station_start":"string or null","station_end":"string or null","length_lf":number or null,"slope_pct":number or null,"diameter_in":number or null,"material":"string or null","structures":[{"id":"string","rim_elev":number or null,"invert_elev":number or null,"depth_ft":number or null}],"confidence":"HIGH|MEDIUM|LOW","note":"string","continues_beyond_tile":boolean}]}
+{"runs":[{"run_id":"e.g. 'SSMH-1 to SSMH-2' or line label","utility":"sanitary|storm|water|other","from_structure":"string or null","to_structure":"string or null","station_start":"string or null","station_end":"string or null","length_lf":number or null,"slope_pct":number or null,"diameter_in":number or null,"material":"string or null","structures":[{"id":"string","rim_elev":number or null,"invert_elev":number or null,"depth_ft":number or null}],"confidence":"HIGH|MEDIUM|LOW","note":"HIGH: cite where read, max 15 words. MEDIUM/LOW: what to verify, max 30 words","continues_beyond_tile":boolean}]}
 No profile visible in this tile: {"runs":[]}`
 
 const PASS4_TASK = `
@@ -123,7 +136,7 @@ YOUR TASK (PASS 4 — SMALL-DIAMETER SWEEP):
 This is a dedicated sweep for lines 2 INCHES AND SMALLER ONLY — domestic water services, irrigation taps and laterals, small fire lines, air release lines, copper/PE service tubing. These were systematically missed in calibration testing because they are drawn thin and labeled small. Scan this tile slowly. Check building connections, meter boxes, hydrant legs, and irrigation points. Report ONLY lines with diameter ≤ 2" and their directly-associated fittings (corp stops, curb stops, meter setters, saddles).
 
 Respond ONLY with this JSON, no markdown, no preamble:
-{"items":[{"category":"PIPE|FITTING|SERVICE|OTHER","description":"material, size, purpose","quantity":number or null,"unit":"LF|EA","diameter_in":number or null,"material":"string or null","location":"station / structure ID / street — REQUIRED","confidence":"HIGH|MEDIUM|LOW","note":"why + what to verify","continues_beyond_tile":boolean}]}
+{"items":[{"category":"PIPE|FITTING|SERVICE|OTHER","description":"material, size, purpose","quantity":number or null,"unit":"LF|EA","diameter_in":number or null,"material":"string or null","location":"station / structure ID / street — REQUIRED","confidence":"HIGH|MEDIUM|LOW","note":"HIGH: one clause, max 15 words. MEDIUM/LOW: what to verify, max 30 words","continues_beyond_tile":boolean}]}
 Nothing ≤ 2" visible: {"items":[]}`
 
 const PASS5_TASK = `You are reading a tile from a construction plan sheet. Determine whether this tile contains an ENGINEER'S QUANTITY TABLE (a tabulated summary of estimated quantities — columns like Item / Description / Qty / Unit). If yes, parse every legible row exactly as printed. Do not invent rows; skip illegible ones.
@@ -150,19 +163,6 @@ Respond ONLY with this JSON, no markdown:
 // ── Helpers ────────────────────────────────────────────────────
 async function updateJob(jobId, fields) {
   await supabase.from('processing_jobs').update(fields).eq('id', jobId)
-}
-
-async function pool(items, limit, fn) {
-  const results = new Array(items.length)
-  let next = 0
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const idx = next++
-      results[idx] = await fn(items[idx], idx)
-    }
-  })
-  await Promise.all(workers)
-  return results
 }
 
 async function callClaude({ model, system, content, maxTokens = 8192 }) {
@@ -325,8 +325,11 @@ function renderTiles(mupdf, doc, pageIndex) {
       const device = new mupdf.DrawDevice(matrix, pixmap)
       page.run(device, mupdf.Matrix.identity)
       device.close()
+      const png = Buffer.from(pixmap.asPNG())
       tiles.push({
-        base64: Buffer.from(pixmap.asPNG()).toString('base64'),
+        idx: row * cols + col,           // stable tile identity (row-major) — used in tile_key / custom_id
+        base64: png.toString('base64'),
+        pngBytes: png.length,            // blank-tile heuristic: near-empty tiles compress tiny
         position: tileName(row, col, rows, cols),
         grid: `${rows}x${cols}`,
         pageBBox: [tx0, ty0, tx1, ty1],  // page-space (points) — matches text-layer coords
@@ -421,71 +424,103 @@ function tableToEngineerRows(table) {
   return out
 }
 
-// Runs a tile-extraction pass (1, 2, 4, or 5) resumably. Each tile's validated
-// result is persisted to analysis_tiles as it completes, so a later invocation
-// skips tiles already done. When the chain deadline is hit, it stops scheduling
-// new work and returns { incomplete: true } — the caller re-invokes the function.
-async function runTilePassResumable({ mupdf, doc, sheets, task, system, model, validator, resultKey, passKey, passName, jobId, progressFrom, progressTo, chainDeadline, getPageText }) {
-  // Which tiles are already done (from a prior invocation)?
-  const done = new Set()
-  const { data: doneRows } = await supabase
-    .from('analysis_tiles').select('tile_key').eq('job_id', jobId).eq('pass', passKey)
-  ;(doneRows || []).forEach(r => done.add(r.tile_key))
+// ── Message Batches machinery ─────────────────────────────────────
+// Tile passes run through the Batches API at 50% of standard token pricing.
+// All four passes are independent, so every missing tile across all passes is
+// submitted up front; we then poll, ingest results into analysis_tiles as each
+// batch ends, and re-chain the function when the 12-min window closes. State
+// (pending batch IDs, resubmit counts, usage) lives in processing_jobs.batch_state.
+//
+// tile_key / custom_id format: `${passKey}_${sheet_id}_${tileIdx}` — batches
+// return results in arbitrary order keyed by custom_id (≤64 chars, [A-Za-z0-9_-]).
 
-  // Build the remaining work list. Skip rendering pages whose every tile is done.
-  // Attach the PDF text-layer runs that fall inside each tile's page-space bbox.
-  const work = []
-  for (const sheet of sheets) {
-    const pageIndex = sheet.page_number - 1
-    const textRuns = getPageText ? getPageText(pageIndex).runs : []
-    const tiles = renderTiles(mupdf, doc, pageIndex)
-    for (const tile of tiles) {
-      const tile_key = `${sheet.id}:${tile.position}`
-      if (done.has(tile_key)) continue
-      const embeddedText = textRuns.filter(r => runInTile(r, tile.pageBBox)).map(r => r.text)
-      work.push({ sheet, tile, tile_key, embeddedText })
+const BATCH_HEADERS = () => ({
+  'x-api-key': process.env.ANTHROPIC_API_KEY,
+  'anthropic-version': '2023-06-01',
+  'Content-Type': 'application/json',
+})
+
+function buildTileContent(sheet, tile, embeddedText, task) {
+  return [
+    { type: 'text', text: tileContext(sheet, tile) },
+    ...(embeddedText && embeddedText.length ? [{
+      type: 'text',
+      text: `EMBEDDED TEXT — extracted from the PDF's own text layer within this tile's bounds. Treat these as GROUND TRUTH for numbers, pipe diameters, materials, class/spec, station and elevation callouts (the PDF contains them exactly; do not re-read them from the pixels and do not contradict them). Use the IMAGE for geometry, symbols, line work, counts, and anything not present below:\n${embeddedText.map(t => `• ${t}`).join('\n')}`,
+    }] : []),
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tile.base64 } },
+    { type: 'text', text: task },
+  ]
+}
+
+// Submits one chunk of tile requests as a Message Batch. Returns the batch ID.
+async function submitBatch(requests) {
+  const res = await fetch('https://api.anthropic.com/v1/messages/batches', {
+    method: 'POST',
+    headers: BATCH_HEADERS(),
+    body: JSON.stringify({ requests }),
+  })
+  if (!res.ok) throw new Error(`batch submit ${res.status}: ${(await res.text()).slice(0, 200)}`)
+  const data = await res.json()
+  return data.id
+}
+
+async function getBatch(batchId) {
+  const res = await fetch(`https://api.anthropic.com/v1/messages/batches/${batchId}`, {
+    headers: BATCH_HEADERS(),
+  })
+  if (!res.ok) throw new Error(`batch get ${res.status}`)
+  return res.json()
+}
+
+// Streams an ended batch's JSONL results: validates each tile result and
+// upserts it into analysis_tiles. Accumulates token usage onto `usage`.
+async function ingestBatchResults(batch, passes, sheetsById, jobId, usage) {
+  const res = await fetch(batch.results_url, { headers: BATCH_HEADERS() })
+  if (!res.ok) throw new Error(`batch results ${res.status}`)
+  const text = await res.text()
+
+  const rows = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    let entry
+    try { entry = JSON.parse(line) } catch { continue }
+    const [passKey, sheetId, idxStr] = entry.custom_id.split('_')
+    const pass = passes.find(p => p.key === passKey)
+    const sheet = sheetsById.get(sheetId)
+    if (!pass || !sheet) continue
+    const tile_key = entry.custom_id.slice(passKey.length + 1) // `${sheet_id}_${idx}`
+
+    let valid = []
+    if (entry.result?.type === 'succeeded') {
+      const msg = entry.result.message
+      const u = msg.usage || {}
+      const tier = pass.model === HAIKU ? 'haiku' : 'opus'
+      usage[tier].in += u.input_tokens || 0
+      usage[tier].out += u.output_tokens || 0
+
+      const textOut = (msg.content || []).map(b => (b.type === 'text' ? b.text : '')).join('')
+      const parsed = parseJson(textOut)
+      const raw = Array.isArray(parsed) ? parsed : (pass.resultKey ? parsed?.[pass.resultKey] : parsed)
+      valid = pass.validator(raw, pass.name).map(v => ({
+        ...v,
+        sheet_id: sheet.id,
+        sheet_label: sheet.sheet_number || `pg ${sheet.page_number}`,
+        tile: `tile ${Number(idxStr) + 1}`,
+      }))
+    } else {
+      // errored / expired / canceled → leave as empty unless a resubmit picks it up
+      console.error(`batch result ${entry.custom_id}: ${entry.result?.type}`)
+      continue // do NOT write a row — the missing-tile scan will resubmit it
     }
+    rows.push({ job_id: jobId, pass: passKey, tile_key, result_json: valid })
   }
 
-  const total = done.size + work.length
-  let completed = done.size
-  if (work.length === 0) return { incomplete: false, total, completed }
-
-  let hitDeadline = false
-  await pool(work, API_CONCURRENCY, async ({ sheet, tile, tile_key, embeddedText }) => {
-    if (Date.now() > chainDeadline) { hitDeadline = true; return }
-    const content = [
-      { type: 'text', text: tileContext(sheet, tile) },
-      ...(embeddedText && embeddedText.length ? [{
-        type: 'text',
-        text: `EMBEDDED TEXT — extracted from the PDF's own text layer within this tile's bounds. Treat these as GROUND TRUTH for numbers, pipe diameters, materials, class/spec, station and elevation callouts (the PDF contains them exactly; do not re-read them from the pixels and do not contradict them). Use the IMAGE for geometry, symbols, line work, counts, and anything not present below:\n${embeddedText.map(t => `• ${t}`).join('\n')}`,
-      }] : []),
-      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: tile.base64 } },
-      { type: 'text', text: task },
-    ]
-    let valid = []
-    try {
-      const text = await callClaude({ model, system, content })
-      const parsed = parseJson(text)
-      // resultKey null → hand the whole parsed object to the validator (Pass 5
-      // needs to see table_found); otherwise extract the named array.
-      const raw = Array.isArray(parsed) ? parsed : (resultKey ? parsed?.[resultKey] : parsed)
-      valid = validator(raw, passName)
-        .map(v => ({ ...v, sheet_id: sheet.id, sheet_label: sheet.sheet_number || `pg ${sheet.page_number}`, tile: tile.position }))
-    } catch (err) {
-      // Persist an empty result so a hard-failing tile isn't retried forever.
-      console.error(`${passName} tile error (${tile_key}):`, err.message)
-      valid = []
-    }
-    await supabase.from('analysis_tiles').upsert(
-      { job_id: jobId, pass: passKey, tile_key, result_json: valid },
-      { onConflict: 'job_id,pass,tile_key' },
-    )
-    completed++
-    const progress = progressFrom + Math.round((completed / total) * (progressTo - progressFrom))
-    await updateJob(jobId, { progress, stage_detail: `${passName} — ${completed}/${total} tiles` })
-  })
-  return { incomplete: hitDeadline, total, completed }
+  for (let i = 0; i < rows.length; i += 100) {
+    const { error } = await supabase.from('analysis_tiles')
+      .upsert(rows.slice(i, i + 100), { onConflict: 'job_id,pass,tile_key' })
+    if (error) throw new Error(`tile upsert failed: ${error.message}`)
+  }
+  return rows.length
 }
 
 // Reads back every persisted tile result for a pass, flattened.
@@ -836,8 +871,9 @@ export const handler = async (event) => {
 
   // Heartbeat via raw REST — proves the handler actually started. If the job
   // never leaves this state, the crash is at module load / cold start.
-  // Clear any stale error from a prior failed attempt on this job.
-  await rawJobUpdate(job_id, { stage: 'analysis_pass_1', progress: 1, error: null, stage_detail: 'Starting — initializing' })
+  // Clears stale errors; deliberately does NOT touch stage/progress so chained
+  // invocations don't flicker the progress bar back to zero.
+  await rawJobUpdate(job_id, { error: null, stage_detail: 'Analysis worker started' })
 
   try {
     getSupabase() // populates module-level `supabase` for all code below
@@ -888,26 +924,180 @@ export const handler = async (event) => {
     const textMode = sheetsWithText >= Math.max(1, Math.ceil(sheets.length * 0.25)) ? 'hybrid' : 'raster-only'
     await updateJob(job_id, { stage_detail: `Text layer: ${textMode} (${totalRuns} runs across ${sheetsWithText}/${sheets.length} sheets)` })
 
-    // ── Tile-extraction passes (1, 2, 4, 5) — resumable & self-chaining ──
-    // Each persists per-tile results to analysis_tiles. If the chain deadline is
-    // hit mid-pass, we re-invoke the function and return; it resumes here, skips
-    // done tiles, and continues. Pass 3 (merge/reconcile) is code+Haiku assembly
-    // that runs only once all tile passes are complete.
+    // ── Tile-extraction passes (1, 2, 4, 5) via Message Batches ──
+    // All four passes are independent, so every missing tile is submitted up
+    // front (50% batch pricing), then we poll/ingest until complete, re-chaining
+    // the function whenever the 12-min window closes. Pass 3 (merge/reconcile)
+    // is code+Haiku assembly that runs only once all tile passes are complete.
     const TILE_PASSES = [
-      { passKey: 'pass1', passName: 'Pass 1/5 plan quantities', stage: 'analysis_pass_1', sheets: p1Sheets, task: PASS1_TASK, system: brain, model: OPUS, validator: validateItems, resultKey: 'items', progressFrom: 2, progressTo: 40 },
-      { passKey: 'pass2', passName: 'Pass 2/5 profiles', stage: 'analysis_pass_2', sheets: p2Sheets, task: PASS2_TASK, system: brain, model: OPUS, validator: validateRuns, resultKey: 'runs', progressFrom: 40, progressTo: 52 },
-      { passKey: 'pass4', passName: 'Pass 4/5 small-dia sweep', stage: 'analysis_pass_4', sheets: p1Sheets, task: PASS4_TASK, system: brain, model: OPUS, validator: validateItems, resultKey: 'items', progressFrom: 52, progressTo: 78 },
-      { passKey: 'pass5', passName: 'Pass 5/5 engineer tables', stage: 'analysis_pass_5', sheets, task: PASS5_TASK, system: null, model: HAIKU, validator: validateEngineerTile, resultKey: null, progressFrom: 78, progressTo: 88 },
+      { key: 'pass1', name: 'Pass 1/5 plan quantities', stage: 'analysis_pass_1', sheets: p1Sheets, task: PASS1_TASK, system: brain, model: OPUS, validator: validateItems, resultKey: 'items', maxTokens: 8192 },
+      { key: 'pass2', name: 'Pass 2/5 profiles', stage: 'analysis_pass_2', sheets: p2Sheets, task: PASS2_TASK, system: brain, model: OPUS, validator: validateRuns, resultKey: 'runs', maxTokens: 8192 },
+      { key: 'pass4', name: 'Pass 4/5 small-dia sweep', stage: 'analysis_pass_4', sheets: p1Sheets, task: PASS4_TASK, system: brain, model: OPUS, validator: validateItems, resultKey: 'items', maxTokens: 8192 },
+      { key: 'pass5', name: 'Pass 5/5 engineer tables', stage: 'analysis_pass_5', sheets, task: PASS5_TASK, system: null, model: HAIKU, validator: validateEngineerTile, resultKey: null, maxTokens: 4096 },
     ]
+    const sheetsById = new Map(sheets.map(s => [s.id, s]))
 
-    for (const tp of TILE_PASSES) {
-      await updateJob(job_id, { stage: tp.stage, stage_detail: `${tp.passName} — scanning` })
-      const r = await runTilePassResumable({ mupdf, doc, ...tp, jobId: job_id, chainDeadline, getPageText })
-      if (r.incomplete) {
-        await updateJob(job_id, { stage_detail: `${tp.passName} — ${r.completed}/${r.total} tiles, continuing in a fresh run…` })
+    // Batch state persists across chained invocations.
+    const { data: jobRow } = await supabase
+      .from('processing_jobs').select('batch_state').eq('id', job_id).single()
+    const state = jobRow?.batch_state || {}
+    state.batches = state.batches || {}
+    state.resubmits = state.resubmits || {}
+    state.usage = state.usage || { opus: { in: 0, out: 0 }, haiku: { in: 0, out: 0 } }
+    state.chains = (state.chains || 0) + 1
+    if (state.chains > MAX_CHAINS) throw new Error('Batch processing exceeded the maximum invocation chain — contact support.')
+    const persistState = () => updateJob(job_id, { batch_state: state })
+    await persistState()
+
+    // Page geometry (grid dims) without rendering — cheap, needed for totals.
+    const geomCache = new Map()
+    const pageGeom = (pageIndex) => {
+      if (!geomCache.has(pageIndex)) {
+        const page = doc.loadPage(pageIndex)
+        const [x0, y0, x1, y1] = page.getBounds()
+        page.destroy()
+        geomCache.set(pageIndex, gridFor(x1 - x0, y1 - y0))
+      }
+      return geomCache.get(pageIndex)
+    }
+
+    // Rendered tiles, lazily, once per sheet — shared by all passes.
+    const tileCache = new Map()
+    const sheetTiles = (sheet) => {
+      const pageIndex = sheet.page_number - 1
+      if (!tileCache.has(pageIndex)) tileCache.set(pageIndex, renderTiles(mupdf, doc, pageIndex))
+      return tileCache.get(pageIndex)
+    }
+
+    // Done tile keys per pass (from prior invocations / ingested batches).
+    const loadDone = async () => {
+      const done = Object.fromEntries(TILE_PASSES.map(p => [p.key, new Set()]))
+      const { data } = await supabase
+        .from('analysis_tiles').select('pass, tile_key').eq('job_id', job_id)
+      ;(data || []).forEach(r => done[r.pass]?.add(r.tile_key))
+      return done
+    }
+
+    // Missing work per pass: [{pass, sheet, idx}] — identity only, no rendering.
+    const computeMissing = (done) => {
+      const missing = {}
+      let totalTiles = 0, doneTiles = 0
+      for (const pass of TILE_PASSES) {
+        missing[pass.key] = []
+        for (const sheet of pass.sheets) {
+          const { cols, rows } = pageGeom(sheet.page_number - 1)
+          for (let idx = 0; idx < cols * rows; idx++) {
+            totalTiles++
+            const tile_key = `${sheet.id}_${idx}`
+            if (done[pass.key].has(tile_key)) doneTiles++
+            else missing[pass.key].push({ pass, sheet, idx })
+          }
+        }
+      }
+      return { missing, totalTiles, doneTiles }
+    }
+
+    let blankSkipped = 0
+    let done = await loadDone()
+
+    // ── Poll / submit loop ────────────────────────────────────
+    while (true) {
+      // 1. Poll pending batches; ingest any that ended.
+      let processing = 0
+      for (const passKey of Object.keys(state.batches)) {
+        const stillPending = []
+        for (const batchId of state.batches[passKey]) {
+          let batch
+          try { batch = await getBatch(batchId) } catch (e) {
+            console.error(`poll ${batchId}:`, e.message); stillPending.push(batchId); continue
+          }
+          if (batch.processing_status === 'ended') {
+            await ingestBatchResults(batch, TILE_PASSES, sheetsById, job_id, state.usage)
+          } else {
+            processing += batch.request_counts?.processing ?? 0
+            stillPending.push(batchId)
+          }
+        }
+        state.batches[passKey] = stillPending
+        if (!stillPending.length) delete state.batches[passKey]
+      }
+
+      done = await loadDone()
+      const { missing, totalTiles, doneTiles } = computeMissing(done)
+      const allDone = TILE_PASSES.every(p => missing[p.key].length === 0)
+      if (allDone) { await persistState(); break }
+
+      // 2. Submit batches for passes with missing tiles and no pending batch.
+      for (const pass of TILE_PASSES) {
+        if (missing[pass.key].length === 0 || state.batches[pass.key]?.length) continue
+        const resubmits = state.resubmits[pass.key] || 0
+        if (resubmits > MAX_RESUBMITS) {
+          // Give up on the stragglers: record empty results so assembly proceeds.
+          const rows = missing[pass.key].map(w => ({
+            job_id, pass: pass.key, tile_key: `${w.sheet.id}_${w.idx}`, result_json: [],
+          }))
+          for (let i = 0; i < rows.length; i += 100) {
+            await supabase.from('analysis_tiles').upsert(rows.slice(i, i + 100), { onConflict: 'job_id,pass,tile_key' })
+          }
+          continue
+        }
+
+        const requests = []
+        for (const w of missing[pass.key]) {
+          const tiles = sheetTiles(w.sheet)
+          const tile = tiles[w.idx]
+          if (!tile) continue
+          const tile_key = `${w.sheet.id}_${w.idx}`
+          // Blank-tile skip: an essentially-empty tile compresses to almost
+          // nothing — record an empty result instead of paying for an API call.
+          if (tile.pngBytes < BLANK_PNG_BYTES) {
+            await supabase.from('analysis_tiles')
+              .upsert({ job_id, pass: pass.key, tile_key, result_json: [] }, { onConflict: 'job_id,pass,tile_key' })
+            blankSkipped++
+            continue
+          }
+          const embeddedText = getPageText(w.sheet.page_number - 1).runs
+            .filter(r => runInTile(r, tile.pageBBox)).map(r => r.text)
+          requests.push({
+            custom_id: `${pass.key}_${tile_key}`,
+            params: {
+              model: pass.model,
+              max_tokens: pass.maxTokens,
+              ...(pass.system ? { system: pass.system } : {}),
+              messages: [{ role: 'user', content: buildTileContent(w.sheet, tile, embeddedText, pass.task) }],
+            },
+          })
+        }
+        if (!requests.length) continue
+
+        state.batches[pass.key] = state.batches[pass.key] || []
+        for (let i = 0; i < requests.length; i += BATCH_CHUNK) {
+          const id = await submitBatch(requests.slice(i, i + BATCH_CHUNK))
+          state.batches[pass.key].push(id)
+        }
+        state.resubmits[pass.key] = resubmits + 1
+        await persistState()
+      }
+      // Rendered tiles are only needed while building requests — free the memory.
+      tileCache.clear()
+
+      // 3. Progress + stage: earliest incomplete pass drives the stage label.
+      const currentPass = TILE_PASSES.find(p => missing[p.key].length > 0)
+      const progress = 2 + Math.round((doneTiles / Math.max(totalTiles, 1)) * 86)
+      await updateJob(job_id, {
+        stage: currentPass?.stage || 'analysis_pass_5',
+        progress,
+        stage_detail: `Batched analysis — ${doneTiles}/${totalTiles} tiles done${processing ? `, ${processing} in flight` : ''}${blankSkipped ? `, ${blankSkipped} blank skipped` : ''}`,
+        batch_state: state,
+      })
+
+      // 4. Chain or sleep.
+      if (Date.now() > chainDeadline) {
+        await persistState()
         await reinvokeSelf(job_id, project_id)
         return { statusCode: 200 }
       }
+      await sleep(BATCH_POLL_MS)
     }
 
     // All tiles done — assemble from persisted scratch.
@@ -1114,6 +1304,20 @@ export const handler = async (event) => {
         engineer_rows: engineerRows.length,
         trench_safety_lf: depthSummary.trench_safety_lf,
       },
+      // Real spend for this run (Message Batches pricing). Excludes the few
+      // synchronous assembly Haiku calls (~cents).
+      run_cost: {
+        opus_input_tokens: state.usage.opus.in,
+        opus_output_tokens: state.usage.opus.out,
+        haiku_input_tokens: state.usage.haiku.in,
+        haiku_output_tokens: state.usage.haiku.out,
+        est_usd: Math.round((
+          (state.usage.opus.in / 1e6) * PRICES.opus.in +
+          (state.usage.opus.out / 1e6) * PRICES.opus.out +
+          (state.usage.haiku.in / 1e6) * PRICES.haiku.in +
+          (state.usage.haiku.out / 1e6) * PRICES.haiku.out
+        ) * 100) / 100,
+      },
     }
 
     await supabase.from('analysis_results').insert({ project_id, job_id, result_json: resultJson })
@@ -1134,7 +1338,11 @@ export const handler = async (event) => {
 
     // Scratch tiles no longer needed once the result is persisted.
     await supabase.from('analysis_tiles').delete().eq('job_id', job_id)
-    await updateJob(job_id, { stage: 'complete', progress: 100, stage_detail: `${items.length} line items — analysis complete` })
+    await updateJob(job_id, {
+      stage: 'complete', progress: 100,
+      stage_detail: `${items.length} line items — $${resultJson.run_cost.est_usd} API cost`,
+      batch_state: { usage: state.usage, chains: state.chains, done: true },
+    })
     return { statusCode: 200 }
   } catch (err) {
     console.error('Analysis pipeline error:', err)

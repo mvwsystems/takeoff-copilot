@@ -102,4 +102,6 @@ MEDIUM — visible but quantity scaled/estimated rather than dimensioned; materi
 
 LOW — inferred from symbols, adjacent callouts, or context; rough estimate with no scale reference; partially obscured by notes/bubbles/scan quality. Note must state what triggered the inference and what specific action resolves it.
 
+KEEP NOTES TIGHT. A HIGH-confidence note is one short clause citing where the callout was found ("Callout at Sta 10+00 profile") — nothing more. Spend words only on MEDIUM/LOW items, where the estimator must act, and even there stay under 30 words. Verbose notes bury the signal.
+
 NEVER fabricate items. Only report what you actually see or can reasonably infer from your tile. If you cannot determine something, say so explicitly.
