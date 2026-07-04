@@ -754,8 +754,31 @@ function matchRunToItem(run, items, used) {
 }
 
 // ── Pass 5 code-side: variance matching ────────────────────────
+// Engineer tables and takeoffs abbreviate differently ("8-INCH SANITARY SEWER"
+// vs '8" SAN SWR'). Normalize to canonical short tokens and drop filler words
+// so description matching connects across notation styles.
+const TOKEN_STOP = new Set(['prop', 'proposed', 'ex', 'existing', 'new', 'the', 'of', 'and', 'with', 'for', 'per'])
+const TOKEN_SYN = {
+  inch: 'in', inches: 'in', dia: 'in', diameter: 'in',
+  sanitary: 'san', ss: 'san',
+  sewer: 'swr', sswr: 'swr',
+  storm: 'stm',
+  water: 'wtr', waterline: 'wtr', wl: 'wtr',
+  manhole: 'mh', manholes: 'mh', ssmh: 'mh', stmh: 'mh', sanmh: 'mh',
+  hydrant: 'hyd', hydrants: 'hyd',
+  cleanout: 'co', cleanouts: 'co',
+  linear: 'lf', ft: 'lf', feet: 'lf', foot: 'lf',
+}
 function tokenize(s) {
-  return new Set((s || '').toLowerCase().replace(/["']/g, ' in ').split(/[^a-z0-9.]+/).filter(t => t.length > 1))
+  const raw = (s || '').toLowerCase().replace(/["']/g, ' in ').split(/[^a-z0-9.]+/)
+  const out = new Set()
+  for (let t of raw) {
+    if (t.length < 2 && !/^\d$/.test(t)) continue
+    t = TOKEN_SYN[t] || t
+    if (TOKEN_STOP.has(t)) continue
+    out.add(t)
+  }
+  return out
 }
 
 function buildVariance(engineerRows, items) {
@@ -930,6 +953,9 @@ Respond ONLY with JSON: {"matches":[{"i":<index>,"slug":"<slug-or-null>"}]}` }],
 }
 
 // ── Handler ────────────────────────────────────────────────────
+// Scoring primitives exported for offline rescoring / diagnostics.
+export { buildVariance, varianceMetrics, scoreAgainstTruth, tokenize }
+
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405 }
 
