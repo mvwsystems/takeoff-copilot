@@ -256,3 +256,80 @@
   flex-direction: row;
   gap: var(--space-md);
 }
+
+/* —— CALIBRATION HARNESS —— */
+.cal-section {
+  margin: 20px 0 28px;
+  padding: 16px;
+  border: 1px solid var(--titan-border);
+  border-left: 3px solid var(--titan-red);
+  border-radius: 4px;
+  background: var(--titan-dark);
+}
+
+.cal-header { margin-bottom: 12px; }
+
+.cal-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-display);
+  font-size: 1rem;
+  letter-spacing: 0.8px;
+  color: var(--titan-white);
+  margin-right: 14px;
+}
+
+.cal-subtitle {
+  font-size: 0.7rem;
+  color: var(--titan-text-muted);
+}
+
+.cal-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.cal-select {
+  background: var(--titan-surface);
+  border: 1px solid var(--titan-border);
+  color: var(--titan-text);
+  font-size: 0.75rem;
+  padding: 7px 10px;
+  border-radius: 3px;
+  max-width: 280px;
+}
+
+.cal-preset {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.74rem;
+  color: var(--titan-text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+
+.cal-models {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--titan-text-muted);
+  letter-spacing: 0.5px;
+}
+
+.cal-msg {
+  margin-top: 10px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--titan-text-dim);
+}
+
+.cal-score {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--titan-text-dim);
+  white-space: nowrap;
+}
+.cal-score strong { color: var(--titan-white); }

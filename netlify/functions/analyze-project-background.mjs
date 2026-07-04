@@ -65,6 +65,7 @@ async function rawJobUpdate(jobId, fields) {
 }
 
 const OPUS = 'claude-opus-4-8'
+const SONNET = 'claude-sonnet-5'
 const HAIKU = 'claude-haiku-4-5-20251001'
 // Re-chain to a fresh invocation at 12 min, leaving buffer before Netlify's
 // 15-min hard kill. Per-tile results are persisted, so the next invocation
@@ -78,10 +79,16 @@ const MAX_RESUBMITS = 2
 
 // $/MTok at Message Batches pricing (50% of standard). Assembly Haiku calls
 // (merge/dedupe/materials) run synchronously at full price but cost pennies.
+// Sonnet 5 is intro-priced ($2/$10) through 2026-08-31, then $3/$15.
+const SONNET_INTRO = Date.now() < Date.parse('2026-09-01T00:00:00Z')
 const PRICES = {
   opus: { in: 5 * 0.5, out: 25 * 0.5 },
+  sonnet: SONNET_INTRO ? { in: 2 * 0.5, out: 10 * 0.5 } : { in: 3 * 0.5, out: 15 * 0.5 },
   haiku: { in: 1 * 0.5, out: 5 * 0.5 },
 }
+// Calibration configs map pass → tier name; tiers resolve to model IDs here.
+const MODEL_TIERS = { opus: OPUS, sonnet: SONNET, haiku: HAIKU }
+const tierOf = (modelId) => (modelId === HAIKU ? 'haiku' : modelId === SONNET ? 'sonnet' : 'opus')
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
@@ -494,7 +501,8 @@ async function ingestBatchResults(batch, passes, sheetsById, jobId, usage) {
     if (entry.result?.type === 'succeeded') {
       const msg = entry.result.message
       const u = msg.usage || {}
-      const tier = pass.model === HAIKU ? 'haiku' : 'opus'
+      const tier = tierOf(pass.model)
+      usage[tier] = usage[tier] || { in: 0, out: 0 }
       usage[tier].in += u.input_tokens || 0
       usage[tier].out += u.output_tokens || 0
 
@@ -792,6 +800,67 @@ function buildVariance(engineerRows, items) {
   return variance
 }
 
+// ── Calibration scoring ──────────────────────────────────────────
+// Two accuracy signals per run: agreement with the engineer's printed quantity
+// table (automatic, from Pass 5), and agreement with an uploaded ground-truth
+// takeoff (projects.calibration_truth). Same fuzzy matcher as buildVariance.
+function varianceMetrics(variance) {
+  if (!variance?.length) return null
+  const matched = variance.filter(v => v.pct_difference != null)
+  return {
+    rows: variance.length,
+    matched: matched.length,
+    within_5: matched.filter(v => Math.abs(v.pct_difference) <= 5).length,
+    within_15: matched.filter(v => Math.abs(v.pct_difference) <= 15).length,
+    mean_abs_pct: matched.length
+      ? Math.round(matched.reduce((s, v) => s + Math.abs(v.pct_difference), 0) / matched.length * 10) / 10
+      : null,
+    missing_from_ours: variance.filter(v => v.status === 'MISSING_FROM_OURS').length,
+  }
+}
+
+function scoreAgainstTruth(gtRows, items) {
+  const usedItems = new Set()
+  let matched = 0, w5 = 0, w15 = 0, pctSum = 0, pctN = 0, missing = 0
+  for (const gt of gtRows) {
+    const gtQty = Number(gt.quantity)
+    if (!gt.description || !isFinite(gtQty)) continue
+    const gtTokens = tokenize(gt.description)
+    let best = null, bestScore = 0
+    items.forEach((it, i) => {
+      if (usedItems.has(i)) return
+      if (gt.unit && it.unit && String(gt.unit).toUpperCase() !== it.unit) return
+      const itTokens = tokenize(it.description)
+      let overlap = 0
+      gtTokens.forEach(t => { if (itTokens.has(t)) overlap++ })
+      const score = overlap / Math.max(gtTokens.size, 1)
+      if (score > bestScore) { bestScore = score; best = i }
+    })
+    if (best != null && bestScore >= 0.4) {
+      usedItems.add(best)
+      matched++
+      if (gtQty) {
+        const pct = Math.abs((items[best].quantity ?? 0) - gtQty) / gtQty * 100
+        pctSum += pct; pctN++
+        if (pct <= 5) w5++
+        if (pct <= 15) w15++
+      }
+    } else {
+      missing++
+    }
+  }
+  const total = matched + missing
+  if (!total) return null
+  return {
+    truth_rows: total,
+    matched,
+    within_5: w5,
+    within_15: w15,
+    mean_abs_pct: pctN ? Math.round(pctSum / pctN * 10) / 10 : null,
+    missing_from_ours: missing,
+  }
+}
+
 // ── Material matching ────────────────────────────────────────────
 // Maps each line item to a material slug: alias/regex first (cheap, exact),
 // then one Haiku call for whatever's left ambiguous.
@@ -929,21 +998,27 @@ export const handler = async (event) => {
     // front (50% batch pricing), then we poll/ingest until complete, re-chaining
     // the function whenever the 12-min window closes. Pass 3 (merge/reconcile)
     // is code+Haiku assembly that runs only once all tile passes are complete.
+    // Job config: calibration runs override the model tier per pass.
+    const { data: jobRow } = await supabase
+      .from('processing_jobs').select('batch_state, config').eq('id', job_id).single()
+    const cfg = jobRow?.config || {}
+    const tiers = { pass1: 'opus', pass2: 'opus', pass4: 'opus', pass5: 'haiku', ...(cfg.models || {}) }
+    const M = (k) => MODEL_TIERS[tiers[k]] || OPUS
+
     const TILE_PASSES = [
-      { key: 'pass1', name: 'Pass 1/5 plan quantities', stage: 'analysis_pass_1', sheets: p1Sheets, task: PASS1_TASK, system: brain, model: OPUS, validator: validateItems, resultKey: 'items', maxTokens: 8192 },
-      { key: 'pass2', name: 'Pass 2/5 profiles', stage: 'analysis_pass_2', sheets: p2Sheets, task: PASS2_TASK, system: brain, model: OPUS, validator: validateRuns, resultKey: 'runs', maxTokens: 8192 },
-      { key: 'pass4', name: 'Pass 4/5 small-dia sweep', stage: 'analysis_pass_4', sheets: p1Sheets, task: PASS4_TASK, system: brain, model: OPUS, validator: validateItems, resultKey: 'items', maxTokens: 8192 },
-      { key: 'pass5', name: 'Pass 5/5 engineer tables', stage: 'analysis_pass_5', sheets, task: PASS5_TASK, system: null, model: HAIKU, validator: validateEngineerTile, resultKey: null, maxTokens: 4096 },
+      { key: 'pass1', name: 'Pass 1/5 plan quantities', stage: 'analysis_pass_1', sheets: p1Sheets, task: PASS1_TASK, system: brain, model: M('pass1'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
+      { key: 'pass2', name: 'Pass 2/5 profiles', stage: 'analysis_pass_2', sheets: p2Sheets, task: PASS2_TASK, system: brain, model: M('pass2'), validator: validateRuns, resultKey: 'runs', maxTokens: 8192 },
+      { key: 'pass4', name: 'Pass 4/5 small-dia sweep', stage: 'analysis_pass_4', sheets: p1Sheets, task: PASS4_TASK, system: brain, model: M('pass4'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
+      { key: 'pass5', name: 'Pass 5/5 engineer tables', stage: 'analysis_pass_5', sheets, task: PASS5_TASK, system: null, model: M('pass5'), validator: validateEngineerTile, resultKey: null, maxTokens: 4096 },
     ]
     const sheetsById = new Map(sheets.map(s => [s.id, s]))
 
     // Batch state persists across chained invocations.
-    const { data: jobRow } = await supabase
-      .from('processing_jobs').select('batch_state').eq('id', job_id).single()
     const state = jobRow?.batch_state || {}
     state.batches = state.batches || {}
     state.resubmits = state.resubmits || {}
-    state.usage = state.usage || { opus: { in: 0, out: 0 }, haiku: { in: 0, out: 0 } }
+    state.usage = state.usage || {}
+    for (const tier of ['opus', 'sonnet', 'haiku']) state.usage[tier] = state.usage[tier] || { in: 0, out: 0 }
     state.chains = (state.chains || 0) + 1
     if (state.chains > MAX_CHAINS) throw new Error('Batch processing exceeded the maximum invocation chain — contact support.')
     const persistState = () => updateJob(job_id, { batch_state: state })
@@ -1211,7 +1286,7 @@ export const handler = async (event) => {
     await updateJob(job_id, { progress: 94, stage_detail: 'Computing depth engine (trench safety, geotech)' })
     const { data: projGeo } = await supabase
       .from('projects')
-      .select('geotech_rock_depth_ft, geotech_groundwater_depth_ft')
+      .select('geotech_rock_depth_ft, geotech_groundwater_depth_ft, calibration_truth')
       .eq('id', project_id).single()
     const geotech = (projGeo && (projGeo.geotech_rock_depth_ft != null || projGeo.geotech_groundwater_depth_ft != null))
       ? { rock_depth_ft: projGeo.geotech_rock_depth_ft, groundwater_depth_ft: projGeo.geotech_groundwater_depth_ft }
@@ -1228,8 +1303,11 @@ export const handler = async (event) => {
     // ── Write results ────────────────────────────────────────
     await updateJob(job_id, { progress: 96, stage_detail: 'Writing line items' })
 
-    await supabase.from('line_items').delete().eq('project_id', project_id)
-    if (merged.length > 0) {
+    // Calibration runs are experiments: they never touch the project's shared
+    // line_items or the user's job history — their output lives only in
+    // analysis_results, where the Admin calibration table reads it.
+    if (!cfg.calibration) await supabase.from('line_items').delete().eq('project_id', project_id)
+    if (!cfg.calibration && merged.length > 0) {
       const rows = merged.map(m => ({
         project_id,
         category: m.category,
@@ -1307,16 +1385,20 @@ export const handler = async (event) => {
       // Real spend for this run (Message Batches pricing). Excludes the few
       // synchronous assembly Haiku calls (~cents).
       run_cost: {
-        opus_input_tokens: state.usage.opus.in,
-        opus_output_tokens: state.usage.opus.out,
-        haiku_input_tokens: state.usage.haiku.in,
-        haiku_output_tokens: state.usage.haiku.out,
-        est_usd: Math.round((
-          (state.usage.opus.in / 1e6) * PRICES.opus.in +
-          (state.usage.opus.out / 1e6) * PRICES.opus.out +
-          (state.usage.haiku.in / 1e6) * PRICES.haiku.in +
-          (state.usage.haiku.out / 1e6) * PRICES.haiku.out
-        ) * 100) / 100,
+        usage: state.usage,
+        est_usd: Math.round(
+          ['opus', 'sonnet', 'haiku'].reduce((sum, tier) =>
+            sum +
+            ((state.usage[tier]?.in || 0) / 1e6) * PRICES[tier].in +
+            ((state.usage[tier]?.out || 0) / 1e6) * PRICES[tier].out, 0) * 100) / 100,
+      },
+      // Which model tier ran each pass, and how this run scored.
+      config: { label: cfg.label || 'Standard (Opus)', models: tiers, calibration: !!cfg.calibration },
+      calibration_score: {
+        vs_engineer: varianceMetrics(variance),
+        vs_truth: Array.isArray(projGeo?.calibration_truth) && projGeo.calibration_truth.length
+          ? scoreAgainstTruth(projGeo.calibration_truth, items)
+          : null,
       },
     }
 
@@ -1326,7 +1408,7 @@ export const handler = async (event) => {
     // "Recent Jobs" — even if the user's browser wasn't open at completion (the
     // Realtime event only fires for open sessions).
     const { data: proj } = await supabase.from('projects').select('user_id, name').eq('id', project_id).single()
-    if (proj?.user_id) {
+    if (proj?.user_id && !cfg.calibration) {
       await supabase.from('jobs').insert({
         user_id: proj.user_id,
         plan_filename: proj.name || 'Plan Set',

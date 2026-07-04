@@ -38,9 +38,39 @@ export default async (request) => {
   } catch {
     return new Response('Invalid JSON', { status: 400 })
   }
-  const { project_id, geotech } = body
+  const { project_id, geotech, config, ground_truth } = body
   if (!project_id) {
     return new Response('Missing project_id', { status: 400 })
+  }
+
+  // Calibration config: sanitize to known fields and valid model tiers.
+  let jobConfig = null
+  if (config && typeof config === 'object') {
+    const TIERS = new Set(['opus', 'sonnet', 'haiku'])
+    const models = {}
+    for (const k of ['pass1', 'pass2', 'pass4', 'pass5']) {
+      if (TIERS.has(config.models?.[k])) models[k] = config.models[k]
+    }
+    jobConfig = {
+      calibration: config.calibration === true,
+      label: typeof config.label === 'string' ? config.label.slice(0, 60) : null,
+      models,
+    }
+  }
+
+  // Ground-truth takeoff rows (estimator-verified) — stored once on the project;
+  // every calibration run scores against them. RLS scopes the update to the owner.
+  if (Array.isArray(ground_truth) && ground_truth.length) {
+    const rows = ground_truth.slice(0, 1000)
+      .filter(r => r && typeof r.description === 'string' && isFinite(Number(r.quantity)))
+      .map(r => ({
+        description: r.description.slice(0, 300),
+        quantity: Number(r.quantity),
+        unit: typeof r.unit === 'string' ? r.unit.slice(0, 8).toUpperCase() : '',
+      }))
+    if (rows.length) {
+      await supabase.from('projects').update({ calibration_truth: rows }).eq('id', project_id)
+    }
   }
 
   // Persist geotech findings (rock depth, groundwater depth) on the project so
@@ -68,7 +98,7 @@ export default async (request) => {
 
   const { data: job, error: jobErr } = await supabase
     .from('processing_jobs')
-    .insert({ project_id, kind: 'analysis', stage: 'analysis_queued', progress: 0 })
+    .insert({ project_id, kind: 'analysis', stage: 'analysis_queued', progress: 0, config: jobConfig })
     .select('id')
     .single()
 

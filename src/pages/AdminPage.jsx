@@ -1,11 +1,46 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Users, FileText, ChevronDown, ChevronRight, Download } from 'lucide-react'
+import { Users, FileText, ChevronDown, ChevronRight, Download, FlaskConical, Upload } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
 import './AdminPage.css'
 
 const ADMIN_EMAIL = 'mattvincentwalker@gmail.com'
+
+// Model tier per pass: pass1 plan quantities, pass2 profiles, pass4 small-dia
+// sweep, pass5 engineer tables. Merge/assembly is always Haiku.
+const CAL_PRESETS = [
+  { id: 'baseline', label: 'Opus baseline', models: { pass1: 'opus', pass2: 'opus', pass4: 'opus', pass5: 'haiku' } },
+  { id: 'sonnet', label: 'Sonnet 5 extraction', models: { pass1: 'sonnet', pass2: 'sonnet', pass4: 'sonnet', pass5: 'haiku' } },
+  { id: 'budget', label: 'Budget (Sonnet + Haiku sweep)', models: { pass1: 'sonnet', pass2: 'sonnet', pass4: 'haiku', pass5: 'haiku' } },
+]
+
+const modelsShort = (models) => ['pass1', 'pass2', 'pass4', 'pass5']
+  .map(k => (models?.[k] || (k === 'pass5' ? 'haiku' : 'opus'))[0].toUpperCase()).join('/')
+
+// Same metric shape the pipeline computes — used as a fallback for older
+// results that carry a variance_table but no calibration_score.
+const varianceMetricsClient = (variance) => {
+  if (!variance?.length) return null
+  const matched = variance.filter(v => v.pct_difference != null)
+  return {
+    matched: matched.length,
+    within_5: matched.filter(v => Math.abs(v.pct_difference) <= 5).length,
+    within_15: matched.filter(v => Math.abs(v.pct_difference) <= 15).length,
+    mean_abs_pct: matched.length ? Math.round(matched.reduce((s, v) => s + Math.abs(v.pct_difference), 0) / matched.length * 10) / 10 : null,
+    missing_from_ours: variance.filter(v => v.status === 'MISSING_FROM_OURS').length,
+  }
+}
+
+const ScoreCell = ({ s }) => {
+  if (!s) return <span className="text-muted">—</span>
+  return (
+    <span className="cal-score">
+      <strong>{s.within_5}/{s.matched}</strong> ±5% · μΔ {s.mean_abs_pct != null ? `${s.mean_abs_pct}%` : '—'} · {s.missing_from_ours} missed
+    </span>
+  )
+}
 
 function formatDate(ts) {
   if (!ts) return '—'
@@ -27,6 +62,121 @@ export default function AdminPage() {
   const [fetching, setFetching] = useState(true)
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState({})
+
+  // ── Calibration state ──
+  const [calProjects, setCalProjects] = useState([])
+  const [calProject, setCalProject] = useState('')
+  const [calRuns, setCalRuns] = useState([])
+  const [calPresets, setCalPresets] = useState({ baseline: false, sonnet: true, budget: false })
+  const [calTruth, setCalTruth] = useState(null)     // parsed rows pending upload
+  const [calTruthName, setCalTruthName] = useState(null)
+  const [calLaunching, setCalLaunching] = useState(false)
+  const [calMsg, setCalMsg] = useState(null)
+  const calFileRef = useRef(null)
+
+  const loadCalRuns = useCallback(async (projectId) => {
+    if (!projectId) { setCalRuns([]); return }
+    const { data: jobRows } = await supabase
+      .from('processing_jobs')
+      .select('id, stage, progress, stage_detail, error, created_at, config')
+      .eq('project_id', projectId).eq('kind', 'analysis')
+      .order('created_at', { ascending: false }).limit(20)
+    const ids = (jobRows || []).map(j => j.id)
+    let resultsByJob = {}
+    if (ids.length) {
+      const { data: results } = await supabase
+        .from('analysis_results')
+        .select('job_id, created_at, result_json')
+        .in('job_id', ids).order('created_at', { ascending: false })
+      for (const r of results || []) {
+        if (!resultsByJob[r.job_id]) resultsByJob[r.job_id] = r.result_json
+      }
+    }
+    setCalRuns((jobRows || []).map(j => ({ ...j, result: resultsByJob[j.id] || null })))
+  }, [])
+
+  useEffect(() => {
+    if (!user || user.email !== ADMIN_EMAIL) return
+    supabase.from('projects')
+      .select('id, name, created_at, calibration_truth')
+      .order('created_at', { ascending: false }).limit(25)
+      .then(({ data }) => {
+        setCalProjects(data || [])
+        if (data?.length && !calProject) setCalProject(data[0].id)
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user])
+
+  useEffect(() => { loadCalRuns(calProject) }, [calProject, loadCalRuns])
+
+  // Poll while any calibration run is still working
+  useEffect(() => {
+    const active = calRuns.some(r => r.stage !== 'complete' && r.stage !== 'error')
+    if (!active) return
+    const t = setInterval(() => loadCalRuns(calProject), 20000)
+    return () => clearInterval(t)
+  }, [calRuns, calProject, loadCalRuns])
+
+  const handleTruthUpload = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    e.target.value = ''
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const wb = XLSX.read(ev.target.result, { type: 'array' })
+        const raw = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+        const rows = raw.map(r => {
+          const keys = Object.keys(r)
+          const dk = keys.find(k => /desc|item|scope|material/i.test(k))
+          const qk = keys.find(k => /qty|quant|amount/i.test(k))
+          const uk = keys.find(k => /unit|uom/i.test(k))
+          if (!dk || !qk) return null
+          const qty = Number(String(r[qk]).replace(/[$,]/g, ''))
+          return (r[dk] && isFinite(qty))
+            ? { description: String(r[dk]), quantity: qty, unit: uk ? String(r[uk]).trim().toUpperCase() : '' }
+            : null
+        }).filter(Boolean)
+        if (!rows.length) { setCalMsg('Could not find description + quantity columns in that file.'); return }
+        setCalTruth(rows)
+        setCalTruthName(file.name)
+        setCalMsg(`${rows.length} ground-truth rows parsed — will attach on launch.`)
+      } catch (err) {
+        setCalMsg(`Parse failed: ${err.message}`)
+      }
+    }
+    reader.readAsArrayBuffer(file)
+  }
+
+  const launchCalibration = async () => {
+    const selected = CAL_PRESETS.filter(p => calPresets[p.id])
+    if (!calProject || !selected.length) return
+    setCalLaunching(true)
+    setCalMsg(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` }
+      for (let i = 0; i < selected.length; i++) {
+        const p = selected[i]
+        const res = await fetch('/api/start-analysis', {
+          method: 'POST', headers,
+          body: JSON.stringify({
+            project_id: calProject,
+            config: { calibration: true, label: p.label, models: p.models },
+            ...(i === 0 && calTruth ? { ground_truth: calTruth } : {}),
+          }),
+        })
+        if (!res.ok) throw new Error(`${p.label}: ${(await res.text()).slice(0, 120)}`)
+      }
+      setCalMsg(`Launched ${selected.length} calibration run${selected.length > 1 ? 's' : ''}. Scores appear below as each completes.`)
+      setCalTruth(null); setCalTruthName(null)
+      setTimeout(() => loadCalRuns(calProject), 1500)
+    } catch (err) {
+      setCalMsg(`Launch failed: ${err.message}`)
+    } finally {
+      setCalLaunching(false)
+    }
+  }
 
   useEffect(() => {
     if (loading) return
@@ -141,6 +291,88 @@ export default function AdminPage() {
             <Download size={14} /> Export CSV
           </button>
         </div>
+      </div>
+
+      {/* ── CALIBRATION HARNESS ── */}
+      <div className="cal-section">
+        <div className="cal-header">
+          <span className="cal-title"><FlaskConical size={15} /> Calibration Harness</span>
+          <span className="cal-subtitle">Run the same project through different model configs — scores vs the engineer's quantity table and (optionally) a verified ground-truth takeoff</span>
+        </div>
+
+        <div className="cal-controls">
+          <select className="cal-select" value={calProject} onChange={e => setCalProject(e.target.value)}>
+            {!calProjects.length && <option value="">No projects yet</option>}
+            {calProjects.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.name || p.id.slice(0, 8)}{p.calibration_truth?.length ? ` (truth: ${p.calibration_truth.length} rows)` : ''}
+              </option>
+            ))}
+          </select>
+
+          {CAL_PRESETS.map(p => (
+            <label key={p.id} className="cal-preset">
+              <input
+                type="checkbox"
+                checked={!!calPresets[p.id]}
+                onChange={e => setCalPresets(prev => ({ ...prev, [p.id]: e.target.checked }))}
+              />
+              {p.label} <span className="cal-models">{modelsShort(p.models)}</span>
+            </label>
+          ))}
+
+          <button className="btn btn-ghost" style={{ fontSize: '0.72rem' }} onClick={() => calFileRef.current?.click()}>
+            <Upload size={12} /> {calTruthName || 'Ground truth (CSV/XLSX)'}
+          </button>
+          <input ref={calFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleTruthUpload} style={{ display: 'none' }} />
+
+          <button
+            className="btn btn-primary"
+            disabled={calLaunching || !calProject || !CAL_PRESETS.some(p => calPresets[p.id])}
+            onClick={launchCalibration}
+          >
+            {calLaunching ? 'Launching…' : 'Run Calibration'}
+          </button>
+        </div>
+
+        {calMsg && <div className="cal-msg">{calMsg}</div>}
+
+        {calRuns.length > 0 && (
+          <div className="admin-table-wrap" style={{ marginTop: 10 }}>
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Config</th><th>Models</th><th>Status</th><th>Items</th><th>Cost</th>
+                  <th>vs Engineer Table</th><th>vs Ground Truth</th><th>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {calRuns.map(r => {
+                  const res = r.result
+                  const score = res?.calibration_score
+                  const vsEng = score?.vs_engineer || varianceMetricsClient(res?.variance_table)
+                  const done = r.stage === 'complete'
+                  return (
+                    <tr key={r.id}>
+                      <td>{r.config?.label || res?.config?.label || 'Standard (Opus)'}</td>
+                      <td className="cal-models">{modelsShort(r.config?.models || res?.config?.models)}</td>
+                      <td>
+                        {r.stage === 'error'
+                          ? <span style={{ color: 'var(--titan-red)' }} title={r.error}>error</span>
+                          : done ? '✓ complete' : `${r.progress || 0}% — ${r.stage_detail || r.stage}`}
+                      </td>
+                      <td>{res?.summary?.total_items ?? '—'}</td>
+                      <td>{res?.run_cost?.est_usd != null ? `$${res.run_cost.est_usd}` : '—'}</td>
+                      <td><ScoreCell s={vsEng} /></td>
+                      <td><ScoreCell s={score?.vs_truth} /></td>
+                      <td className="admin-date">{formatDate(r.created_at)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {profiles.length === 0 ? (
