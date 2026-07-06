@@ -93,6 +93,91 @@ export default function Dashboard() {
     }
   }, [chatMessages])
 
+  // Loads a project's classified sheets (with signed thumbnail URLs) into
+  // sheetMaps. Returns the page-1 preview URL. Shared by the Realtime handler
+  // and the restore-on-load effect.
+  const loadSheetMap = useCallback(async (projectId) => {
+    const { data: sheets } = await supabase
+      .from('sheets')
+      .select('id, page_number, classification, included_in_analysis, storage_path, sheet_number, sheet_title')
+      .eq('project_id', projectId)
+      .order('page_number')
+    const sheetsWithUrls = await Promise.all((sheets || []).map(async (sheet) => {
+      if (!sheet.storage_path) return { ...sheet, preview_url: null }
+      const { data: signed } = await supabase.storage
+        .from('plan-uploads')
+        .createSignedUrl(sheet.storage_path, 7200)
+      return { ...sheet, preview_url: signed?.signedUrl || null }
+    }))
+    setSheetMaps(prev => ({ ...prev, [projectId]: { sheets: sheetsWithUrls, loaded: true } }))
+    return sheetsWithUrls.find(s => s.page_number === 1)?.preview_url || null
+  }, [])
+
+  // Restore in-flight projects on load. The sidebar is in-memory state, so a
+  // refresh or navigation used to orphan uploads mid-triage/mid-analysis even
+  // though the server kept working. Rebuild entries for any project whose
+  // latest job (last 48h) hasn't completed; Realtime picks them up from there.
+  useEffect(() => {
+    if (!user) return
+    let cancelled = false
+    const restore = async () => {
+      const { data: jobRows } = await supabase
+        .from('processing_jobs')
+        .select('id, project_id, kind, stage, progress, stage_detail, error, config, created_at, projects!inner(name)')
+        .gt('created_at', new Date(Date.now() - 48 * 3600 * 1000).toISOString())
+        .order('created_at', { ascending: false })
+        .limit(30)
+      if (cancelled || !jobRows?.length) return
+
+      // Latest job per project decides what to show; completed runs are
+      // already reachable via Recent Jobs, so only in-flight (or errored)
+      // work gets restored. Calibration experiments stay out of the sidebar.
+      const byProject = new Map()
+      for (const j of jobRows) if (!byProject.has(j.project_id)) byProject.set(j.project_id, j)
+      const toRestore = [...byProject.values()].filter(j =>
+        j.stage !== 'complete' && j.stage !== 'ready' && !(j.config && j.config.calibration)
+      )
+      if (!toRestore.length) return
+
+      const entries = []
+      for (const j of toRestore) {
+        let preview = null
+        if (j.stage === 'triage_complete') {
+          preview = await loadSheetMap(j.project_id)
+        } else {
+          const { data: sheet } = await supabase
+            .from('sheets').select('storage_path')
+            .eq('project_id', j.project_id).eq('page_number', 1).maybeSingle()
+          if (sheet?.storage_path) {
+            const { data: signed } = await supabase.storage
+              .from('plan-uploads').createSignedUrl(sheet.storage_path, 7200)
+            preview = signed?.signedUrl || null
+          }
+        }
+        entries.push({
+          name: j.projects?.name || 'Plan Set',
+          mediaType: 'application/pdf',
+          preview,
+          project_id: j.project_id,
+          job_id: j.id,
+          jobStage: j.stage,
+          jobProgress: j.progress,
+          jobDetail: j.stage_detail,
+          jobError: j.error,
+        })
+      }
+      if (!cancelled && entries.length) {
+        setImages(prev => {
+          const known = new Set(prev.map(i => i.project_id).filter(Boolean))
+          const fresh = entries.filter(e => !known.has(e.project_id))
+          return fresh.length ? [...prev, ...fresh] : prev
+        })
+      }
+    }
+    restore()
+    return () => { cancelled = true }
+  }, [user, loadSheetMap])
+
   // Supabase Realtime: watch processing_jobs for this user and update image state
   useEffect(() => {
     if (!user) return
@@ -130,26 +215,10 @@ export default function Dashboard() {
         }
 
         if (stage === 'triage_complete') {
-          // Fetch all classified sheets and their signed thumbnail URLs
-          const { data: sheets } = await supabase
-            .from('sheets')
-            .select('id, page_number, classification, included_in_analysis, storage_path, sheet_number, sheet_title')
-            .eq('project_id', project_id)
-            .order('page_number')
-
-          const sheetsWithUrls = await Promise.all((sheets || []).map(async (sheet) => {
-            if (!sheet.storage_path) return { ...sheet, preview_url: null }
-            const { data: signed } = await supabase.storage
-              .from('plan-uploads')
-              .createSignedUrl(sheet.storage_path, 7200)
-            return { ...sheet, preview_url: signed?.signedUrl || null }
-          }))
-
-          const page1 = sheetsWithUrls.find(s => s.page_number === 1)
-          setSheetMaps(prev => ({ ...prev, [project_id]: { sheets: sheetsWithUrls, loaded: true } }))
+          const page1Url = await loadSheetMap(project_id)
           setImages(prev => prev.map(img =>
             img.job_id === jobId
-              ? { ...img, jobStage: stage, jobProgress: progress, jobError, preview: page1?.preview_url }
+              ? { ...img, jobStage: stage, jobProgress: progress, jobError, preview: page1Url }
               : img
           ))
         } else {
@@ -184,7 +253,7 @@ export default function Dashboard() {
       .subscribe()
 
     return () => supabase.removeChannel(channel)
-  }, [user])
+  }, [user, loadSheetMap])
 
   const buildChatSystemPrompt = (res) => {
     const questions = res.clarification_questions || []
