@@ -1,7 +1,8 @@
 .admin-page {
   max-width: 1200px;
   margin: 0 auto;
-  padding: var(--space-2xl) var(--space-lg);
+  /* 56px fixed navbar + normal page padding */
+  padding: calc(56px + var(--space-2xl)) var(--space-lg) var(--space-2xl);
   min-height: calc(100vh - 56px);
 }
 
