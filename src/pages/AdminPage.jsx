@@ -6,7 +6,13 @@ import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
 import './AdminPage.css'
 
-const ADMIN_EMAIL = 'mattvincentwalker@gmail.com'
+// Keep in sync with the is_admin() SQL function (migration 009) — the RLS
+// policies are what actually grant cross-user reads; this list only gates the UI.
+const ADMIN_EMAILS = new Set([
+  'mattvincentwalker@gmail.com',
+  'mvw@mattvincentwalker.com',
+  'hello@6signal.co',
+])
 
 // Model tier per pass: pass1 plan quantities, pass2 profiles, pass4 small-dia
 // sweep, pass5 engineer tables. Merge/assembly is always Haiku.
@@ -96,7 +102,7 @@ export default function AdminPage() {
   }, [])
 
   useEffect(() => {
-    if (!user || user.email !== ADMIN_EMAIL) return
+    if (!user || !ADMIN_EMAILS.has(user.email)) return
     supabase.from('projects')
       .select('id, name, created_at, calibration_truth')
       .order('created_at', { ascending: false }).limit(25)
@@ -181,7 +187,7 @@ export default function AdminPage() {
   useEffect(() => {
     if (loading) return
     if (!user) { navigate('/login', { replace: true }); return }
-    if (user.email !== ADMIN_EMAIL) { navigate('/dashboard', { replace: true }); return }
+    if (!ADMIN_EMAILS.has(user.email)) { navigate('/dashboard', { replace: true }); return }
 
     const load = async () => {
       setFetching(true)
