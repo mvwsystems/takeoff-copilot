@@ -2028,3 +2028,75 @@
   padding: 1px 4px;
   border-radius: 2px;
 }
+
+/* —— SIDEBAR UPLOAD BUTTONS (uniform) —— */
+.sidebar-upload-btn {
+  width: calc(100% - 16px);
+  margin: 0 8px 8px;
+  height: 32px;
+  font-size: 0.7rem;
+  justify-content: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* —— PLAN VIEW SHEET GRID —— */
+.plan-sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+  padding: 4px;
+}
+
+.plan-sheet-cell {
+  display: block;
+  border: 1px solid var(--titan-border);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--titan-surface);
+  transition: border-color var(--duration-fast), transform var(--duration-fast);
+  text-decoration: none;
+}
+.plan-sheet-cell:hover {
+  border-color: var(--titan-red);
+  transform: translateY(-2px);
+}
+.plan-sheet-cell img {
+  width: 100%;
+  aspect-ratio: 3/2;
+  object-fit: cover;
+  display: block;
+}
+.plan-sheet-label {
+  display: block;
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  color: var(--titan-text-dim);
+  letter-spacing: 0.5px;
+}
+
+/* —— RESOLVE PANEL PROGRESS —— */
+.resolve-progress-label {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--titan-text-muted);
+  margin-left: 8px;
+}
+.resolve-progress-track {
+  display: inline-block;
+  width: 70px;
+  height: 4px;
+  background: var(--titan-surface);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-left: 6px;
+}
+.resolve-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--titan-green, #2ECC71);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}

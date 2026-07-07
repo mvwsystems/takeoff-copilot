@@ -35,7 +35,7 @@ export default async (request) => {
 
   if (isChatMode) {
     anthropicBody = {
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5',
       max_tokens: maxTokens,
       system: systemPrompt,
       messages,
@@ -48,7 +48,7 @@ export default async (request) => {
     if (specs_file_id) contentParts.push({ type: 'document', source: { type: 'file', file_id: specs_file_id } })
 
     anthropicBody = {
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-sonnet-5',
       max_tokens: maxTokens,
       messages: [{ role: 'user', content: contentParts }],
     }

@@ -53,6 +53,7 @@ export default function Dashboard() {
   const geotechInputRef = useRef(null)
   const takeoffInputRef = useRef(null)
   const specsInputRef = useRef(null)
+  const compareInputRef = useRef(null)
   const workerRef = useRef(null)
   const pendingRef = useRef({})
   const chatScrollRef = useRef(null)
@@ -60,6 +61,11 @@ export default function Dashboard() {
   const [proceedingAnalysis, setProceedingAnalysis] = useState(false)
   const [materialsMap, setMaterialsMap] = useState({})   // slug -> material row
   const [materialCard, setMaterialCard] = useState(null) // open material slug
+  const [resolveOpen, setResolveOpen] = useState(false)
+  const [resolveMsgs, setResolveMsgs] = useState([])
+  const [resolveInput, setResolveInput] = useState('')
+  const [resolveBusy, setResolveBusy] = useState(false)
+  const resolveScrollRef = useRef(null)
   const imagesRef = useRef([])
   useEffect(() => { imagesRef.current = images }, [images])
 
@@ -84,7 +90,13 @@ export default function Dashboard() {
   useEffect(() => {
     setChatOpen(false)
     setChatMessages([])
+    setResolveOpen(false)
+    setResolveMsgs([])
   }, [activeImage])
+
+  useEffect(() => {
+    if (resolveScrollRef.current) resolveScrollRef.current.scrollTop = resolveScrollRef.current.scrollHeight
+  }, [resolveMsgs])
 
   // Auto-scroll chat to latest message
   useEffect(() => {
@@ -325,6 +337,126 @@ INSTRUCTIONS:
     }
   }
 
+  // ── Resolve flow: one clarification at a time ─────────────────
+  // The pipeline flags what it caught but couldn't pin down (a manhole with no
+  // readable depth, plan/profile length disagreements, shaky big quantities).
+  // The estimator answers one question at a time; answers write back into the
+  // takeoff and persist, and skipped ones are marked for field verification.
+  const openClarifications = (res) => (res?.clarifications || []).filter(c => !c.resolution)
+
+  const resolveQuestionText = (c) =>
+    `${c.question}${c.context ? `\n\n${c.context}` : ''}\n\n(Type your answer, or "skip" to mark it for field verification.)`
+
+  const openResolvePanel = () => {
+    setResolveOpen(true)
+    if (!resolveMsgs.length) {
+      const open = openClarifications(result)
+      if (open.length) {
+        setResolveMsgs([{
+          role: 'assistant',
+          text: `I caught ${open.length} item${open.length > 1 ? 's' : ''} I couldn't fully pin down — mostly depths. One at a time:\n\n${resolveQuestionText(open[0])}`,
+        }])
+      }
+    }
+  }
+
+  const persistResolvedResult = async (newResult) => {
+    const img = images[activeImage]
+    try {
+      if (img?.job_id) {
+        await supabase.from('analysis_results').update({ result_json: newResult }).eq('job_id', img.job_id)
+      }
+      if (img?.project_id) {
+        await supabase.from('jobs').update({ result_json: newResult }).eq('project_id', img.project_id)
+      } else if (activeJobId) {
+        await supabase.from('jobs').update({ result_json: newResult }).eq('id', activeJobId)
+      }
+    } catch (e) {
+      console.warn('Resolution persist failed:', e.message)
+    }
+  }
+
+  const applyResolution = (c, verdict, rawAnswer) => {
+    const res = results[activeImage]
+    const newItems = res.items.map(it => {
+      if (c.item_no == null || it.item_no !== c.item_no) return it
+      const upd = { ...it }
+      if (verdict.depth_ft != null) {
+        upd.depth_avg = verdict.depth_ft
+        upd.depth_max = verdict.depth_ft
+        upd.depth_unavailable = false
+        upd.notes = `Depth ${verdict.depth_ft} ft — estimator provided. ${upd.notes || ''}`.slice(0, 600)
+      }
+      if (verdict.quantity != null) {
+        upd.quantity = verdict.quantity
+        upd.notes = `Qty ${verdict.quantity} ${upd.unit} — estimator verified. ${upd.notes || ''}`.slice(0, 600)
+      }
+      if (verdict.depth_ft == null && verdict.quantity == null && verdict.note) {
+        upd.notes = `${verdict.note} ${upd.notes || ''}`.slice(0, 600)
+      }
+      return upd
+    })
+    const newClar = res.clarifications.map(x =>
+      x.id === c.id ? { ...x, resolution: { status: verdict.status, answer: rawAnswer, depth_ft: verdict.depth_ft ?? null, quantity: verdict.quantity ?? null } } : x
+    )
+    const newResult = { ...res, items: newItems, clarifications: newClar }
+    setResults(prev => ({ ...prev, [activeImage]: newResult }))
+    persistResolvedResult(newResult)
+    return newResult
+  }
+
+  const sendResolveAnswer = async () => {
+    const text = resolveInput.trim()
+    if (!text || resolveBusy) return
+    const res = results[activeImage]
+    const open = openClarifications(res)
+    if (!open.length) return
+    const c = open[0]
+    setResolveInput('')
+    const history = [...resolveMsgs, { role: 'user', text }]
+    setResolveMsgs([...history, { role: 'assistant', text: null, loading: true }])
+    setResolveBusy(true)
+    try {
+      let verdict
+      if (/^(skip|later|pass|n\/?a)\b/i.test(text)) {
+        verdict = { status: 'skipped', note: '⏳ Pending field verify — estimator to confirm.' }
+      } else {
+        const item = c.item_no != null ? res.items.find(i => i.item_no === c.item_no) : null
+        const sys = `You extract structured resolutions from an estimator's answer to a takeoff clarification question. Respond ONLY with JSON, no prose: {"status":"resolved"|"unclear","depth_ft":number|null,"quantity":number|null,"note":"one short sentence for the line item, or null"}. Set depth_ft or quantity ONLY when the answer clearly states the number (convert units to feet for depth). If the answer doesn't actually resolve the question, use status "unclear".`
+        const reply = await callChatApi(sys, [{
+          role: 'user',
+          content: `QUESTION: ${c.question}\nITEM: ${JSON.stringify(item || {})}\nESTIMATOR ANSWER: ${text}`,
+        }])
+        const m = (reply || '').match(/\{[\s\S]*\}/)
+        verdict = m ? JSON.parse(m[0]) : { status: 'unclear' }
+      }
+
+      if (verdict.status === 'unclear') {
+        setResolveMsgs([...history, { role: 'assistant', text: `I couldn't pull a clear answer from that. ${c.question}\n\nA number works best — e.g. "8.5 ft" — or say "skip" to flag it for field verification.` }])
+      } else {
+        const newResult = applyResolution(c, verdict, text)
+        const remaining = openClarifications(newResult)
+        const ack = verdict.status === 'skipped'
+          ? 'Flagged for field verification — it stays marked on the takeoff so it can\'t slip through.'
+          : verdict.depth_ft != null
+            ? `Got it — depth set to ${verdict.depth_ft} ft and noted on the line item.`
+            : verdict.quantity != null
+              ? `Updated — quantity set to ${verdict.quantity}.`
+              : 'Noted on the line item.'
+        setResolveMsgs([...history, {
+          role: 'assistant',
+          text: remaining.length
+            ? `${ack}\n\nNext:\n\n${resolveQuestionText(remaining[0])}`
+            : `${ack}\n\nThat's all of them — every open item is resolved or flagged. The takeoff is updated and saved.`,
+        }])
+      }
+    } catch (err) {
+      setResolveMsgs([...history, { role: 'assistant', text: `Error: ${err.message}` }])
+    } finally {
+      setResolveBusy(false)
+    }
+  }
+
   useEffect(() => { localStorage.setItem('tc_job_type', jobType) }, [jobType])
 
   // Materials catalog (reference data) — fetched once, keyed by slug for thumbnails.
@@ -355,7 +487,7 @@ INSTRUCTIONS:
     setHistoryLoading(true)
     const { data } = await supabase
       .from('jobs')
-      .select('id, plan_filename, screening_grade, line_item_count, created_at, result_json')
+      .select('id, project_id, plan_filename, screening_grade, line_item_count, created_at, result_json')
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(15)
@@ -367,12 +499,18 @@ INSTRUCTIONS:
 
   const restoreJob = (job) => {
     if (!job.result_json) return
-    setImages([{ name: job.plan_filename || 'Past Job', preview: null }])
+    setImages([{ name: job.plan_filename || 'Past Job', preview: null, project_id: job.project_id || null }])
     setResults({ 0: job.result_json })
     setScreenings(job.screening_grade ? { 0: { grade: job.screening_grade } } : {})
     setActiveImage(0)
     setActiveTab('takeoff')
     setActiveJobId(job.id)
+    // Load sheet thumbnails so Plan View works on restored jobs.
+    if (job.project_id) {
+      loadSheetMap(job.project_id).then(page1 => {
+        if (page1) setImages(prev => prev.map((img, i) => i === 0 ? { ...img, preview: page1 } : img))
+      })
+    }
   }
 
   const submitFeedback = async () => {
@@ -701,6 +839,27 @@ INSTRUCTIONS:
     if (!file) return
     e.target.value = ''
     processGeotech(file)
+  }
+
+  // Compare tab: fill the paste box from an uploaded CSV/Excel takeoff.
+  const handleCompareUpload = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    e.target.value = ''
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const wb = XLSX.read(ev.target.result, { type: 'array' })
+        const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
+        const lines = rows
+          .map(r => r.map(c => String(c).trim()).filter(Boolean).join(', '))
+          .filter(l => l.length > 1)
+        setComparisonData(lines.join('\n'))
+      } catch (err) {
+        setError(`Could not read takeoff file: ${err.message}`)
+      }
+    }
+    reader.readAsArrayBuffer(file)
   }
 
   const handleTakeoffUpload = (e) => {
@@ -1623,9 +1782,13 @@ INSTRUCTIONS:
       {/* SIDEBAR */}
       <aside className="sidebar">
         <div className="sidebar-header">
-          <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => fileInputRef.current?.click()}>
-            <Upload size={15} /> Upload Sheets
-          </button>
+          {/* Hidden on the empty state — the main-panel CTA is the single upload
+              entry point there; this appears once a plan set is loaded. */}
+          {images.length > 0 && (
+            <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => fileInputRef.current?.click()}>
+              <Upload size={15} /> Upload Sheets
+            </button>
+          )}
           <input ref={fileInputRef} type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.pdf,application/pdf" multiple onChange={handleFileUpload} style={{ display: 'none' }} />
           
           {images.length > 1 && (
@@ -1743,9 +1906,9 @@ INSTRUCTIONS:
               </div>
             )}
           </div>
-          <button className="btn btn-secondary" style={{ width: 'calc(100% - 16px)', margin: '0 8px 8px', fontSize: '0.72rem' }}
+          <button className="btn btn-secondary sidebar-upload-btn"
             onClick={() => geotechInputRef.current?.click()} disabled={geotechLoading}>
-            <Upload size={12} /> {geotechResult ? 'Replace Geotech' : 'Upload Geotech PDF'}
+            <Upload size={12} /> {geotechResult ? 'Replace Geotech PDF' : 'Geotech PDF'}
           </button>
           <input ref={geotechInputRef} type="file" accept=".pdf,application/pdf" onChange={handleGeotechUpload} style={{ display: 'none' }} />
         </div>
@@ -1784,12 +1947,11 @@ INSTRUCTIONS:
             )}
           </div>
           <button
-            className="btn btn-secondary"
-            style={{ width: 'calc(100% - 16px)', margin: '0 8px 8px', fontSize: '0.72rem' }}
+            className="btn btn-secondary sidebar-upload-btn"
             onClick={() => specsInputRef.current?.click()}
             disabled={specsUploading}
           >
-            <Upload size={12} /> {specsFileId ? 'Replace Specs' : 'Upload Specs PDF'}
+            <Upload size={12} /> {specsFileId ? 'Replace Specs PDF' : 'Specs PDF'}
           </button>
           <input ref={specsInputRef} type="file" accept=".pdf,application/pdf"
             onChange={e => { const f = e.target.files[0]; if (f) { e.target.value = ''; uploadSpecs(f) } }}
@@ -1814,11 +1976,10 @@ INSTRUCTIONS:
               )}
             </div>
             <button
-              className="btn btn-secondary"
-              style={{ width: 'calc(100% - 16px)', margin: '0 8px 8px', fontSize: '0.72rem' }}
+              className="btn btn-secondary sidebar-upload-btn"
               onClick={() => takeoffInputRef.current?.click()}
             >
-              <Upload size={12} /> {uploadedTakeoffData ? 'Replace Takeoff' : 'Upload Completed Takeoff'}
+              <Upload size={12} /> {uploadedTakeoffData ? 'Replace Takeoff' : 'Takeoff (CSV/Excel)'}
             </button>
             <input
               ref={takeoffInputRef}
@@ -2753,19 +2914,52 @@ INSTRUCTIONS:
               )}
 
               {/* PLAN VIEW TAB */}
-              {activeTab === 'plan' && images[activeImage] && (
-                <div className="plan-view animate-fade">
-                  <img src={images[activeImage].preview} alt="Plan sheet" className="plan-image" />
-                </div>
-              )}
+              {activeTab === 'plan' && images[activeImage] && (() => {
+                const img = images[activeImage]
+                const map = img.project_id ? sheetMaps[img.project_id] : null
+                if (map?.loaded && map.sheets.some(s => s.preview_url)) {
+                  return (
+                    <div className="plan-view animate-fade">
+                      <div className="plan-sheet-grid">
+                        {map.sheets.filter(s => s.preview_url).map(s => (
+                          <a key={s.id} className="plan-sheet-cell" href={s.preview_url} target="_blank" rel="noopener noreferrer" title="Open full size">
+                            <img src={s.preview_url} alt={s.sheet_number || `Page ${s.page_number}`} loading="lazy" />
+                            <span className="plan-sheet-label">
+                              {s.sheet_number || `Pg ${s.page_number}`}{s.included_in_analysis ? ' ✓' : ''}
+                            </span>
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                }
+                if (img.preview) {
+                  return (
+                    <div className="plan-view animate-fade">
+                      <img src={img.preview} alt="Plan sheet" className="plan-image" />
+                    </div>
+                  )
+                }
+                return (
+                  <div className="loading-state">
+                    <p className="text-dim">No sheet previews available for this job.</p>
+                  </div>
+                )
+              })()}
 
               {/* COMPARE TAB */}
               {activeTab === 'compare' && (
                 <div className="compare-content animate-fade">
                   <div className="card" style={{ marginBottom: 16 }}>
-                    <h4 style={{ color: 'var(--titan-red)', marginBottom: 8 }}>Paste Actual Takeoff</h4>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                      <h4 style={{ color: 'var(--titan-red)' }}>Your Actual Takeoff</h4>
+                      <button className="btn btn-secondary" style={{ fontSize: '0.72rem' }} onClick={() => compareInputRef.current?.click()}>
+                        <Upload size={12} /> Upload CSV / Excel
+                      </button>
+                      <input ref={compareInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleCompareUpload} style={{ display: 'none' }} />
+                    </div>
                     <p className="text-dim" style={{ fontSize: '0.78rem', marginBottom: 12 }}>
-                      Paste the completed takeoff for this sheet. One item per line — description, unit, quantity separated by commas or tabs.
+                      Upload your takeoff file, or paste it — one item per line: description, unit, quantity.
                     </p>
                     <textarea className="input" value={comparisonData} onChange={e => setComparisonData(e.target.value)}
                       placeholder={`Example:\n8" PVC SDR-35, LF, 450\n48" Precast Manhole, EA, 3\n8" 45° Bend PVC, EA, 6`}
@@ -2991,6 +3185,71 @@ INSTRUCTIONS:
             )}
           </div>
         )}
+
+        {/* RESOLVE PANEL — one clarification at a time (analysis results) */}
+        {!isQAResult && result?.clarifications?.length > 0 && (() => {
+          const total = result.clarifications.length
+          const done = total - openClarifications(result).length
+          return (
+            <div className={`chat-panel ${resolveOpen ? 'chat-open' : 'chat-collapsed'}`}>
+              <button
+                className="chat-panel-header"
+                onClick={() => (resolveOpen ? setResolveOpen(false) : openResolvePanel())}
+                aria-label={resolveOpen ? 'Collapse resolve panel' : 'Open resolve panel'}
+              >
+                <div className="chat-header-left">
+                  <MessageCircle size={14} />
+                  <span className="chat-header-title">Resolve Open Items</span>
+                  <span className="resolve-progress-label">{done}/{total}</span>
+                  <span className="resolve-progress-track"><span className="resolve-progress-fill" style={{ width: `${(done / total) * 100}%` }} /></span>
+                </div>
+                <div className="chat-header-right">
+                  {!resolveOpen && done < total && (
+                    <span className="chat-header-preview">{openClarifications(result)[0]?.question?.slice(0, 60)}…</span>
+                  )}
+                  {resolveOpen ? <ChevronUp size={14} /> : <ChevronRight size={14} />}
+                </div>
+              </button>
+
+              {resolveOpen && (
+                <div className="chat-body">
+                  <div className="chat-messages" ref={resolveScrollRef}>
+                    {resolveMsgs.map((msg, i) => (
+                      <div key={i} className={`chat-msg chat-msg-${msg.role}`}>
+                        {msg.role === 'assistant' && <div className="chat-msg-avatar">AI</div>}
+                        <div className="chat-msg-bubble">
+                          {msg.loading
+                            ? <div className="chat-typing"><span /><span /><span /></div>
+                            : (msg.text || '').split('\n').map((line, j, arr) => (
+                                <span key={j}>{line}{j < arr.length - 1 && <br />}</span>
+                              ))
+                          }
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="chat-input-row">
+                    <input
+                      className="chat-input"
+                      value={resolveInput}
+                      onChange={e => setResolveInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendResolveAnswer() } }}
+                      placeholder={done < total ? 'Answer (e.g. "8.5 ft"), or "skip"…' : 'All items resolved'}
+                      disabled={resolveBusy || done >= total}
+                    />
+                    <button
+                      className="btn btn-primary chat-send-btn"
+                      onClick={sendResolveAnswer}
+                      disabled={resolveBusy || !resolveInput.trim() || done >= total}
+                    >
+                      <Send size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })()}
       </main>
 
       {/* FEEDBACK MODAL */}

@@ -1378,6 +1378,57 @@ export const handler = async (event) => {
     const counts = { HIGH: 0, MEDIUM: 0, LOW: 0 }
     merged.forEach(m => { counts[m.confidence] = (counts[m.confidence] || 0) + 1 })
 
+    // ── Open clarifications: what the AI caught but couldn't pin down ──
+    // Depth gaps first (they price excavation), then plan/profile mismatches,
+    // then low-confidence big-quantity items. Capped so the resolve flow stays
+    // approachable — one question at a time in the UI.
+    const clarifications = []
+    const asked = new Set()
+    let cid = 1
+    for (const it of items) {
+      if (clarifications.length >= 12) break
+      if (it.depth_unavailable && !asked.has(it.item_no)) {
+        asked.add(it.item_no)
+        clarifications.push({
+          id: cid++, type: 'depth', item_no: it.item_no,
+          question: `Depth for "${it.description}" isn't readable on the plans. What depth (in feet) should we use?`,
+          context: 'No rim/invert elevations were legible for this run. Check the profile sheet or verify in the field — excavation, bedding, and trench safety all price off this number.',
+        })
+      }
+    }
+    for (const it of items) {
+      if (clarifications.length >= 12) break
+      if (it.category === 'STRUCTURE' && it.depth_avg == null && !asked.has(it.item_no) &&
+          /manhole|mh\b|inlet|junction|box|vault/i.test(it.description)) {
+        asked.add(it.item_no)
+        clarifications.push({
+          id: cid++, type: 'depth', item_no: it.item_no,
+          question: `No depth found for "${it.description}". What's the depth (in feet)?`,
+          context: 'Structure depth drives excavation and shoring cost. If the plans don\'t show it, rim minus invert from the profile is the usual source.',
+        })
+      }
+    }
+    for (const r of reconciliations) {
+      if (clarifications.length >= 12) break
+      clarifications.push({
+        id: cid++, type: 'mismatch', item_no: null,
+        question: `${r.run}: the plan view shows ${Math.round(r.plan_lf)} LF but the profile shows ${r.profile_lf} LF (${r.pct_diff}% apart). Which length is correct?`,
+        context: 'Profile lengths are engineer-dimensioned and usually govern, but confirm before pricing. The profile value is currently used.',
+      })
+    }
+    for (const it of items) {
+      if (clarifications.length >= 12) break
+      if (it.confidence === 'LOW' && ['PIPE', 'STRUCTURE'].includes(it.category) &&
+          (it.quantity ?? 0) >= 100 && !asked.has(it.item_no)) {
+        asked.add(it.item_no)
+        clarifications.push({
+          id: cid++, type: 'verify', item_no: it.item_no,
+          question: `Low confidence on "${it.description}" — we read ${it.quantity} ${it.unit}. Can you confirm or correct that quantity?`,
+          context: (it.notes || '').slice(0, 200),
+        })
+      }
+    }
+
     const resultJson = {
       items,
       summary: {
@@ -1395,6 +1446,7 @@ export const handler = async (event) => {
         tables_detected: textTables.length,
         table_rows_to_pass5: tableEngineerRows.length,
       },
+      clarifications,
       depth_summary: depthSummary,
       variance_table: variance,
       reconciliations,
@@ -1437,6 +1489,7 @@ export const handler = async (event) => {
     if (proj?.user_id && !cfg.calibration) {
       await supabase.from('jobs').insert({
         user_id: proj.user_id,
+        project_id,
         plan_filename: proj.name || 'Plan Set',
         line_item_count: items.length,
         risk_flag_count: reconciliations.length,
