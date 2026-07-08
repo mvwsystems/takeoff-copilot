@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ShieldAlert, MessageCircle, Send, ChevronUp } from 'lucide-react'
 import { SYSTEM_PROMPT, QA_SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
+import { parseTakeoffFile } from '../utils/parseTakeoff'
 import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
 import * as XLSX from 'xlsx'
@@ -61,6 +62,8 @@ export default function Dashboard() {
   const [proceedingAnalysis, setProceedingAnalysis] = useState(false)
   const [materialsMap, setMaterialsMap] = useState({})   // slug -> material row
   const [materialCard, setMaterialCard] = useState(null) // open material slug
+  const [compareParsing, setCompareParsing] = useState(false)
+  const [takeoffParsing, setTakeoffParsing] = useState(false)
   const [resolveOpen, setResolveOpen] = useState(false)
   const [resolveMsgs, setResolveMsgs] = useState([])
   const [resolveInput, setResolveInput] = useState('')
@@ -842,44 +845,38 @@ INSTRUCTIONS:
   }
 
   // Compare tab: fill the paste box from an uploaded CSV/Excel takeoff.
-  const handleCompareUpload = (e) => {
+  const handleCompareUpload = async (e) => {
     const file = e.target.files[0]
     if (!file) return
     e.target.value = ''
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      try {
-        const wb = XLSX.read(ev.target.result, { type: 'array' })
-        const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' })
-        const lines = rows
-          .map(r => r.map(c => String(c).trim()).filter(Boolean).join(', '))
-          .filter(l => l.length > 1)
-        setComparisonData(lines.join('\n'))
-      } catch (err) {
-        setError(`Could not read takeoff file: ${err.message}`)
-      }
+    setCompareParsing(true)
+    try {
+      const rows = await parseTakeoffFile(file)
+      setComparisonData(rows.map(r => `${r.description}, ${r.unit || '—'}, ${r.quantity}`).join('\n'))
+    } catch (err) {
+      setError(`Could not read takeoff file: ${err.message}`)
+    } finally {
+      setCompareParsing(false)
     }
-    reader.readAsArrayBuffer(file)
   }
 
-  const handleTakeoffUpload = (e) => {
+  const handleTakeoffUpload = async (e) => {
     const file = e.target.files[0]
     if (!file) return
     e.target.value = ''
     setUploadedTakeoffName(file.name)
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      try {
-        const workbook = XLSX.read(ev.target.result, { type: 'array' })
-        const sheet = workbook.Sheets[workbook.SheetNames[0]]
-        const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' })
-        setUploadedTakeoffData(rows)
-      } catch (err) {
-        console.error('Takeoff parse error:', err)
-        setUploadedTakeoffData(null)
-      }
+    setTakeoffParsing(true)
+    try {
+      const rows = await parseTakeoffFile(file)
+      setUploadedTakeoffData(rows)
+    } catch (err) {
+      console.error('Takeoff parse error:', err)
+      setError(`Could not read takeoff: ${err.message}`)
+      setUploadedTakeoffData(null)
+      setUploadedTakeoffName(null)
+    } finally {
+      setTakeoffParsing(false)
     }
-    reader.readAsArrayBuffer(file)
   }
 
   const geotechCrossRef = (geo, takeoffResults) => {
@@ -1979,17 +1976,17 @@ INSTRUCTIONS:
               className="btn btn-secondary sidebar-upload-btn"
               onClick={() => takeoffInputRef.current?.click()}
             >
-              <Upload size={12} /> {uploadedTakeoffData ? 'Replace Takeoff' : 'Takeoff (CSV/Excel)'}
+              <Upload size={12} /> {takeoffParsing ? 'Reading…' : uploadedTakeoffData ? 'Replace Takeoff' : 'Takeoff (PDF/CSV/Excel)'}
             </button>
             <input
               ref={takeoffInputRef}
               type="file"
-              accept=".csv,.xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+              accept=".csv,.xlsx,.xls,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
               onChange={handleTakeoffUpload}
               style={{ display: 'none' }}
             />
             <div style={{ padding: '0 8px 8px', fontSize: '0.68rem', color: 'var(--titan-text-muted)' }}>
-              Your completed takeoff (CSV or Excel)
+              Your completed takeoff (PDF, CSV, or Excel)
             </div>
           </div>
         )}
@@ -2954,9 +2951,9 @@ INSTRUCTIONS:
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                       <h4 style={{ color: 'var(--titan-red)' }}>Your Actual Takeoff</h4>
                       <button className="btn btn-secondary" style={{ fontSize: '0.72rem' }} onClick={() => compareInputRef.current?.click()}>
-                        <Upload size={12} /> Upload CSV / Excel
+                        <Upload size={12} /> {compareParsing ? 'Reading takeoff…' : 'Upload PDF / CSV / Excel'}
                       </button>
-                      <input ref={compareInputRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleCompareUpload} style={{ display: 'none' }} />
+                      <input ref={compareInputRef} type="file" accept=".csv,.xlsx,.xls,.pdf" onChange={handleCompareUpload} style={{ display: 'none' }} />
                     </div>
                     <p className="text-dim" style={{ fontSize: '0.78rem', marginBottom: 12 }}>
                       Upload your takeoff file, or paste it — one item per line: description, unit, quantity.

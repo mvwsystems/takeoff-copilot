@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Users, FileText, ChevronDown, ChevronRight, Download, FlaskConical, Upload } from 'lucide-react'
-import * as XLSX from 'xlsx'
+import { parseTakeoffFile } from '../utils/parseTakeoff'
 import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
 import './AdminPage.css'
@@ -123,35 +123,19 @@ export default function AdminPage() {
     return () => clearInterval(t)
   }, [calRuns, calProject, loadCalRuns])
 
-  const handleTruthUpload = (e) => {
+  const handleTruthUpload = async (e) => {
     const file = e.target.files[0]
     if (!file) return
     e.target.value = ''
-    const reader = new FileReader()
-    reader.onload = (ev) => {
-      try {
-        const wb = XLSX.read(ev.target.result, { type: 'array' })
-        const raw = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
-        const rows = raw.map(r => {
-          const keys = Object.keys(r)
-          const dk = keys.find(k => /desc|item|scope|material/i.test(k))
-          const qk = keys.find(k => /qty|quant|amount/i.test(k))
-          const uk = keys.find(k => /unit|uom/i.test(k))
-          if (!dk || !qk) return null
-          const qty = Number(String(r[qk]).replace(/[$,]/g, ''))
-          return (r[dk] && isFinite(qty))
-            ? { description: String(r[dk]), quantity: qty, unit: uk ? String(r[uk]).trim().toUpperCase() : '' }
-            : null
-        }).filter(Boolean)
-        if (!rows.length) { setCalMsg('Could not find description + quantity columns in that file.'); return }
-        setCalTruth(rows)
-        setCalTruthName(file.name)
-        setCalMsg(`${rows.length} ground-truth rows parsed — will attach on launch.`)
-      } catch (err) {
-        setCalMsg(`Parse failed: ${err.message}`)
-      }
+    setCalMsg('Reading takeoff…')
+    try {
+      const rows = await parseTakeoffFile(file)
+      setCalTruth(rows)
+      setCalTruthName(file.name)
+      setCalMsg(`${rows.length} ground-truth rows parsed — will attach on launch.`)
+    } catch (err) {
+      setCalMsg(`Parse failed: ${err.message}`)
     }
-    reader.readAsArrayBuffer(file)
   }
 
   const launchCalibration = async () => {
@@ -328,9 +312,9 @@ export default function AdminPage() {
           ))}
 
           <button className="btn btn-ghost" style={{ fontSize: '0.72rem' }} onClick={() => calFileRef.current?.click()}>
-            <Upload size={12} /> {calTruthName || 'Ground truth (CSV/XLSX)'}
+            <Upload size={12} /> {calTruthName || 'Ground truth (PDF/CSV/XLSX)'}
           </button>
-          <input ref={calFileRef} type="file" accept=".csv,.xlsx,.xls" onChange={handleTruthUpload} style={{ display: 'none' }} />
+          <input ref={calFileRef} type="file" accept=".csv,.xlsx,.xls,.pdf" onChange={handleTruthUpload} style={{ display: 'none' }} />
 
           <button
             className="btn btn-primary"
