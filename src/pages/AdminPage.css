@@ -334,3 +334,9 @@
   white-space: nowrap;
 }
 .cal-score strong { color: var(--titan-white); }
+
+/* Calibration runs table lives inside a card — the viewport-sticky header
+   used by the full-page beta table overlaps rows here. Keep it static. */
+.cal-runs-wrap .admin-table thead {
+  position: static;
+}

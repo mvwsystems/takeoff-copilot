@@ -328,7 +328,7 @@ export default function AdminPage() {
         {calMsg && <div className="cal-msg">{calMsg}</div>}
 
         {calRuns.length > 0 && (
-          <div className="admin-table-wrap" style={{ marginTop: 10 }}>
+          <div className="admin-table-wrap cal-runs-wrap" style={{ marginTop: 10 }}>
             <table className="admin-table">
               <thead>
                 <tr>
