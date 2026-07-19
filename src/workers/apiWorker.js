@@ -18,7 +18,7 @@ self.onmessage = async ({ data }) => {
   try {
     const payload = isChatMode
       ? { systemPrompt: data.systemPrompt, messages: data.messages, maxTokens }
-      : { file_id: data.file_id, specs_file_id: data.specs_file_id, fileBlock: data.fileBlock, prompt: data.prompt, maxTokens }
+      : { file_id: data.file_id, specs_file_id: data.specs_file_id, fileBlock: data.fileBlock, prompt: data.prompt, systemPrompt: data.systemPrompt, maxTokens }
 
     const response = await fetch('/api/analyze', {
       method: 'POST',
@@ -30,12 +30,21 @@ self.onmessage = async ({ data }) => {
     })
 
     if (!response.ok) {
-      const errBody = await response.text()
-      throw new Error(`API ${response.status}: ${errBody.substring(0, 200)}`)
+      // The proxy returns { error: "friendly message" } — surface it directly.
+      let msg = `API ${response.status}`
+      try {
+        const errJson = await response.json()
+        if (errJson?.error) msg = typeof errJson.error === 'string' ? errJson.error : errJson.error.message || msg
+      } catch { /* non-JSON error body */ }
+      throw new Error(msg)
     }
 
     const responseData = await response.json()
     if (responseData.error) throw new Error(responseData.error.message || JSON.stringify(responseData.error))
+
+    if (responseData.stop_reason === 'max_tokens') {
+      throw new Error('The response was cut off before completing — this sheet may be too dense for single-sheet mode. Try the multi-pass pipeline.')
+    }
 
     const text = responseData.content.map(b => (b.type === 'text' ? b.text : '')).join('')
 
@@ -46,9 +55,12 @@ self.onmessage = async ({ data }) => {
       try {
         parsed = JSON.parse(text.replace(/```json\s?|```/g, '').trim())
       } catch {
-        const m = text.match(/\{[\s\S]*\}/)
-        if (m) parsed = JSON.parse(m[0])
-        else throw new Error('Could not parse response as JSON')
+        // Tolerate a top-level array as well as prose-wrapped objects.
+        const m = text.match(/[{[][\s\S]*[}\]]/)
+        if (m) {
+          try { parsed = JSON.parse(m[0]) } catch { /* fall through */ }
+        }
+        if (parsed === undefined) throw new Error('The AI response could not be read — please retry.')
       }
       self.postMessage({ id, success: true, result: parsed })
     }

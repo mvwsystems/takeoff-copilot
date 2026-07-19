@@ -42,17 +42,25 @@ async function parseSpreadsheet(file) {
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(buf, { type: 'array' })
   const raw = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+  let dropped = 0
   const rows = raw.map(r => {
     const keys = Object.keys(r)
     const dk = keys.find(k => /desc|item|scope|material/i.test(k))
     const qk = keys.find(k => /qty|quant|amount/i.test(k))
     const uk = keys.find(k => /unit|uom/i.test(k))
     if (!dk || !qk) return null
-    const qty = Number(String(r[qk]).replace(/[$,]/g, ''))
+    // "450 LF" and "1,200" are quantities; strip units/commas before parsing
+    // so those rows aren't silently discarded from the QA comparison.
+    const rawQty = String(r[qk]).replace(/[$,]/g, '').trim()
+    const qty = Number(rawQty !== '' && isFinite(Number(rawQty)) ? rawQty : rawQty.match(/^-?\d+(\.\d+)?/)?.[0])
+    if (r[dk] && !isFinite(qty)) { dropped++; return null }
     return (r[dk] && isFinite(qty))
       ? { description: String(r[dk]), quantity: qty, unit: uk ? String(r[uk]).trim().toUpperCase() : '' }
       : null
   }).filter(Boolean)
   if (!rows.length) throw new Error('Could not find description + quantity columns in that file.')
+  // Never report a partial parse as a full one — the QA comparison would run
+  // against an incomplete takeoff without anyone knowing.
+  rows.dropped = dropped
   return rows
 }

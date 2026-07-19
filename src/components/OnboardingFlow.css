@@ -1,0 +1,556 @@
+/* ============================================
+   ONBOARDING FLOW — Titan AI aesthetic
+   Self-contained: all classes prefixed .onb-
+   Red accent pinned to #E8372C per spec.
+   ============================================ */
+
+.onb-overlay {
+  /* Local accent tokens (do not rely on --titan-red, which may drift) */
+  --onb-accent: #E8372C;
+  --onb-accent-bright: #FF4A3E;
+  --onb-accent-glow: rgba(232, 55, 44, 0.25);
+  --onb-accent-bg: rgba(232, 55, 44, 0.08);
+
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow-y: auto;
+  background: rgba(10, 10, 10, 0.75);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  animation: onbFadeIn 250ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+
+/* —— CARD —— */
+.onb-card {
+  position: relative;
+  width: 640px;
+  max-width: 100%;
+  margin: auto; /* stays centered, but scrolls if taller than viewport */
+  background: var(--titan-card, #161616);
+  border: 1px solid var(--titan-border, #222222);
+  border-top: 2px solid var(--onb-accent);
+  border-radius: 4px;
+  padding: 44px 48px 28px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  animation: onbCardIn 450ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)) both;
+  overflow: hidden;
+}
+
+/* —— SKIP LINK —— */
+.onb-skip-link {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.62rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted, #555555);
+  padding: 4px 6px;
+  transition: color 220ms;
+}
+.onb-skip-link:hover {
+  color: var(--titan-text, #CCCCCC);
+}
+
+/* —— STEP BODY & TRANSITIONS —— */
+.onb-step-body {
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.onb-anim-fwd {
+  animation: onbStepFwd 350ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+.onb-anim-back {
+  animation: onbStepBack 350ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+
+/* —— SHARED TYPE —— */
+.onb-kicker {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted, #555555);
+  margin-bottom: 10px;
+}
+
+.onb-slashes {
+  color: var(--onb-accent);
+  font-family: var(--font-mono, monospace);
+  font-weight: 700;
+  margin-right: 6px;
+}
+
+.onb-title {
+  font-family: var(--font-display, 'Bebas Neue', Impact, sans-serif);
+  font-size: 2rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  line-height: 1.1;
+  color: var(--titan-white, #F5F5F0);
+  margin-bottom: 12px;
+}
+
+.onb-accent-text {
+  color: var(--onb-accent);
+}
+
+.onb-lede {
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--titan-text, #CCCCCC);
+  max-width: 46ch;
+}
+.onb-lede-sm {
+  font-size: 0.8rem;
+  color: var(--titan-text-dim, #888888);
+  margin-bottom: 20px;
+}
+
+.onb-sub {
+  margin-top: 10px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-dim, #888888);
+}
+
+/* —— STEP 1: WELCOME —— */
+.onb-step-welcome {
+  text-align: center;
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+}
+.onb-step-welcome .onb-lede {
+  margin: 0 auto;
+}
+
+.onb-title-brand {
+  font-size: 2.9rem;
+  margin-bottom: 14px;
+}
+
+.onb-logo-mark {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 18px;
+  background: var(--onb-accent);
+  color: var(--titan-white, #F5F5F0);
+  font-family: var(--font-display, 'Bebas Neue', Impact, sans-serif);
+  font-size: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  clip-path: polygon(0 0, 100% 0, 100% 85%, 85% 100%, 0 100%);
+  box-shadow: 0 0 32px var(--onb-accent-glow);
+}
+
+/* —— STEP 2: PROFILE —— */
+.onb-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--titan-dark, #111111);
+  border: 1px solid var(--titan-border, #222222);
+  border-radius: 3px;
+  padding: 18px;
+}
+
+.onb-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.onb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.onb-label {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted, #555555);
+}
+
+.onb-input {
+  background: var(--titan-black, #0A0A0A);
+  border: 1px solid var(--titan-border, #222222);
+  border-radius: 2px;
+  color: var(--titan-text, #CCCCCC);
+  font-family: var(--font-body, sans-serif);
+  font-size: 0.85rem;
+  padding: 10px 14px;
+  width: 100%;
+  outline: none;
+  transition: border-color 220ms, box-shadow 220ms;
+}
+.onb-input:focus {
+  border-color: var(--onb-accent);
+  box-shadow: 0 0 0 1px var(--onb-accent-glow);
+}
+.onb-input::placeholder {
+  color: var(--titan-text-muted, #555555);
+}
+
+/* —— STEP 3: HOW IT WORKS strip —— */
+.onb-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 6px;
+}
+
+.onb-strip-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 10px 0;
+}
+
+.onb-strip-icon {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--onb-accent-bg);
+  border: 1px solid var(--onb-accent-glow);
+  border-radius: 3px;
+  color: var(--onb-accent);
+}
+
+.onb-strip-connector {
+  position: absolute;
+  left: 19px; /* center of 38px icon */
+  top: 48px;
+  bottom: -10px;
+  width: 1px;
+  background: linear-gradient(180deg, var(--onb-accent-glow), var(--titan-border, #222222));
+}
+
+.onb-strip-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--titan-white, #F5F5F0);
+}
+
+.onb-strip-num {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--onb-accent);
+  letter-spacing: 1px;
+}
+
+.onb-strip-desc {
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--titan-text-dim, #888888);
+  margin-top: 1px;
+}
+
+/* —— STEP 4: TRUST —— */
+.onb-trust-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.onb-trust-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 12px 14px;
+  background: var(--titan-dark, #111111);
+  border: 1px solid var(--titan-border, #222222);
+  border-left: 3px solid var(--onb-accent);
+  border-radius: 3px;
+}
+
+.onb-trust-icon {
+  flex-shrink: 0;
+  color: var(--onb-accent);
+  margin-top: 2px;
+}
+
+.onb-trust-title {
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: var(--titan-white, #F5F5F0);
+  margin-bottom: 2px;
+}
+
+.onb-trust-desc {
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--titan-text-dim, #888888);
+}
+
+.onb-disclaimer {
+  margin-top: 16px;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.66rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted, #555555);
+}
+
+/* —— STEP 5: READY —— */
+.onb-ready-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  background: var(--titan-dark, #111111);
+  border: 1px solid var(--titan-border, #222222);
+  border-radius: 3px;
+  padding: 16px 18px;
+}
+
+.onb-ready-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.onb-ready-icon {
+  flex-shrink: 0;
+  color: var(--onb-accent);
+  margin-top: 2px;
+}
+
+.onb-ready-text {
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--titan-text, #CCCCCC);
+}
+
+/* —— FOOTER: back / dots / next —— */
+.onb-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--titan-border, #222222);
+}
+
+.onb-btn {
+  font-family: var(--font-body, sans-serif);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 2px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition:
+    background 300ms,
+    color 300ms,
+    box-shadow 350ms,
+    transform 350ms;
+}
+
+.onb-btn-primary {
+  background: var(--onb-accent);
+  color: var(--titan-white, #F5F5F0);
+}
+.onb-btn-primary:hover {
+  background: var(--onb-accent-bright);
+  box-shadow: 0 0 22px var(--onb-accent-glow);
+  transform: translateY(-1px);
+}
+
+.onb-btn-ghost {
+  background: transparent;
+  color: var(--titan-text-dim, #888888);
+  padding: 10px 14px;
+}
+.onb-btn-ghost:hover {
+  color: var(--titan-white, #F5F5F0);
+  background: var(--titan-surface, #1A1A1A);
+}
+.onb-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* —— PROGRESS DOTS —— */
+.onb-dots {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.onb-dot {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: var(--titan-border-light, #333333);
+  transition: background 250ms, transform 250ms, box-shadow 250ms;
+}
+.onb-dot:hover {
+  background: var(--titan-text-muted, #555555);
+}
+.onb-dot-done {
+  background: var(--titan-text-muted, #555555);
+}
+.onb-dot-active {
+  background: var(--onb-accent);
+  transform: scale(1.35);
+  box-shadow: 0 0 10px var(--onb-accent-glow);
+}
+.onb-dot-active:hover {
+  background: var(--onb-accent);
+}
+
+/* —— SKIP CONFIRMATION —— */
+.onb-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 10, 10, 0.82);
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  animation: onbFadeIn 200ms both;
+}
+
+.onb-confirm-card {
+  width: 320px;
+  max-width: calc(100% - 32px);
+  background: var(--titan-card, #161616);
+  border: 1px solid var(--titan-border-light, #333333);
+  border-top: 2px solid var(--onb-accent);
+  border-radius: 3px;
+  padding: 22px 24px;
+  text-align: center;
+  animation: onbCardIn 300ms var(--ease-out, cubic-bezier(0.22, 1, 0.36, 1)) both;
+}
+
+.onb-confirm-title {
+  font-family: var(--font-display, 'Bebas Neue', Impact, sans-serif);
+  font-size: 1.3rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--titan-white, #F5F5F0);
+  margin-bottom: 6px;
+}
+
+.onb-confirm-desc {
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--titan-text-dim, #888888);
+  margin-bottom: 16px;
+}
+
+.onb-confirm-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* —— ANIMATIONS —— */
+@keyframes onbFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes onbCardIn {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes onbStepFwd {
+  from { opacity: 0; transform: translateX(24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes onbStepBack {
+  from { opacity: 0; transform: translateX(-24px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onb-overlay,
+  .onb-card,
+  .onb-step-body,
+  .onb-confirm-overlay,
+  .onb-confirm-card {
+    animation: none;
+  }
+}
+
+/* —— RESPONSIVE —— */
+@media (max-width: 640px) {
+  .onb-overlay {
+    padding: 12px;
+    align-items: flex-start;
+  }
+
+  .onb-card {
+    padding: 36px 22px 20px;
+  }
+
+  .onb-step-body {
+    min-height: 340px;
+  }
+
+  .onb-title {
+    font-size: 1.6rem;
+  }
+
+  .onb-title-brand {
+    font-size: 2.2rem;
+  }
+
+  .onb-field-row {
+    grid-template-columns: 1fr;
+  }
+
+  .onb-btn {
+    padding: 10px 14px;
+    font-size: 0.72rem;
+  }
+
+  .onb-footer {
+    gap: 8px;
+  }
+}

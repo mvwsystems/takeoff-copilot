@@ -35,6 +35,10 @@
   path = "/api/doc-upload"
   function = "doc-upload"
 
+[[edge_functions]]
+  path = "/api/delete-project"
+  function = "delete-project"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

@@ -1,11 +1,20 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ShieldAlert, MessageCircle, Send, ChevronUp } from 'lucide-react'
+import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ShieldAlert, MessageCircle, Send, ChevronUp, BookOpen, Pencil, Check, HelpCircle } from 'lucide-react'
 import { SYSTEM_PROMPT, QA_SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import { parseTakeoffFile } from '../utils/parseTakeoff'
 import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
-import * as XLSX from 'xlsx'
+import { exportTakeoffCSV, exportQACSV, exportXLSX, buildTakeoffReportHTML, buildQAReportHTML, printReport } from '../utils/exporters'
+import OnboardingFlow from '../components/OnboardingFlow'
+import ReferenceBank from '../components/ReferenceBank'
 import './Dashboard.css'
+
+// localStorage throws in Safari private mode / blocked-storage contexts — a
+// bare call inside useState initializers took down the whole route.
+const ls = {
+  get(key) { try { return localStorage.getItem(key) } catch { return null } },
+  set(key, val) { try { localStorage.setItem(key, val) } catch { /* unavailable */ } },
+}
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -24,7 +33,11 @@ export default function Dashboard() {
   const [geotechLoading, setGeotechLoading] = useState(false)
   const [geotechError, setGeotechError] = useState(null)
   const [geotechFileName, setGeotechFileName] = useState(null)
-  const [showOnboarding, setShowOnboarding] = useState(!localStorage.getItem('tc_onboarded'))
+  const [showOnboarding, setShowOnboarding] = useState(!ls.get('tc_onboarded'))
+  const [referenceOpen, setReferenceOpen] = useState(false)
+  const [clarifyPrompt, setClarifyPrompt] = useState(null) // { count } — post-analysis "AI has questions" popup
+  const [editingItem, setEditingItem] = useState(null)     // item_no being edited inline
+  const [editDraft, setEditDraft] = useState({})           // { description, quantity, unit }
   const [onboardName, setOnboardName] = useState('')
   const [onboardCompany, setOnboardCompany] = useState('')
   const [onboardPhone, setOnboardPhone] = useState('')
@@ -37,14 +50,14 @@ export default function Dashboard() {
   const [feedbackCorrections, setFeedbackCorrections] = useState('')
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
   const [feedbackDone, setFeedbackDone] = useState({})
-  const [qaMode, setQaMode] = useState(true)
+  const [qaMode, setQaMode] = useState(() => ls.get('tc_qa_mode') !== '0')
   const [uploadedTakeoffName, setUploadedTakeoffName] = useState(null)
   const [uploadedTakeoffData, setUploadedTakeoffData] = useState(null)
   const [chatOpen, setChatOpen] = useState(false)
   const [chatMessages, setChatMessages] = useState([])
   const [chatInput, setChatInput] = useState('')
   const [chatLoading, setChatLoading] = useState(false)
-  const [jobType, setJobType] = useState(() => localStorage.getItem('tc_job_type') || 'private')
+  const [jobType, setJobType] = useState(() => ls.get('tc_job_type') || 'private')
   const [boreMethod, setBoreMethod] = useState('unknown')
   const [scopeNotes, setScopeNotes] = useState('')
   const [specsFileId, setSpecsFileId] = useState(null)
@@ -83,19 +96,35 @@ export default function Dashboard() {
       if (success) pending.resolve(result)
       else pending.reject(new Error(error))
     }
+    // A worker crash or unmount must reject every in-flight promise —
+    // otherwise their finally blocks never run and spinners hang forever.
+    const rejectAllPending = (reason) => {
+      for (const id of Object.keys(pendingRef.current)) {
+        pendingRef.current[id].reject(new Error(reason))
+        delete pendingRef.current[id]
+      }
+    }
     worker.onerror = (e) => {
       console.error('Worker error:', e)
+      rejectAllPending('The analysis worker crashed — try again.')
     }
-    return () => worker.terminate()
+    return () => {
+      rejectAllPending('Page closed')
+      worker.terminate()
+    }
   }, [])
 
-  // Reset chat when switching sheets
+  // Reset chat when switching sheets, and land on a tab the new sheet's
+  // result shape actually supports — rendering the Takeoff tab against a QA
+  // result (no items array) used to white-screen the dashboard.
   useEffect(() => {
     setChatOpen(false)
     setChatMessages([])
     setResolveOpen(false)
     setResolveMsgs([])
-  }, [activeImage])
+    const r = results[activeImage]
+    if (r) setActiveTab(r.executive_risk_summary ? 'report' : 'takeoff')
+  }, [activeImage]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (resolveScrollRef.current) resolveScrollRef.current.scrollTop = resolveScrollRef.current.scrollHeight
@@ -112,16 +141,21 @@ export default function Dashboard() {
   // sheetMaps. Returns the page-1 preview URL. Shared by the Realtime handler
   // and the restore-on-load effect.
   const loadSheetMap = useCallback(async (projectId) => {
-    const { data: sheets } = await supabase
+    const { data: sheets, error: shErr } = await supabase
       .from('sheets')
       .select('id, page_number, classification, included_in_analysis, storage_path, sheet_number, sheet_title')
       .eq('project_id', projectId)
       .order('page_number')
+    if (shErr) {
+      // A failed query must not masquerade as "0 sheets classified".
+      setSheetMaps(prev => ({ ...prev, [projectId]: { sheets: [], loaded: false, error: shErr.message } }))
+      return null
+    }
     const sheetsWithUrls = await Promise.all((sheets || []).map(async (sheet) => {
       if (!sheet.storage_path) return { ...sheet, preview_url: null }
       const { data: signed } = await supabase.storage
         .from('plan-uploads')
-        .createSignedUrl(sheet.storage_path, 7200)
+        .createSignedUrl(sheet.storage_path, 86400)
       return { ...sheet, preview_url: signed?.signedUrl || null }
     }))
     setSheetMaps(prev => ({ ...prev, [projectId]: { sheets: sheetsWithUrls, loaded: true } }))
@@ -165,7 +199,7 @@ export default function Dashboard() {
             .eq('project_id', j.project_id).eq('page_number', 1).maybeSingle()
           if (sheet?.storage_path) {
             const { data: signed } = await supabase.storage
-              .from('plan-uploads').createSignedUrl(sheet.storage_path, 7200)
+              .from('plan-uploads').createSignedUrl(sheet.storage_path, 86400)
             preview = signed?.signedUrl || null
           }
         }
@@ -193,6 +227,93 @@ export default function Dashboard() {
     return () => { cancelled = true }
   }, [user, loadSheetMap])
 
+  // Shared job-update handler — fed by both Realtime events and the polling
+  // fallback below, so a dropped websocket can never permanently freeze
+  // progress or lose a completion.
+  const handleJobUpdate = useCallback(async (row) => {
+    const { id: jobId, stage, progress, error: jobError, project_id, stage_detail } = row
+    // Only react to jobs this session is actually tracking — an unfiltered
+    // subscription otherwise triggers history reloads and signed-URL fetches
+    // for unrelated events.
+    const tracked = imagesRef.current.some(img => img?.job_id === jobId)
+    if (!tracked) return
+
+    if (stage === 'complete') {
+      // The stage flip and the analysis_results insert are separate writes —
+      // retry briefly so a replication gap doesn't silently drop the result.
+      let ar = null
+      for (let attempt = 0; attempt < 4 && !ar; attempt++) {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 1500 * attempt))
+        const { data } = await supabase
+          .from('analysis_results')
+          .select('result_json')
+          .eq('job_id', jobId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        ar = data
+      }
+
+      const idx = imagesRef.current.findIndex(img => img?.job_id === jobId)
+      setImages(prev => prev.map(img =>
+        img?.job_id === jobId ? { ...img, jobStage: stage, jobProgress: 100, jobDetail: stage_detail } : img
+      ))
+      if (ar?.result_json && idx !== -1) {
+        setResults(prev => ({ ...prev, [idx]: ar.result_json }))
+        setActiveImage(idx)
+        setActiveTab('takeoff')
+        // The AI has questions — surface them loudly, not as a buried tab.
+        const open = (ar.result_json.clarifications || []).filter(c => !c.resolution)
+        if (open.length) setClarifyPrompt({ count: open.length })
+      } else if (idx !== -1) {
+        setImages(prev => prev.map(img =>
+          img?.job_id === jobId
+            ? { ...img, jobError: 'Analysis finished but the result could not be loaded — open it from Recent Jobs or retry.' }
+            : img
+        ))
+      }
+      // History is written server-side on completion; refresh the list.
+      loadHistory()
+      return
+    }
+
+    if (stage === 'triage_complete') {
+      const page1Url = await loadSheetMap(project_id)
+      setImages(prev => prev.map(img =>
+        img?.job_id === jobId
+          ? { ...img, jobStage: stage, jobProgress: progress, jobError, preview: page1Url }
+          : img
+      ))
+    } else {
+      setImages(prev => prev.map(img =>
+        img?.job_id === jobId ? { ...img, jobStage: stage, jobProgress: progress, jobError, jobDetail: stage_detail } : img
+      ))
+      // Legacy: handle 'ready' stage for any jobs processed before triage was added
+      if (stage === 'ready') {
+        const { data: sheet } = await supabase
+          .from('sheets')
+          .select('storage_path, file_id')
+          .eq('project_id', project_id)
+          .eq('page_number', 1)
+          .maybeSingle()
+        if (sheet?.storage_path) {
+          const { data: signedData } = await supabase.storage
+            .from('plan-uploads')
+            .createSignedUrl(sheet.storage_path, 86400)
+          setImages(prev => prev.map(img =>
+            img?.job_id === jobId
+              ? { ...img, preview: signedData?.signedUrl || null, file_id: sheet.file_id }
+              : img
+          ))
+        } else if (sheet?.file_id) {
+          setImages(prev => prev.map(img =>
+            img?.job_id === jobId ? { ...img, file_id: sheet.file_id } : img
+          ))
+        }
+      }
+    }
+  }, [loadSheetMap]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Supabase Realtime: watch processing_jobs for this user and update image state
   useEffect(() => {
     if (!user) return
@@ -202,79 +323,86 @@ export default function Dashboard() {
         event: 'UPDATE',
         schema: 'public',
         table: 'processing_jobs',
-      }, async (payload) => {
-        const { id: jobId, stage, progress, error: jobError, project_id, stage_detail } = payload.new
-
-        if (stage === 'complete') {
-          // Tiled multi-pass analysis finished — fetch the consolidated result
-          const { data: ar } = await supabase
-            .from('analysis_results')
-            .select('result_json')
-            .eq('job_id', jobId)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-
-          const idx = imagesRef.current.findIndex(img => img.job_id === jobId)
-          setImages(prev => prev.map(img =>
-            img.job_id === jobId ? { ...img, jobStage: stage, jobProgress: 100, jobDetail: stage_detail } : img
-          ))
-          if (ar?.result_json && idx !== -1) {
-            setResults(prev => ({ ...prev, [idx]: ar.result_json }))
-            setActiveImage(idx)
-            setActiveTab('takeoff')
-          }
-          // History is written server-side on completion; refresh the list.
-          loadHistory()
-          return
-        }
-
-        if (stage === 'triage_complete') {
-          const page1Url = await loadSheetMap(project_id)
-          setImages(prev => prev.map(img =>
-            img.job_id === jobId
-              ? { ...img, jobStage: stage, jobProgress: progress, jobError, preview: page1Url }
-              : img
-          ))
-        } else {
-          setImages(prev => prev.map(img =>
-            img.job_id === jobId ? { ...img, jobStage: stage, jobProgress: progress, jobError, jobDetail: stage_detail } : img
-          ))
-          // Legacy: handle 'ready' stage for any jobs processed before triage was added
-          if (stage === 'ready') {
-            const { data: sheet } = await supabase
-              .from('sheets')
-              .select('storage_path, file_id')
-              .eq('project_id', project_id)
-              .eq('page_number', 1)
-              .maybeSingle()
-            if (sheet?.storage_path) {
-              const { data: signedData } = await supabase.storage
-                .from('plan-uploads')
-                .createSignedUrl(sheet.storage_path, 7200)
-              setImages(prev => prev.map(img =>
-                img.job_id === jobId
-                  ? { ...img, preview: signedData?.signedUrl || null, file_id: sheet.file_id }
-                  : img
-              ))
-            } else if (sheet?.file_id) {
-              setImages(prev => prev.map(img =>
-                img.job_id === jobId ? { ...img, file_id: sheet.file_id } : img
-              ))
-            }
-          }
-        }
-      })
+      }, (payload) => handleJobUpdate(payload.new))
       .subscribe()
 
     return () => supabase.removeChannel(channel)
-  }, [user, loadSheetMap])
+  }, [user, handleJobUpdate])
+
+  // Polling fallback: Realtime events are lost when the tab sleeps or the
+  // websocket drops (no replay on reconnect). Every 20s, re-fetch any job the
+  // sidebar still shows as in-flight and feed changes through the same handler.
+  useEffect(() => {
+    if (!user) return
+    const TERMINAL = new Set(['complete', 'ready', 'error'])
+    const timer = setInterval(async () => {
+      const inFlight = imagesRef.current.filter(img => img?.job_id && !TERMINAL.has(img.jobStage))
+      if (!inFlight.length) return
+      const { data: rows } = await supabase
+        .from('processing_jobs')
+        .select('id, project_id, stage, progress, stage_detail, error')
+        .in('id', inFlight.map(i => i.job_id))
+      for (const row of rows || []) {
+        const img = inFlight.find(i => i.job_id === row.id)
+        if (img && (img.jobStage !== row.stage || img.jobProgress !== row.progress)) {
+          handleJobUpdate(row)
+        }
+      }
+    }, 20000)
+    return () => clearInterval(timer)
+  }, [user, handleJobUpdate])
+
+  // Assistant action protocol — the chat can EDIT the takeoff. The model
+  // appends `ACTION: {json}` on its own line; we parse, validate, apply, and
+  // persist through the same path as manual edits and clarification answers.
+  const CHAT_ACTION_RULES = `
+
+TAKEOFF EDITING:
+When the estimator asks you to change the takeoff (fix a quantity, unit, or description; add a missed item; remove a wrong item; or note something on a line), do BOTH of these:
+1. Reply with one short confirmation sentence.
+2. On the FINAL line of your reply, output exactly one action as: ACTION: {"type":"update_item"|"add_item"|"remove_item"|"add_note","item_no":number|null,"description":"string|null","quantity":number|null,"unit":"string|null","category":"PIPE|STRUCTURE|FITTING|EXCAVATION|SERVICE|TESTING|OTHER|null","note":"string|null"}
+Rules: reference items by their item_no from the takeoff data. For add_item, item_no is null and description+quantity+unit are required. NEVER invent a change the estimator didn't ask for. If their request is ambiguous (which item? what value?), ask a clarifying question INSTEAD of emitting an action. If they ask something that would change bid risk (excluding scope, overriding a flagged mismatch), confirm once before acting.`
+
+  const buildTakeoffChatSystemPrompt = (res) => {
+    const items = (res.items || []).map(it =>
+      `#${it.item_no} [${it.category}] ${it.description} — ${it.quantity ?? '—'} ${it.unit} (${it.confidence}${it.depth_max != null ? `, depth max ${it.depth_max} ft` : ''}${it.edited ? ', estimator-edited' : ''})`
+    ).join('\n')
+    const clar = (res.clarifications || []).map(c =>
+      `- [${c.resolution ? 'RESOLVED' : 'OPEN'}] ${c.question}`
+    ).join('\n')
+    const variance = (res.variance_table || []).filter(v => v.status === 'VARIANCE').map(v =>
+      `- ${v.engineer_description}: engineer ${v.engineer_quantity} ${v.unit} vs ours ${v.our_quantity} (${v.pct_difference}%)`
+    ).join('\n')
+    const q = res.quality || {}
+    return `You are the Takeoff Copilot assistant for a wet-utility estimator. A multi-pass AI takeoff has been generated for this plan set. Answer questions about it, explain how numbers were derived (plan view, profiles, engineer table, depth engine), flag risks, and make edits when asked.
+
+TAKEOFF (${(res.items || []).length} line items):
+${items || 'None'}
+
+SUMMARY: ${res.summary?.key_observations || '—'}
+
+DEPTH: trench safety ${res.depth_summary?.trench_safety_lf ?? 0} LF (≥5 ft); deep runs: ${(res.depth_summary?.deep_runs || []).map(r => `${r.run_id} (${r.depth_max} ft)`).join(', ') || 'none'}; depth-unavailable runs: ${(res.depth_summary?.unavailable_runs || []).map(r => r.run_id).join(', ') || 'none'}
+
+ENGINEER VARIANCES (>5%):
+${variance || 'None'}
+
+OPEN ITEMS:
+${clar || 'None'}
+
+RUN QUALITY: ${q.failed_tiles?.length ? `${q.failed_tiles.length} sheet areas NOT analyzed (${q.failed_tiles.slice(0, 4).join('; ')}) — treat those areas as unverified. ` : ''}${res.text_layer?.mode === 'raster-only' ? 'Raster-only set (no text layer) — all reads are vision-based. ' : ''}${q.merge_degraded ? 'Overlap dedupe degraded — duplicates possible. ' : ''}
+
+INSTRUCTIONS:
+- Be direct and concrete; cite item numbers and quantities. The estimator is a utility contractor.
+- When you don't know something (it isn't in the data above), say so and tell them where to verify on the plans — never guess.
+- Proactively ask about OPEN items when relevant.
+- 2–4 sentences per reply unless asked for a breakdown.${CHAT_ACTION_RULES}`
+  }
 
   const buildChatSystemPrompt = (res) => {
     const questions = res.clarification_questions || []
     const misses = res.high_risk_misses || []
     const gaps = (res.scope_gaps || []).filter(s => s.status === 'MISSING')
-    return `You are Takeoff Brain v1.0 operating in CHAT MODE. A QA Bid Risk Report has already been generated for this bid package. Your role is to resolve the open clarification questions by conversing with the estimator — one question at a time — so the bid can be finalized with confidence.
+    return `You are Takeoff Brain v2.0 operating in CHAT MODE. A QA Bid Risk Report has already been generated for this bid package. Your role is to resolve the open clarification questions by conversing with the estimator — one question at a time — so the bid can be finalized with confidence.
 
 REPORT SUMMARY:
 ${res.executive_risk_summary}
@@ -320,6 +448,61 @@ INSTRUCTIONS:
     })
   }
 
+  // Applies a chat-emitted action to the active takeoff. Returns a short
+  // human-readable summary of what changed, or null if nothing was applied.
+  const applyChatAction = (action) => {
+    const res = results[activeImage]
+    if (!res || !action || typeof action !== 'object') return null
+    const items = res.items || []
+    let newItems = items
+    let summary = null
+
+    if (action.type === 'add_item' && action.description && isFinite(Number(action.quantity))) {
+      const nextNo = items.reduce((m, it) => Math.max(m, it.item_no || 0), 0) + 1
+      newItems = [...items, {
+        item_no: nextNo,
+        category: ['PIPE', 'STRUCTURE', 'FITTING', 'EXCAVATION', 'SERVICE', 'TESTING', 'OTHER'].includes(action.category) ? action.category : 'OTHER',
+        description: String(action.description).slice(0, 500),
+        quantity: Number(action.quantity),
+        unit: String(action.unit || 'EA').toUpperCase().slice(0, 8),
+        confidence: 'HIGH',
+        edited: true,
+        notes: `✎ Added by estimator via assistant. ${action.note || ''}`.slice(0, 600),
+      }]
+      summary = `Added #${nextNo} ${action.description}`
+    } else if (action.type === 'update_item' && action.item_no != null) {
+      const target = items.find(it => it.item_no === action.item_no)
+      if (!target) return null
+      const qty = action.quantity != null && isFinite(Number(action.quantity)) ? Number(action.quantity) : null
+      newItems = items.map(it => it.item_no !== action.item_no ? it : {
+        ...it,
+        ...(action.description ? { description: String(action.description).slice(0, 500) } : {}),
+        ...(qty != null ? { quantity: qty } : {}),
+        ...(action.unit ? { unit: String(action.unit).toUpperCase().slice(0, 8) } : {}),
+        confidence: 'HIGH',
+        edited: true,
+        notes: `✎ Estimator updated via assistant${action.note ? ` — ${action.note}` : ''}. ${it.notes || ''}`.slice(0, 600),
+      })
+      summary = `Updated #${action.item_no}`
+    } else if (action.type === 'remove_item' && action.item_no != null) {
+      if (!items.some(it => it.item_no === action.item_no)) return null
+      newItems = items.filter(it => it.item_no !== action.item_no)
+      summary = `Removed #${action.item_no}`
+    } else if (action.type === 'add_note' && action.item_no != null && action.note) {
+      if (!items.some(it => it.item_no === action.item_no)) return null
+      newItems = items.map(it => it.item_no !== action.item_no ? it
+        : { ...it, notes: `✎ ${action.note} ${it.notes || ''}`.slice(0, 600) })
+      summary = `Noted on #${action.item_no}`
+    } else {
+      return null
+    }
+
+    const newResult = { ...res, items: newItems }
+    setResults(prev => ({ ...prev, [activeImage]: newResult }))
+    persistResolvedResult(newResult)
+    return summary
+  }
+
   const sendChatMessage = async () => {
     const text = chatInput.trim()
     if (!text || chatLoading) return
@@ -329,9 +512,22 @@ INSTRUCTIONS:
     setChatLoading(true)
     try {
       const res = results[activeImage]
-      const systemPrompt = buildChatSystemPrompt(res)
+      const systemPrompt = res?.executive_risk_summary
+        ? buildChatSystemPrompt(res) + CHAT_ACTION_RULES
+        : buildTakeoffChatSystemPrompt(res)
       const apiMessages = history.map(m => ({ role: m.role, content: m.text }))
-      const reply = await callChatApi(systemPrompt, apiMessages)
+      let reply = await callChatApi(systemPrompt, apiMessages)
+
+      // Apply an ACTION line if the model emitted one, and replace it with a
+      // visible confirmation chip in the transcript.
+      let applied = null
+      const actionMatch = (reply || '').match(/^ACTION:\s*(\{[\s\S]*\})\s*$/m)
+      if (actionMatch) {
+        try { applied = applyChatAction(JSON.parse(actionMatch[1])) } catch { applied = null }
+        reply = reply.replace(actionMatch[0], '').trim()
+        if (applied) reply = `${reply}\n\n✓ ${applied} — saved to the takeoff.`
+        else reply = `${reply}\n\n(I couldn't apply that change — tell me the item number and exact value.)`
+      }
       setChatMessages([...history, { role: 'assistant', text: reply }])
     } catch (err) {
       setChatMessages([...history, { role: 'assistant', text: `Error: ${err.message}` }])
@@ -365,23 +561,33 @@ INSTRUCTIONS:
 
   const persistResolvedResult = async (newResult) => {
     const img = images[activeImage]
-    try {
-      if (img?.job_id) {
-        await supabase.from('analysis_results').update({ result_json: newResult }).eq('job_id', img.job_id)
-      }
-      if (img?.project_id) {
-        await supabase.from('jobs').update({ result_json: newResult }).eq('project_id', img.project_id)
-      } else if (activeJobId) {
-        await supabase.from('jobs').update({ result_json: newResult }).eq('id', activeJobId)
-      }
-    } catch (e) {
-      console.warn('Resolution persist failed:', e.message)
+    const problems = []
+    if (img?.job_id) {
+      const { error } = await supabase.from('analysis_results').update({ result_json: newResult }).eq('job_id', img.job_id)
+      if (error) problems.push(error.message)
+    }
+    // Scope the jobs update to ONE row — updating by project_id rewrote
+    // result_json on every historical job for the project.
+    let jobRowId = activeJobId
+    if (!jobRowId && img?.project_id) {
+      const { data: jr } = await supabase
+        .from('jobs').select('id').eq('project_id', img.project_id)
+        .order('created_at', { ascending: false }).limit(1).maybeSingle()
+      jobRowId = jr?.id || null
+    }
+    if (jobRowId) {
+      const { error } = await supabase.from('jobs').update({ result_json: newResult }).eq('id', jobRowId)
+      if (error) problems.push(error.message)
+    }
+    if (problems.length) {
+      console.warn('Resolution persist failed:', problems.join('; '))
+      setError('Your answer was applied on screen but could not be saved — check your connection and answer again.')
     }
   }
 
   const applyResolution = (c, verdict, rawAnswer) => {
     const res = results[activeImage]
-    const newItems = res.items.map(it => {
+    const newItems = (res.items || []).map(it => {
       if (c.item_no == null || it.item_no !== c.item_no) return it
       const upd = { ...it }
       if (verdict.depth_ft != null) {
@@ -399,13 +605,55 @@ INSTRUCTIONS:
       }
       return upd
     })
-    const newClar = res.clarifications.map(x =>
-      x.id === c.id ? { ...x, resolution: { status: verdict.status, answer: rawAnswer, depth_ft: verdict.depth_ft ?? null, quantity: verdict.quantity ?? null } } : x
+    // Reference equality fallback: if ids are missing, `undefined === undefined`
+    // would stamp the resolution onto EVERY open clarification at once.
+    const newClar = (res.clarifications || []).map(x =>
+      (c.id != null ? x.id === c.id : x === c)
+        ? { ...x, resolution: { status: verdict.status, answer: rawAnswer, depth_ft: verdict.depth_ft ?? null, quantity: verdict.quantity ?? null } } : x
     )
     const newResult = { ...res, items: newItems, clarifications: newClar }
     setResults(prev => ({ ...prev, [activeImage]: newResult }))
     persistResolvedResult(newResult)
     return newResult
+  }
+
+  // ── Inline line-item editing ──────────────────────────────────
+  // Estimator corrections write into the result, persist server-side, and are
+  // marked so exports and history show what was human-verified.
+  const startItemEdit = (item) => {
+    setEditingItem(item.item_no)
+    setEditDraft({ description: item.description, quantity: item.quantity ?? '', unit: item.unit || '' })
+  }
+
+  const saveItemEdit = (itemNo) => {
+    const res = results[activeImage]
+    if (!res) return
+    const qty = editDraft.quantity === '' ? null : Number(editDraft.quantity)
+    if (qty != null && (!isFinite(qty) || qty < 0)) {
+      setError('Quantity must be a non-negative number.')
+      return
+    }
+    const newItems = (res.items || []).map(it => {
+      if (it.item_no !== itemNo) return it
+      const changed = []
+      if (qty !== it.quantity) changed.push(`qty ${it.quantity ?? '—'} → ${qty ?? '—'}`)
+      if (editDraft.unit !== it.unit) changed.push(`unit ${it.unit} → ${editDraft.unit}`)
+      if (editDraft.description !== it.description) changed.push('description')
+      if (!changed.length) return it
+      return {
+        ...it,
+        description: editDraft.description,
+        quantity: qty,
+        unit: (editDraft.unit || it.unit || '').toUpperCase().slice(0, 8),
+        confidence: 'HIGH',
+        edited: true,
+        notes: `✎ Estimator edited (${changed.join(', ')}). ${it.notes || ''}`.slice(0, 600),
+      }
+    })
+    const newResult = { ...res, items: newItems }
+    setResults(prev => ({ ...prev, [activeImage]: newResult }))
+    persistResolvedResult(newResult)
+    setEditingItem(null)
   }
 
   const sendResolveAnswer = async () => {
@@ -460,7 +708,8 @@ INSTRUCTIONS:
     }
   }
 
-  useEffect(() => { localStorage.setItem('tc_job_type', jobType) }, [jobType])
+  useEffect(() => { ls.set('tc_job_type', jobType) }, [jobType])
+  useEffect(() => { ls.set('tc_qa_mode', qaMode ? '1' : '0') }, [qaMode])
 
   // Materials catalog (reference data) — fetched once, keyed by slug for thumbnails.
   useEffect(() => {
@@ -500,18 +749,27 @@ INSTRUCTIONS:
 
   useEffect(() => { loadHistory() }, [loadHistory])
 
+  // Restoring a past job APPENDS to the workspace — replacing the whole array
+  // used to discard any uploads still mid-triage or mid-analysis.
   const restoreJob = (job) => {
     if (!job.result_json) return
-    setImages([{ name: job.plan_filename || 'Past Job', preview: null, project_id: job.project_id || null }])
-    setResults({ 0: job.result_json })
-    setScreenings(job.screening_grade ? { 0: { grade: job.screening_grade } } : {})
-    setActiveImage(0)
+    const entry = { name: job.plan_filename || 'Past Job', preview: null, project_id: job.project_id || null, restoredJobRow: job.id }
+    // Index decided from the committed state (imagesRef mirrors it) — state
+    // updaters run at render time, so they can't safely assign it.
+    const existing = imagesRef.current.findIndex(img => img?.restoredJobRow === job.id)
+    const idx = existing !== -1 ? existing : imagesRef.current.length
+    if (existing === -1) setImages(prev => [...prev, entry])
+    setResults(prev => ({ ...prev, [idx]: job.result_json }))
+    setScreenings(prev => job.screening_grade
+      ? { ...prev, [idx]: { grade: job.screening_grade, rationale: job.result_json?.plan_screening?.grade_rationale } }
+      : prev)
+    setActiveImage(idx)
     setActiveTab('takeoff')
     setActiveJobId(job.id)
     // Load sheet thumbnails so Plan View works on restored jobs.
     if (job.project_id) {
       loadSheetMap(job.project_id).then(page1 => {
-        if (page1) setImages(prev => prev.map((img, i) => i === 0 ? { ...img, preview: page1 } : img))
+        if (page1) setImages(prev => prev.map((img, i) => i === idx && img ? { ...img, preview: page1 } : img))
       })
     }
   }
@@ -527,6 +785,7 @@ INSTRUCTIONS:
       corrections: feedbackCorrections.trim() || null,
     })
     if (!error) setFeedbackDone(prev => ({ ...prev, [feedbackModal.id]: true }))
+    else setError('Feedback could not be sent — check your connection and try again.')
     setFeedbackSubmitting(false)
     setFeedbackModal(null)
     setFeedbackRating(0)
@@ -534,17 +793,19 @@ INSTRUCTIONS:
     setFeedbackCorrections('')
   }
 
-  const dismissOnboarding = () => {
-    localStorage.setItem('tc_onboarded', '1')
+  const finishOnboarding = (profile) => {
+    ls.set('tc_onboarded', '1')
     setShowOnboarding(false)
-
-    if (user && (onboardName.trim() || onboardCompany.trim())) {
+    // Persist when ANY field was entered — the old name/company gate silently
+    // discarded a phone number entered alone.
+    const p = profile || {}
+    if (user && (p.full_name?.trim() || p.company?.trim() || p.phone?.trim())) {
       supabase.from('profiles').upsert({
         id: user.id,
         email: user.email,
-        full_name: onboardName.trim() || null,
-        company: onboardCompany.trim() || null,
-        phone: onboardPhone.trim() || null,
+        full_name: p.full_name?.trim() || null,
+        company: p.company?.trim() || null,
+        phone: p.phone?.trim() || null,
       }, { onConflict: 'id' }).then(({ error }) => {
         if (error) console.warn('Profile save failed:', error.message)
       })
@@ -671,16 +932,21 @@ INSTRUCTIONS:
           })
           if (!putRes.ok) throw new Error(`Storage upload failed (${putRes.status})`)
 
-          // Step 3: Confirm upload → kicks off background processing
-          await fetch('/api/confirm-upload', {
+          // Step 3: Confirm upload → kicks off background processing. An
+          // unchecked failure here left the sidebar at "Processing 10%" forever.
+          const confirmRes = await fetch('/api/confirm-upload', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
             body: JSON.stringify({ job_id, sheet_id, storage_path, project_id }),
           })
+          if (!confirmRes.ok) {
+            const msg = await confirmRes.text()
+            throw new Error(`Processing could not start (${confirmRes.status}): ${msg.slice(0, 120)}`)
+          }
 
           // Step 4: Update image state — Realtime will fill in file_id + preview when ready
           setImages(prev => prev.map(img =>
-            img.tempId === tempId
+            img?.tempId === tempId
               ? {
                   name: file.name,
                   mediaType: 'application/pdf',
@@ -695,7 +961,7 @@ INSTRUCTIONS:
               : img
           ))
         } catch (err) {
-          setImages(prev => prev.filter(img => img.tempId !== tempId))
+          setImages(prev => prev.filter(img => img?.tempId !== tempId))
           setError(`Failed to upload ${file.name}: ${err.message}`)
         }
       } else {
@@ -714,18 +980,57 @@ INSTRUCTIONS:
     }
   }, [])
 
-  const removeImage = (idx) => {
-    setImages(prev => prev.filter((_, i) => i !== idx))
+  // Renames a project — updates the server row and the sidebar entry.
+  const renameProject = async (idx) => {
+    const img = images[idx]
+    if (!img) return
+    const name = window.prompt('Project name:', img.name || '')
+    if (!name?.trim() || name.trim() === img.name) return
+    const clean = name.trim().slice(0, 120)
+    setImages(prev => prev.map((im, i) => (i === idx && im ? { ...im, name: clean } : im)))
+    if (img.project_id) {
+      const { error } = await supabase.from('projects').update({ name: clean }).eq('id', img.project_id)
+      if (!error) loadHistory()
+    }
+  }
+
+  // Removal TOMBSTONES the slot instead of filtering the array. results and
+  // screenings are keyed by index, and Realtime/analyzeAll handlers hold
+  // captured indices — shifting the array after a removal re-labeled every
+  // later sheet's takeoff with the wrong plan's numbers.
+  // Server-side projects are actually DELETED (plans, thumbnails, line items) —
+  // the old behavior only hid them locally and orphaned the storage forever.
+  const removeImage = async (idx) => {
+    const img = images[idx]
+    if (img?.project_id && !img.restoredJobRow) {
+      const sure = window.confirm(`Delete "${img.name}" and its uploaded plan files? Completed reports stay available under Recent Jobs.`)
+      if (!sure) return
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+        const res = await fetch('/api/delete-project', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+          body: JSON.stringify({ project_id: img.project_id }),
+        })
+        if (!res.ok) throw new Error(`delete failed (${res.status})`)
+      } catch (err) {
+        setError(`Could not delete the project on the server: ${err.message}. It was removed from this workspace only.`)
+      }
+    }
+    setImages(prev => prev.map((im, i) => (i === idx ? null : im)))
     const newResults = { ...results }
     delete newResults[idx]
     setResults(newResults)
     const newScreenings = { ...screenings }
     delete newScreenings[idx]
     setScreenings(newScreenings)
-    if (activeImage >= idx && activeImage > 0) setActiveImage(activeImage - 1)
+    if (activeImage === idx) {
+      const remaining = imagesRef.current.map((img, i) => (img && i !== idx ? i : null)).filter(v => v != null)
+      setActiveImage(remaining.length ? remaining[remaining.length - 1] : 0)
+    }
   }
 
-  const callApi = async (img, prompt, maxTokens = 4096) => {
+  const callApi = async (img, prompt, maxTokens = 4096, systemPrompt = undefined) => {
     const { data: { session } } = await supabase.auth.getSession()
     const accessToken = session?.access_token
 
@@ -734,7 +1039,7 @@ INSTRUCTIONS:
       return new Promise((resolve, reject) => {
         const id = Math.random().toString(36).slice(2) + Date.now()
         pendingRef.current[id] = { resolve, reject }
-        workerRef.current.postMessage({ id, file_id: img.file_id, specs_file_id: specsFileId || undefined, prompt, accessToken, maxTokens })
+        workerRef.current.postMessage({ id, file_id: img.file_id, specs_file_id: specsFileId || undefined, prompt, systemPrompt, accessToken, maxTokens })
       })
     }
 
@@ -771,49 +1076,8 @@ INSTRUCTIONS:
     return new Promise((resolve, reject) => {
       const id = Math.random().toString(36).slice(2) + Date.now()
       pendingRef.current[id] = { resolve, reject }
-      workerRef.current.postMessage({ id, fileBlock, specs_file_id: specsFileId || undefined, prompt, accessToken, maxTokens })
+      workerRef.current.postMessage({ id, fileBlock, specs_file_id: specsFileId || undefined, prompt, systemPrompt, accessToken, maxTokens })
     })
-  }
-
-  const callApiMulti = async (imgArray, prompt, maxTokens = 4096) => {
-    const { data: { session } } = await supabase.auth.getSession()
-    const imageBlocks = imgArray.map(img => ({
-      type: 'image',
-      source: { type: 'base64', media_type: img.mediaType, data: img.base64 }
-    }))
-
-    const response = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session?.access_token}`,
-      },
-      body: JSON.stringify({
-        messages: [{
-          role: 'user',
-          content: [{ type: 'text', text: prompt }, ...imageBlocks]
-        }],
-        maxTokens,
-      })
-    })
-
-    if (!response.ok) {
-      const errBody = await response.text()
-      throw new Error(`API ${response.status}: ${errBody.substring(0, 200)}`)
-    }
-
-    const data = await response.json()
-    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error))
-    const text = data.content.map(b => b.type === 'text' ? b.text : '').join('')
-    let parsed
-    try {
-      parsed = JSON.parse(text.replace(/```json\s?|```/g, '').trim())
-    } catch {
-      const jsonMatch = text.match(/\{[\s\S]*\}/)
-      if (jsonMatch) parsed = JSON.parse(jsonMatch[0])
-      else throw new Error('Could not parse response as JSON')
-    }
-    return parsed
   }
 
   const processGeotech = async (file) => {
@@ -869,6 +1133,9 @@ INSTRUCTIONS:
     try {
       const rows = await parseTakeoffFile(file)
       setUploadedTakeoffData(rows)
+      if (rows.dropped > 0) {
+        setError(`${rows.length} takeoff rows parsed — ${rows.dropped} row${rows.dropped === 1 ? '' : 's'} had unreadable quantities and were skipped. The QA comparison covers only the parsed rows.`)
+      }
     } catch (err) {
       console.error('Takeoff parse error:', err)
       setError(`Could not read takeoff: ${err.message}`)
@@ -924,9 +1191,12 @@ INSTRUCTIONS:
       const parsed = await callApi(img, SCREENING_PROMPT + '\n\nGrade this construction plan sheet. Respond ONLY with the JSON object, no other text.', 512)
       const screening = parsed.plan_screening || parsed
       setScreenings(prev => ({ ...prev, [idx]: screening }))
+      setScreeningSheet(null)
 
       if (screening.grade !== 'C') {
-        await analyzeSheet(idx)
+        // Pass the screening directly — the `screenings` state in this closure
+        // is still pre-update, which used to log null grades to job history.
+        await analyzeSheet(idx, screening)
       }
     } catch (err) {
       console.error('Screening error:', err)
@@ -936,30 +1206,45 @@ INSTRUCTIONS:
     }
   }
 
-  const analyzeSheet = async (idx) => {
+  const analyzeSheet = async (idx, screeningOverride = null) => {
     const img = images[idx]
     if (!img || img.uploading) return
+    // PDFs are analyzed by the server-side multi-pass pipeline — the single-call
+    // path has no pixels to send for them (file_id-less PDFs produced a
+    // guaranteed-failing request with an undefined image payload).
+    if (img.mediaType === 'application/pdf' && !img.file_id && !img.base64) {
+      setError('This plan set runs through the multi-pass pipeline — use the sheet map and "Proceed with N sheets".')
+      return
+    }
     setLoading(true)
     setLoadingSheet(idx)
     setError(null)
 
     try {
       const jobCtx = buildJobContext()
-      let prompt
+      // System-grade instructions ride the API's system param (via callApi's
+      // systemPrompt) — sharing the user turn with untrusted plan/takeoff
+      // content let document text override the instructions.
+      let systemPrompt, prompt
       if (qaMode && uploadedTakeoffData) {
-        prompt = QA_SYSTEM_PROMPT + jobCtx +
-          `ESTIMATOR'S SUBMITTED TAKEOFF (${uploadedTakeoffName}):\n` +
+        systemPrompt = QA_SYSTEM_PROMPT + jobCtx
+        prompt = `ESTIMATOR'S SUBMITTED TAKEOFF (${uploadedTakeoffName}):\n` +
           JSON.stringify(uploadedTakeoffData, null, 2) +
           `\n\n---\n\nReview the plan sheet above against the estimator's takeoff. Produce the full Bid Risk Report. Respond ONLY with the JSON object, no other text.`
       } else if (qaMode) {
-        prompt = QA_SYSTEM_PROMPT + jobCtx +
-          `No estimator takeoff was uploaded. Read the plan sheet and produce the Bid Risk Report based on plan review alone. Flag all scope gaps and items an estimator should not miss. Respond ONLY with the JSON object, no other text.`
+        systemPrompt = QA_SYSTEM_PROMPT + jobCtx
+        prompt = `No estimator takeoff was uploaded. Read the plan sheet and produce the Bid Risk Report based on plan review alone. Flag all scope gaps and items an estimator should not miss. Respond ONLY with the JSON object, no other text.`
       } else {
-        prompt = SYSTEM_PROMPT + jobCtx +
-          `Analyze this construction plan sheet and produce a complete quantity takeoff. Extract every identifiable item. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.`
+        systemPrompt = SYSTEM_PROMPT + jobCtx
+        prompt = `Analyze this construction plan sheet and produce a complete quantity takeoff. Extract every identifiable item. Be thorough but honest about confidence levels. Respond ONLY with the JSON object, no other text.`
       }
 
-      const parsed = await callApi(img, prompt)
+      // 8192 tokens — the full takeoff schema on a busy sheet overflows 4096
+      // and died with "Could not parse response as JSON".
+      const parsed = await callApi(img, prompt, 8192, systemPrompt)
+      if (!parsed || typeof parsed !== 'object' || (!Array.isArray(parsed.items) && !parsed.estimator_confidence_score && !parsed.quantity_items_to_recheck)) {
+        throw new Error('The AI response was not a recognizable report — try again.')
+      }
       setResults(prev => ({ ...prev, [idx]: parsed }))
       setActiveImage(idx)
       setActiveTab(qaMode ? 'report' : 'takeoff')
@@ -973,15 +1258,21 @@ INSTRUCTIONS:
       // Fire-and-forget: log the completed job to Supabase for beta tracking
       if (user) {
         const rm = parsed?.risk_and_misses || {}
+        // Count fields the prompts actually emit — the old reads
+        // (geotech_concerns/missed_items/bid_risk_items, screening.rationale)
+        // don't exist in any schema, so grades and risk counts logged null/0.
         const riskCount = qaMode
           ? (parsed?.high_risk_misses?.length || 0) + (parsed?.scope_gaps?.filter(s => s.status === 'MISSING').length || 0)
-          : (rm.geotech_concerns?.length || 0) + (rm.missed_items?.length || 0) + (rm.bid_risk_items?.length || 0)
+          : (rm.scope_gaps?.filter(s => s.status === 'MISSING' || s.status === 'PARTIAL').length || 0) +
+            (typeof rm.top_risks === 'string' && rm.top_risks.trim() ? 1 : 0) +
+            (rm.geotech?.geotech_flags ? 1 : 0)
+        const screening = screeningOverride || screenings[idx] || parsed?.plan_screening || null
         supabase.from('jobs').insert({
           user_id: user.id,
           plan_filename: images[idx]?.name || null,
           geotech_filename: geotechFileName || null,
-          screening_grade: screenings[idx]?.grade || null,
-          screening_rationale: screenings[idx]?.rationale || null,
+          screening_grade: screening?.grade || null,
+          screening_rationale: screening?.grade_rationale || screening?.rationale || null,
           line_item_count: qaMode ? (parsed?.high_risk_misses?.length || 0) : (parsed?.items?.length || 0),
           risk_flag_count: riskCount,
           result_json: parsed,
@@ -1002,558 +1293,64 @@ INSTRUCTIONS:
 
   const analyzeAll = async () => {
     setProcessingAll(true)
-    for (let i = 0; i < images.length; i++) {
-      if (!results[i]) await analyzeSheet(i)
+    for (let i = 0; i < imagesRef.current.length; i++) {
+      if (imagesRef.current[i] && !results[i]) await analyzeSheet(i)
     }
     setProcessingAll(false)
   }
 
-  const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`
-
-  const buildRiskFlagsForExport = (result, geo) => {
-    const lines = []
-    const rm = result?.risk_and_misses
-    // geotech
-    if (geo?.flags) {
-      const gf = geo.flags
-      if (gf.dewatering_required)       lines.push(['GEOTECH', 'WARN', 'Dewatering Required',          gf.dewatering_note || ''])
-      if (gf.rock_excavation_required)  lines.push(['GEOTECH', 'WARN', 'Rock Excavation Required',      gf.rock_note || ''])
-      if (gf.lime_stabilization_required) lines.push(['GEOTECH', 'WARN', 'Lime Stabilization Required', gf.lime_note || ''])
-      if (gf.select_fill_required)      lines.push(['GEOTECH', 'WARN', 'Imported Select Fill Required', gf.select_fill_note || ''])
-      if (gf.spoil_removal_required)    lines.push(['GEOTECH', 'WARN', 'Spoil Haul-Off Required',       gf.spoil_note || ''])
+  // ── Exports: hardened module (utils/exporters.js) ────────────
+  // CSV cells are quote+formula-injection safe, XLSX is a real workbook, and
+  // "PDF" prints through a hidden iframe — no popups, no CDN fonts.
+  const exportMeta = (idx = activeImage) => {
+    const res = results[idx]
+    const sc = screenings[idx] || res?.plan_screening
+    return {
+      filename: images[idx]?.name || 'takeoff',
+      gradeLabel: sc ? `${sc.grade}${sc.grade_label ? ` — ${sc.grade_label}` : ''}` : null,
+      gradeRationale: sc?.grade_rationale || sc?.rationale || null,
     }
-    if (rm?.geotech?.geotech_flags) lines.push(['GEOTECH', 'INFO', 'AI Geotech Note', rm.geotech.geotech_flags])
-    // scope gaps
-    const CHECKS = [
-      ['trench safety', 'Trench Safety (OSHA >5 ft)', 'Required on trenches deeper than 5 ft. Often excluded.'],
-      ['erosion control', 'Erosion Control / SWPPP', 'Silt fence, rock dams, inlet protection. Required on permitted sites.'],
-      ['testing', 'Testing & Inspection', 'Mandrel, pressure, leakage, video, compaction. May be at contractor expense.'],
-      ['traffic control', 'Traffic Control', 'Required for ROW work. TCP, flaggers, signs — $5–15K depending on road class.'],
-      ['mobilization', 'Mobilization / Demobilization', 'Equipment move-in, site setup. Commonly omitted.'],
-      ['permits', 'Permit & Inspection Fees', 'City/county/TxDOT permits and tap fees.'],
-    ]
-    const allItems = result?.items || []
-    CHECKS.forEach(([key, label, hint]) => {
-      const inScope = allItems.some(it => (it.description + ' ' + (it.notes || '')).toLowerCase().includes(key))
-      const aiGap = (rm?.scope_gaps || []).find(s => s.item?.toLowerCase().includes(key.split(' ')[0]))
-      if (aiGap?.status === 'NOT APPLICABLE') return
-      lines.push(['SCOPE', inScope || aiGap?.status === 'OK' ? 'OK' : 'MISSING', label, inScope ? 'In scope' : aiGap?.note || hint])
-    })
-    // low confidence
-    allItems.filter(it => it.confidence === 'LOW').forEach(it => {
-      lines.push(['INFERRED', 'VERIFY', it.description, it.notes || ''])
-    })
-    return lines
   }
 
   const exportCSV = (allSheets = false) => {
-    const date = new Date().toISOString().split('T')[0]
-    const entries = allSheets ? Object.entries(results) : [[activeImage, results[activeImage]]]
-    const firstResult = entries[0]?.[1]
-    const sc = screenings[activeImage] || firstResult?.plan_screening
-    const si = firstResult?.sheet_info || {}
-
-    const lines = []
-    // header block
-    lines.push(['TITAN AI TAKEOFF REPORT'])
-    lines.push(['Generated:', date, '', 'takeoffcopilot.com'])
-    lines.push([])
-    lines.push(['Project:', q(si.project_name || '—')])
-    lines.push(['Engineer:', q(si.engineer || '—')])
-    if (geotechResult?.report_info?.engineer_firm) lines.push(['Geotech Firm:', q(geotechResult.report_info.engineer_firm)])
-    if (sc) lines.push(['Plan Grade:', `${sc.grade} — ${sc.grade_label}`, '', q(sc.grade_rationale)])
-    lines.push([])
-    // data
-    lines.push([allSheets ? 'Sheet' : '', 'Item No', 'Category', 'Description', 'Unit', 'Quantity', 'Confidence', 'Notes'].filter((_, i) => allSheets || i > 0))
-    entries.forEach(([idx, res]) => {
-      if (!res) return
-      res.items.forEach(item => {
-        const row = allSheets ? [images[+idx]?.name || `Sheet ${+idx + 1}`] : []
-        row.push(item.item_no, item.category, q(item.description), item.unit, item.quantity, item.confidence, q(item.notes || ''))
-        lines.push(row)
+    if (allSheets) {
+      const combined = { items: [] }
+      Object.entries(results).forEach(([idx, res]) => {
+        (res?.items || []).forEach(item => combined.items.push({
+          ...item,
+          description: `[${images[+idx]?.name || `Sheet ${+idx + 1}`}] ${item.description}`,
+        }))
       })
-    })
-    // risk flags footer
-    const flagRows = buildRiskFlagsForExport(firstResult, geotechResult)
-    if (flagRows.length > 0) {
-      lines.push([])
-      lines.push(['RISK FLAGS'])
-      lines.push(['Section', 'Status', 'Item', 'Note'])
-      flagRows.forEach(r => lines.push(r.map(q)))
+      if (!combined.items.length) { setError('No takeoff line items to export yet.'); return }
+      exportTakeoffCSV(combined, { ...exportMeta(), filename: 'all_sheets' })
+      return
     }
+    const res = results[activeImage]
+    if (res?.items?.length) exportTakeoffCSV(res, exportMeta())
+    else if (res) exportQACSV(res, exportMeta())
+    else setError('Nothing to export for this sheet yet.')
+  }
 
-    const csv = lines.map(r => Array.isArray(r) ? r.join(',') : r).join('\n')
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `takeoff_${allSheets ? 'all_sheets' : images[activeImage]?.name?.replace(/[^a-z0-9]/gi, '_') || 'sheet'}_${date}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  const exportExcel = () => {
+    const res = results[activeImage]
+    if (!res) { setError('Nothing to export for this sheet yet.'); return }
+    exportXLSX(res, exportMeta())
   }
 
   const exportPDF = () => {
-    const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     const res = results[activeImage]
     if (!res) return
-    const sc = screenings[activeImage] || res.plan_screening
-    const si = res.sheet_info || {}
-    const flagRows = buildRiskFlagsForExport(res, geotechResult)
-
-    const gradeColor = sc?.grade === 'A' ? '#2ECC71' : sc?.grade === 'B' ? '#F1C40F' : '#E8372C'
-    const confColor = c => c === 'HIGH' ? '#2ECC71' : c === 'MEDIUM' ? '#F1C40F' : '#E8372C'
-
-    // Material thumbnails — absolute URLs so they resolve in the print window
-    // (the export opens a blob document whose origin can't resolve relative paths).
-    const origin = window.location.origin
-    const hasMat = res.items?.some(it => it.material_slug && materialsMap[it.material_slug])
-    const thumbCell = (item) => {
-      if (!hasMat) return ''
-      const mat = item.material_slug && materialsMap[item.material_slug]
-      return mat
-        ? `<td class="center"><img src="${origin}${mat.image_path}" width="22" height="22" alt=""/></td>`
-        : `<td></td>`
-    }
-
-    const itemRows = res.items.map(item => `
-      <tr>
-        <td class="mono muted">${item.item_no}</td>
-        <td><span class="cat">${item.category}</span></td>
-        ${thumbCell(item)}
-        <td>${item.description}</td>
-        <td class="mono center">${item.unit}</td>
-        <td class="mono bold center">${item.quantity}</td>
-        <td class="center"><span class="conf" style="color:${confColor(item.confidence)};border-color:${confColor(item.confidence)}20">${item.confidence}</span></td>
-        <td class="small muted">${item.notes || ''}</td>
-      </tr>`).join('')
-
-    const riskSections = { GEOTECH: [], SCOPE: [], INFERRED: [] }
-    flagRows.forEach(([section, status, label, note]) => {
-      riskSections[section]?.push({ status, label, note })
-    })
-
-    const riskIcon = s => s === 'OK' ? '✓' : s === 'MISSING' || s === 'WARN' ? s === 'WARN' ? '▲' : '✗' : s === 'VERIFY' ? '?' : 'ℹ'
-    const riskColor = s => s === 'OK' ? '#2ECC71' : s === 'MISSING' ? '#E8372C' : s === 'WARN' ? '#F1C40F' : '#888888'
-
-    const renderRiskCol = (title, items, accent) => items.length === 0 ? '' : `
-      <div class="risk-col">
-        <div class="risk-col-head" style="color:${accent}">${title}</div>
-        ${items.map(f => `
-          <div class="risk-item">
-            <span class="risk-icon" style="color:${riskColor(f.status)}">${riskIcon(f.status)}</span>
-            <div>
-              <div class="risk-label" style="color:${riskColor(f.status)}">${f.label}</div>
-              <div class="risk-note">${f.note}</div>
-            </div>
-          </div>`).join('')}
-      </div>`
-
-    const geotechBlock = geotechResult ? `
-      <div class="section">
-        <div class="section-head">Geotech Data — ${geotechFileName || 'Report'}</div>
-        <div class="geo-grid">
-          ${[
-            ['Dominant Soil', geotechResult.lab_summary?.dominant_uscs],
-            ['Max PI', geotechResult.lab_summary?.pi_max],
-            ['GW Depth', geotechResult.summary?.shallowest_groundwater_ft != null ? `${geotechResult.summary.shallowest_groundwater_ft} ft` : null],
-            ['Rock', geotechResult.summary?.rock_encountered ? `${geotechResult.summary.shallowest_rock_ft ?? '?'} ft` : 'Not enc.'],
-            ['Backfill', geotechResult.summary?.backfill_suitability],
-          ].filter(([,v]) => v != null).map(([k,v]) => `
-            <div class="geo-cell">
-              <div class="geo-label">${k}</div>
-              <div class="geo-val" style="color:${k === 'Backfill' ? (v === 'SUITABLE' ? '#2ECC71' : v === 'MARGINAL' ? '#F1C40F' : '#E8372C') : '#F5F5F0'}">${v}</div>
-            </div>`).join('')}
-        </div>
-        ${geotechResult.summary?.backfill_notes ? `<p class="geo-note">${geotechResult.summary.backfill_notes}</p>` : ''}
-      </div>` : ''
-
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>6 Signal Takeoff Report</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family:'Outfit',sans-serif; background:#fff; color:#111; font-size:10pt; line-height:1.5; }
-  .page { max-width:1100px; margin:0 auto; padding:32px 40px; }
-
-  /* HEADER */
-  .report-header { display:flex; justify-content:space-between; align-items:flex-end; padding-bottom:16px; border-bottom:3px solid #E8372C; margin-bottom:20px; }
-  .brand { font-family:'Bebas Neue',sans-serif; font-size:28pt; letter-spacing:3px; color:#111; line-height:1; }
-  .brand span { color:#E8372C; }
-  .brand-sub { font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:2px; color:#888; text-transform:uppercase; margin-top:2px; }
-  .report-meta { text-align:right; font-size:8pt; color:#555; font-family:'JetBrains Mono',monospace; }
-  .report-meta strong { color:#111; }
-
-  /* PROJECT BLOCK */
-  .project-block { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:16px; }
-  .proj-cell { background:#f5f5f5; border-left:3px solid #E8372C; padding:8px 12px; }
-  .proj-label { font-size:7pt; letter-spacing:1.5px; text-transform:uppercase; color:#888; font-family:'JetBrains Mono',monospace; margin-bottom:2px; }
-  .proj-val { font-size:10pt; font-weight:600; color:#111; }
-
-  /* GRADE BADGE */
-  .grade-block { display:flex; align-items:center; gap:16px; padding:12px 16px; border:1px solid #ddd; border-left:4px solid ${gradeColor}; margin-bottom:20px; background:#fafafa; }
-  .grade-circle { width:44px; height:44px; border-radius:50%; border:2px solid ${gradeColor}; display:flex; align-items:center; justify-content:center; font-family:'Bebas Neue',sans-serif; font-size:20pt; color:${gradeColor}; flex-shrink:0; }
-  .grade-info-label { font-size:9pt; font-weight:700; color:${gradeColor}; }
-  .grade-info-sub { font-size:8pt; color:#555; font-family:'JetBrains Mono',monospace; }
-  .grade-rationale { font-size:9pt; color:#444; flex:1; line-height:1.5; border-left:1px solid #ddd; padding-left:16px; }
-
-  /* SECTION */
-  .section { margin-bottom:24px; }
-  .section-head { font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:600; letter-spacing:2px; text-transform:uppercase; color:#E8372C; padding:6px 0; border-bottom:1px solid #E8372C; margin-bottom:10px; }
-
-  /* TABLE */
-  table { width:100%; border-collapse:collapse; font-size:8.5pt; }
-  thead { background:#111; }
-  th { padding:6px 10px; text-align:left; font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:1px; text-transform:uppercase; color:#E8372C; white-space:nowrap; }
-  td { padding:6px 10px; border-bottom:1px solid #eee; vertical-align:top; }
-  tr:nth-child(even) td { background:#fafafa; }
-  .mono { font-family:'JetBrains Mono',monospace; }
-  .muted { color:#888; }
-  .bold { font-weight:700; }
-  .center { text-align:center; }
-  .small { font-size:7.5pt; color:#666; }
-  .cat { display:inline-block; font-family:'JetBrains Mono',monospace; font-size:7pt; background:#f0f0f0; border:1px solid #ddd; padding:1px 6px; border-radius:2px; color:#444; }
-  .conf { display:inline-block; font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:700; padding:1px 8px; border:1px solid; border-radius:2px; letter-spacing:0.5px; }
-
-  /* RISK FLAGS */
-  .risk-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:0; border:1px solid #ddd; }
-  .risk-col { border-right:1px solid #ddd; padding:12px; }
-  .risk-col:last-child { border-right:none; }
-  .risk-col-head { font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:700; letter-spacing:1px; text-transform:uppercase; padding-bottom:8px; margin-bottom:8px; border-bottom:1px solid #eee; }
-  .risk-item { display:flex; gap:8px; margin-bottom:8px; align-items:flex-start; }
-  .risk-icon { font-size:9pt; width:14px; flex-shrink:0; margin-top:1px; font-family:'JetBrains Mono',monospace; }
-  .risk-label { font-size:8.5pt; font-weight:600; line-height:1.3; }
-  .risk-note { font-size:7.5pt; color:#666; line-height:1.4; margin-top:1px; }
-
-  /* TOP RISKS */
-  .top-risk-block { background:#FFF8E1; border-left:4px solid #F1C40F; padding:10px 14px; margin-bottom:16px; font-size:9pt; color:#444; line-height:1.6; }
-  .top-risk-label { font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:#B8860B; margin-bottom:4px; }
-
-  /* GEOTECH */
-  .geo-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; margin-bottom:10px; }
-  .geo-cell { background:#f5f5f5; padding:8px 10px; }
-  .geo-label { font-family:'JetBrains Mono',monospace; font-size:7pt; color:#888; letter-spacing:1px; text-transform:uppercase; margin-bottom:3px; }
-  .geo-val { font-size:10pt; font-weight:700; }
-  .geo-note { font-size:8.5pt; color:#555; line-height:1.5; background:#f9f9f9; padding:8px 12px; border-left:3px solid #ddd; }
-
-  /* FOOTER */
-  .report-footer { margin-top:32px; padding-top:12px; border-top:1px solid #ddd; display:flex; justify-content:space-between; font-size:7.5pt; color:#999; font-family:'JetBrains Mono',monospace; }
-
-  @media print {
-    body { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
-    .page { padding:16px 20px; }
-    .no-print { display:none !important; }
-  }
-</style>
-</head>
-<body>
-<div class="page">
-
-  <div class="report-header">
-    <div>
-      <div class="brand">TITAN <span>AI</span></div>
-      <div class="brand-sub">Takeoff Copilot // Quantity Report</div>
-    </div>
-    <div class="report-meta">
-      <div><strong>${date}</strong></div>
-      <div>takeoffcopilot.com</div>
-      ${si.sheet_number ? `<div>Sheet ${si.sheet_number}</div>` : ''}
-    </div>
-  </div>
-
-  <div class="project-block">
-    <div class="proj-cell">
-      <div class="proj-label">Project</div>
-      <div class="proj-val">${si.project_name || '—'}</div>
-    </div>
-    <div class="proj-cell">
-      <div class="proj-label">Engineer</div>
-      <div class="proj-val">${si.engineer || '—'}</div>
-    </div>
-    <div class="proj-cell">
-      <div class="proj-label">Sheet Title</div>
-      <div class="proj-val">${si.sheet_title || images[activeImage]?.name || '—'}</div>
-    </div>
-  </div>
-
-  ${sc ? `
-  <div class="grade-block">
-    <div class="grade-circle">${sc.grade}</div>
-    <div>
-      <div class="grade-info-label">${sc.grade_label}</div>
-      <div class="grade-info-sub">Expected accuracy: ${sc.expected_accuracy_range}</div>
-    </div>
-    <div class="grade-rationale">${sc.grade_rationale}</div>
-  </div>` : ''}
-
-  ${res.risk_and_misses?.top_risks ? `
-  <div class="top-risk-block">
-    <div class="top-risk-label">Top Risks</div>
-    ${res.risk_and_misses.top_risks}
-  </div>` : ''}
-
-  <div class="section">
-    <div class="section-head">Quantity Takeoff — ${res.items.length} Items // ${res.summary?.high_confidence_count || 0} High // ${res.summary?.medium_confidence_count || 0} Medium // ${res.summary?.low_confidence_count || 0} Low</div>
-    <table>
-      <thead>
-        <tr><th>#</th><th>Cat</th>${hasMat ? '<th>Mat</th>' : ''}<th>Description</th><th>Unit</th><th>Qty</th><th>Conf</th><th>Notes</th></tr>
-      </thead>
-      <tbody>${itemRows}</tbody>
-    </table>
-  </div>
-
-  ${(flagRows.length > 0) ? `
-  <div class="section">
-    <div class="section-head">Risk Flags</div>
-    <div class="risk-grid">
-      ${renderRiskCol('Geotech Warnings', riskSections.GEOTECH, '#E8372C')}
-      ${renderRiskCol('Commonly Missed Scope', riskSections.SCOPE, '#B8860B')}
-      ${renderRiskCol('AI Inferred — Verify', riskSections.INFERRED, '#888')}
-    </div>
-  </div>` : ''}
-
-  ${geotechBlock}
-
-  <div class="report-footer">
-    <span>Generated by 6 Signal Takeoff Copilot</span>
-    <span>This report is AI-generated. Verify all quantities before pricing.</span>
-    <span>${date}</span>
-  </div>
-
-</div>
-</body>
-</html>`
-
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const win = window.open(url, '_blank', 'width=1100,height=900')
-    win.onload = () => { URL.revokeObjectURL(url); win.focus(); win.print() }
+    printReport(buildTakeoffReportHTML(res, exportMeta()))
   }
 
   const exportQAPDF = () => {
     const res = results[activeImage]
     if (!res?.executive_risk_summary) return
-    const date = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-    const sc = screenings[activeImage] || res.plan_screening
-    const si = res.sheet_info || {}
-    const conf = res.estimator_confidence_score || {}
-
-    const gradeColor = sc?.grade === 'A' ? '#2ECC71' : sc?.grade === 'B' ? '#F1C40F' : '#E8372C'
-    const riskColor = r => r === 'HIGH' ? '#E8372C' : r === 'MEDIUM' ? '#F1C40F' : '#2ECC71'
-    const scoreColor = g => ({ A: '#2ECC71', B: '#84cc16', C: '#F1C40F', D: '#f97316', F: '#E8372C' }[g] || '#888')
-    const statusColor = s => s === 'CONFIRMED' ? '#2ECC71' : s === 'APPEARS HIGH' ? '#F1C40F' : s === 'UNVERIFIABLE' ? '#888' : '#E8372C'
-    const scopeColor = s => s === 'PRESENT' ? '#2ECC71' : s === 'MISSING' ? '#E8372C' : '#888'
-    const scopeIcon = s => s === 'PRESENT' ? '&#10003;' : s === 'MISSING' ? '&#10007;' : '?'
-
-    const highRiskRows = (res.high_risk_misses || []).map(m => `
-      <tr>
-        <td class="center"><span class="rbadge" style="background:${riskColor(m.risk_level)}18;color:${riskColor(m.risk_level)};border-color:${riskColor(m.risk_level)}50">${m.risk_level}</span></td>
-        <td class="bold">${m.item}</td>
-        <td class="mono muted">${m.estimator_quantity || '—'}</td>
-        <td class="mono">${m.plan_read_quantity || '—'}</td>
-        <td class="small muted">${m.note || ''}</td>
-      </tr>`).join('')
-
-    const recheckRows = (res.quantity_items_to_recheck || []).map(q => `
-      <tr>
-        <td class="center"><span class="rbadge" style="background:${statusColor(q.qa_status)}18;color:${statusColor(q.qa_status)};border-color:${statusColor(q.qa_status)}50;font-size:6.5pt;white-space:nowrap">${q.qa_status}</span></td>
-        <td>${q.item || ''}</td>
-        <td class="mono muted">${q.estimator_quantity || '—'}</td>
-        <td class="mono">${q.plan_read_quantity || '—'}</td>
-        <td class="small muted">${q.note || ''}</td>
-      </tr>`).join('')
-
-    const scopeRows = (res.scope_gaps || []).map(s => `
-      <div class="scope-row" style="border-left-color:${scopeColor(s.status)}">
-        <span class="scope-icon" style="color:${scopeColor(s.status)}">${scopeIcon(s.status)}</span>
-        <div>
-          <div class="scope-item">${s.item}${s.risk_level && s.status !== 'PRESENT' ? ` <span class="rbadge" style="background:${riskColor(s.risk_level)}18;color:${riskColor(s.risk_level)};border-color:${riskColor(s.risk_level)}50">${s.risk_level}</span>` : ''}</div>
-          <div class="scope-note">${s.note || ''}</div>
-        </div>
-      </div>`).join('')
-
-    const conflictRows = (res.geotech_and_plan_conflicts || []).map(c => `
-      <div class="conflict-row">
-        <div class="conflict-top">
-          <span class="rbadge" style="background:${riskColor(c.risk_level)}18;color:${riskColor(c.risk_level)};border-color:${riskColor(c.risk_level)}50">${c.risk_level}</span>
-          <strong>${c.conflict}</strong>
-        </div>
-        <div class="conflict-sub"><span class="muted">Geotech:</span> ${c.geotech_finding} &nbsp;|&nbsp; <span class="muted">Takeoff:</span> ${c.estimator_response}</div>
-        <div class="conflict-note">${c.note}</div>
-      </div>`).join('')
-
-    const questionRows = (res.clarification_questions || []).map(q => `
-      <div class="q-row">
-        <span class="rbadge" style="background:${riskColor(q.priority)}18;color:${riskColor(q.priority)};border-color:${riskColor(q.priority)}50;flex-shrink:0">${q.priority}</span>
-        <div>
-          <div class="q-text">${q.question}</div>
-          ${q.context ? `<div class="small muted">${q.context}</div>` : ''}
-        </div>
-      </div>`).join('')
-
-    const assumptionRows = (res.assumptions_needing_approval || []).map(a => `
-      <div class="assume-row">
-        <div class="assume-text">${a.assumption}</div>
-        <div class="small"><span class="muted">Risk:</span> ${a.risk_if_wrong}</div>
-        <div class="small" style="margin-top:2px"><span class="muted">Action:</span> ${a.recommended_action}</div>
-      </div>`).join('')
-
-    const bidNotes = (res.recommended_bid_notes || []).map(n => `<li>${n}</li>`).join('')
-
-    const html = `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>6 Signal QA Bid Risk Report</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { font-family:'Outfit',sans-serif; background:#fff; color:#111; font-size:10pt; line-height:1.5; }
-  .page { max-width:1100px; margin:0 auto; padding:32px 40px; }
-  .report-header { display:flex; justify-content:space-between; align-items:flex-end; padding-bottom:16px; border-bottom:3px solid #0057FF; margin-bottom:20px; }
-  .brand { font-family:'Bebas Neue',sans-serif; font-size:24pt; letter-spacing:3px; color:#111; line-height:1; }
-  .brand span { color:#0057FF; }
-  .brand-sub { font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:2px; color:#888; text-transform:uppercase; margin-top:2px; }
-  .qa-pill { display:inline-block; background:#0057FF; color:#fff; font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:2px; padding:2px 8px; border-radius:3px; margin-top:6px; }
-  .report-meta { text-align:right; font-size:8pt; color:#555; font-family:'JetBrains Mono',monospace; }
-  .report-meta strong { color:#111; }
-  .project-block { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:16px; }
-  .proj-cell { background:#f5f5f5; border-left:3px solid #0057FF; padding:8px 12px; }
-  .proj-label { font-size:7pt; letter-spacing:1.5px; text-transform:uppercase; color:#888; font-family:'JetBrains Mono',monospace; margin-bottom:2px; }
-  .proj-val { font-size:10pt; font-weight:600; color:#111; }
-  .grade-block { display:flex; align-items:center; gap:16px; padding:12px 16px; border:1px solid #ddd; border-left:4px solid ${gradeColor}; margin-bottom:16px; background:#fafafa; }
-  .grade-circle { width:44px; height:44px; border-radius:50%; border:2px solid ${gradeColor}; display:flex; align-items:center; justify-content:center; font-family:'Bebas Neue',sans-serif; font-size:20pt; color:${gradeColor}; flex-shrink:0; }
-  .grade-info-label { font-size:9pt; font-weight:700; color:${gradeColor}; }
-  .grade-info-sub { font-size:8pt; color:#555; font-family:'JetBrains Mono',monospace; }
-  .grade-rationale { font-size:9pt; color:#444; flex:1; line-height:1.5; border-left:1px solid #ddd; padding-left:16px; }
-  .top-row { display:grid; grid-template-columns:1fr 200px; gap:16px; margin-bottom:20px; }
-  .exec-card { background:#f0f4ff; border:1px solid #c7d9ff; padding:16px; border-left:4px solid #0057FF; }
-  .exec-title { font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:2px; text-transform:uppercase; color:#0057FF; margin-bottom:8px; font-weight:600; }
-  .exec-text { font-size:9.5pt; line-height:1.7; color:#222; }
-  .score-card { background:#f9f9f9; border:1px solid #e0e0e0; padding:16px; text-align:center; display:flex; flex-direction:column; align-items:center; }
-  .score-num { font-family:'Bebas Neue',sans-serif; font-size:52pt; line-height:1; color:${scoreColor(conf.grade)}; }
-  .score-grade { font-family:'JetBrains Mono',monospace; font-size:9pt; color:${scoreColor(conf.grade)}; font-weight:700; letter-spacing:2px; margin-top:2px; }
-  .score-lbl { font-family:'JetBrains Mono',monospace; font-size:7pt; color:#888; letter-spacing:1px; text-transform:uppercase; margin-top:2px; }
-  .score-rat { font-size:8pt; color:#555; line-height:1.4; margin-top:8px; text-align:left; }
-  .bid-ready { margin-top:8px; font-size:8pt; font-weight:700; padding:4px 10px; border-radius:3px; background:${conf.ready_to_bid ? '#dcfce7' : '#fee2e2'}; color:${conf.ready_to_bid ? '#16a34a' : '#dc2626'}; }
-  .section { margin-bottom:24px; }
-  .section-head { font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:600; letter-spacing:2px; text-transform:uppercase; color:#0057FF; padding:6px 0; border-bottom:1.5px solid #0057FF; margin-bottom:12px; }
-  table { width:100%; border-collapse:collapse; font-size:8.5pt; }
-  thead { background:#111; }
-  th { padding:6px 10px; text-align:left; font-family:'JetBrains Mono',monospace; font-size:7pt; letter-spacing:1px; text-transform:uppercase; color:#0057FF; white-space:nowrap; }
-  td { padding:6px 10px; border-bottom:1px solid #eee; vertical-align:top; }
-  tr:nth-child(even) td { background:#fafafa; }
-  .mono { font-family:'JetBrains Mono',monospace; }
-  .muted { color:#888; }
-  .bold { font-weight:700; }
-  .center { text-align:center; }
-  .small { font-size:7.5pt; color:#666; }
-  .rbadge { display:inline-block; font-family:'JetBrains Mono',monospace; font-size:7pt; font-weight:700; padding:1px 7px; border:1px solid; border-radius:2px; letter-spacing:0.5px; }
-  .scope-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-  .scope-row { display:flex; gap:10px; align-items:flex-start; padding:8px 10px; border-left:3px solid #ddd; background:#fafafa; }
-  .scope-icon { font-size:10pt; font-weight:700; width:16px; flex-shrink:0; font-family:'JetBrains Mono',monospace; margin-top:1px; }
-  .scope-item { font-size:9pt; font-weight:600; margin-bottom:2px; }
-  .scope-note { font-size:7.5pt; color:#666; line-height:1.4; }
-  .conflict-row { padding:10px 0; border-bottom:1px solid #eee; }
-  .conflict-row:last-child { border-bottom:none; }
-  .conflict-top { display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:9pt; font-weight:600; }
-  .conflict-sub { font-size:8pt; color:#555; margin-bottom:4px; }
-  .conflict-note { font-size:8.5pt; color:#333; padding:6px 10px; background:#f5f5f5; border-left:2px solid #ddd; line-height:1.5; }
-  .two-col { display:grid; grid-template-columns:1fr 1fr; gap:24px; margin-bottom:24px; }
-  .q-row { display:flex; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px solid #eee; }
-  .q-row:last-child { border-bottom:none; }
-  .q-text { font-size:9pt; font-weight:600; line-height:1.4; margin-bottom:2px; }
-  .assume-row { padding:8px 0; border-bottom:1px solid #eee; }
-  .assume-row:last-child { border-bottom:none; }
-  .assume-text { font-size:9pt; font-weight:600; margin-bottom:4px; }
-  .bid-notes { list-style:none; padding:0; display:flex; flex-direction:column; gap:8px; }
-  .bid-notes li { font-size:9pt; line-height:1.6; padding:8px 14px; border-left:3px solid #0057FF; background:#f0f4ff; color:#222; }
-  .report-footer { margin-top:32px; padding-top:12px; border-top:1px solid #ddd; display:flex; justify-content:space-between; font-size:7.5pt; color:#999; font-family:'JetBrains Mono',monospace; }
-  @media print { body { -webkit-print-color-adjust:exact; print-color-adjust:exact; } .page { padding:16px 20px; } }
-</style>
-</head>
-<body>
-<div class="page">
-  <div class="report-header">
-    <div>
-      <div class="brand">TAKEOFF <span>COPILOT</span></div>
-      <div class="brand-sub">6 Signal // Bid Risk Analysis</div>
-      <div class="qa-pill">QA Mode</div>
-    </div>
-    <div class="report-meta">
-      <div><strong>${date}</strong></div>
-      <div>takeoffcopilot.com</div>
-      ${si.sheet_number ? `<div>Sheet ${si.sheet_number}</div>` : ''}
-    </div>
-  </div>
-  <div class="project-block">
-    <div class="proj-cell"><div class="proj-label">Project</div><div class="proj-val">${si.project_name || '—'}</div></div>
-    <div class="proj-cell"><div class="proj-label">Sheet</div><div class="proj-val">${si.sheet_title || images[activeImage]?.name || '—'}</div></div>
-    <div class="proj-cell"><div class="proj-label">Engineer</div><div class="proj-val">${si.engineer || '—'}</div></div>
-  </div>
-  ${sc ? `<div class="grade-block">
-    <div class="grade-circle">${sc.grade}</div>
-    <div><div class="grade-info-label">${sc.grade_label}</div><div class="grade-info-sub">Expected accuracy: ${sc.expected_accuracy_range}</div></div>
-    <div class="grade-rationale">${sc.grade_rationale}</div>
-  </div>` : ''}
-  <div class="top-row">
-    <div class="exec-card">
-      <div class="exec-title">Executive Risk Summary</div>
-      <div class="exec-text">${res.executive_risk_summary}</div>
-    </div>
-    <div class="score-card">
-      <div class="score-num">${conf.score ?? '—'}</div>
-      <div class="score-grade">Grade ${conf.grade ?? '—'}</div>
-      <div class="score-lbl">Estimator Confidence</div>
-      <div class="score-rat">${conf.rationale || ''}</div>
-      <div class="bid-ready">${conf.ready_to_bid ? '&#10003; Ready to Bid' : '&#10007; Needs Revision'}</div>
-    </div>
-  </div>
-  ${highRiskRows ? `<div class="section">
-    <div class="section-head">High Risk Misses — ${(res.high_risk_misses || []).length} flagged</div>
-    <table><thead><tr><th>Risk</th><th>Item</th><th>Estimator Had</th><th>Plan Shows</th><th>Notes</th></tr></thead>
-    <tbody>${highRiskRows}</tbody></table>
-  </div>` : ''}
-  ${recheckRows ? `<div class="section">
-    <div class="section-head">Quantity Items to Recheck — ${(res.quantity_items_to_recheck || []).length} flagged</div>
-    <table><thead><tr><th>Status</th><th>Item</th><th>Estimator Had</th><th>Plan Shows</th><th>Notes</th></tr></thead>
-    <tbody>${recheckRows}</tbody></table>
-  </div>` : ''}
-  ${scopeRows ? `<div class="section">
-    <div class="section-head">Scope Gaps — ${(res.scope_gaps || []).filter(s => s.status === 'MISSING').length} missing</div>
-    <div class="scope-grid">${scopeRows}</div>
-  </div>` : ''}
-  ${conflictRows ? `<div class="section">
-    <div class="section-head">Geotech & Plan Conflicts</div>
-    ${conflictRows}
-  </div>` : ''}
-  ${(questionRows || assumptionRows) ? `<div class="two-col">
-    ${questionRows ? `<div class="section"><div class="section-head">Clarification Questions</div>${questionRows}</div>` : ''}
-    ${assumptionRows ? `<div class="section"><div class="section-head">Assumptions Needing Approval</div>${assumptionRows}</div>` : ''}
-  </div>` : ''}
-  ${bidNotes ? `<div class="section">
-    <div class="section-head">Recommended Bid Notes & Exclusions</div>
-    <ul class="bid-notes">${bidNotes}</ul>
-  </div>` : ''}
-  <div class="report-footer">
-    <span>Generated by 6 Signal Takeoff Copilot</span>
-    <span>QA Bid Risk Report — AI-generated. Verify all flags before submitting bid.</span>
-    <span>${date}</span>
-  </div>
-</div>
-</body>
-</html>`
-
-    const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const win = window.open(url, '_blank', 'width=1100,height=900')
-    win.onload = () => { URL.revokeObjectURL(url); win.focus(); win.print() }
+    printReport(buildQAReportHTML(res, exportMeta()))
   }
 
   // ── Sheet triage helpers ─────────────────────────────────────
-  const TRIAGE_ANALYSIS_TYPES = new Set(['utility_plan', 'plan_profile', 'storm', 'sanitary', 'water', 'details'])
+  const TRIAGE_ANALYSIS_TYPES = new Set(['utility_plan', 'plan_profile', 'storm', 'sanitary', 'water', 'details', 'unclassified'])
 
   const formatClassification = (cls) => {
     const labels = {
@@ -1563,6 +1360,7 @@ INSTRUCTIONS:
       storm: 'Storm', sanitary: 'Sanitary', water: 'Water',
       details: 'Details', erosion_control: 'Erosion Ctrl',
       landscape: 'Landscape', electrical: 'Electrical', other: 'Other',
+      unclassified: 'Unclassified',
     }
     return labels[cls] || cls || 'Unknown'
   }
@@ -1635,9 +1433,45 @@ INSTRUCTIONS:
     ['analysis_pass_5', 'Engineer table check', 'Parses engineer quantity tables and builds a variance comparison'],
   ]
 
+  // Re-runs a failed server-side pipeline job — triage errors re-fire
+  // confirm-upload; analysis errors start a fresh analysis run.
+  const retryPipeline = async (idx) => {
+    const img = images[idx]
+    if (!img?.project_id) return
+    setError(null)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` }
+      let kind = 'plan_processing'
+      if (img.job_id) {
+        const { data: jobRow } = await supabase.from('processing_jobs').select('kind').eq('id', img.job_id).maybeSingle()
+        kind = jobRow?.kind || kind
+      }
+      if (kind === 'analysis') {
+        const res = await fetch('/api/start-analysis', { method: 'POST', headers, body: JSON.stringify({ project_id: img.project_id }) })
+        if (!res.ok) throw new Error((await res.text()).slice(0, 160))
+        const { job_id } = await res.json()
+        setImages(prev => prev.map((im, i) => i === idx && im ? { ...im, job_id, jobStage: 'analysis_queued', jobProgress: 0, jobError: null, jobDetail: 'Queued for analysis' } : im))
+      } else {
+        let sheetId = img.sheet_id
+        if (!sheetId) {
+          const { data: sheet } = await supabase.from('sheets').select('id').eq('project_id', img.project_id).eq('page_number', 1).maybeSingle()
+          sheetId = sheet?.id
+        }
+        if (!sheetId || !img.job_id) throw new Error('Could not find the uploaded plan to retry — re-upload the PDF')
+        const res = await fetch('/api/confirm-upload', { method: 'POST', headers, body: JSON.stringify({ job_id: img.job_id, sheet_id: sheetId, project_id: img.project_id }) })
+        if (!res.ok) throw new Error((await res.text()).slice(0, 160))
+        setImages(prev => prev.map((im, i) => i === idx && im ? { ...im, jobStage: 'uploaded', jobProgress: 10, jobError: null } : im))
+      }
+    } catch (err) {
+      setError(`Retry failed: ${err.message}`)
+    }
+  }
+
   const result = results[activeImage]
   const isQAResult = !!(result && result.executive_risk_summary)
   const analyzedCount = Object.keys(results).length
+  const sheetCount = images.filter(Boolean).length
 
   const confidenceColor = (level) => {
     if (level === 'HIGH') return 'badge-high'
@@ -1692,84 +1526,45 @@ INSTRUCTIONS:
         )
       })()}
 
-      {/* ONBOARDING MODAL */}
-      {showOnboarding && (
-        <div className="modal-overlay">
-          <div className="modal card onboarding-modal" onClick={e => e.stopPropagation()}>
-            <div className="onboarding-header">
-              <div className="onboarding-logo">
-                <div style={{
-                  width: 44, height: 44, background: 'var(--titan-red)', color: 'var(--titan-white)',
-                  fontFamily: 'var(--font-display)', fontSize: '1.6rem',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  clipPath: 'polygon(0 0, 100% 0, 100% 85%, 85% 100%, 0 100%)'
-                }}>T</div>
-              </div>
-              <h3>Welcome to Takeoff Copilot</h3>
-              <p className="text-dim" style={{ fontSize: '0.82rem', marginTop: 6, lineHeight: 1.6 }}>
-                AI-powered quantity takeoffs from construction plan sheets. Upload a PDF or image, get a structured takeoff in under 60 seconds.
-              </p>
-            </div>
+      {/* ONBOARDING SEQUENCE */}
+      <OnboardingFlow
+        open={showOnboarding}
+        initialProfile={{ full_name: onboardName, company: onboardCompany, phone: onboardPhone }}
+        onComplete={(profile) => {
+          setOnboardName(profile.full_name || '')
+          setOnboardCompany(profile.company || '')
+          setOnboardPhone(profile.phone || '')
+          finishOnboarding(profile)
+        }}
+        onSkip={() => finishOnboarding(null)}
+      />
 
-            <div className="onboarding-steps">
-              <div className="onboarding-step">
-                <span className="onboarding-step-num">1</span>
-                <div>
-                  <div className="onboarding-step-title">Upload a plan sheet</div>
-                  <div className="onboarding-step-desc">PDF or image. Clean single-story pad sites with labeled profiles work best (Grade A = 90–100% accuracy).</div>
-                </div>
-              </div>
-              <div className="onboarding-step">
-                <span className="onboarding-step-num">2</span>
-                <div>
-                  <div className="onboarding-step-title">Review the Risk Flags</div>
-                  <div className="onboarding-step-desc">Every scan includes geotech warnings, commonly missed scope, and AI-inferred items to verify before pricing.</div>
-                </div>
-              </div>
-            </div>
+      {/* REFERENCE BANK (help slide-over) */}
+      <ReferenceBank open={referenceOpen} onClose={() => setReferenceOpen(false)} />
 
-            <div className="onboarding-contact-section">
-              <div className="onboarding-section-label titan-label" style={{ marginBottom: 12, display: 'block' }}>
-                Your Contact Information
-              </div>
-              <div className="onboarding-contact-row">
-                <div className="onboarding-contact-field">
-                  <label className="titan-label" style={{ marginBottom: 5, display: 'block', fontSize: '0.6rem' }}>Full Name</label>
-                  <input
-                    type="text"
-                    className="input"
-                    placeholder="John Smith"
-                    value={onboardName}
-                    onChange={e => setOnboardName(e.target.value)}
-                  />
-                </div>
-                <div className="onboarding-contact-field">
-                  <label className="titan-label" style={{ marginBottom: 5, display: 'block', fontSize: '0.6rem' }}>Company</label>
-                  <input
-                    type="text"
-                    className="input"
-                    placeholder="Smith Utility Contractors"
-                    value={onboardCompany}
-                    onChange={e => setOnboardCompany(e.target.value)}
-                  />
-                </div>
-              </div>
-              <div style={{ marginTop: 8 }}>
-                <label className="titan-label" style={{ marginBottom: 5, display: 'block', fontSize: '0.6rem' }}>Phone Number</label>
-                <input
-                  type="tel"
-                  className="input"
-                  placeholder="(555) 000-0000"
-                  value={onboardPhone}
-                  onChange={e => setOnboardPhone(e.target.value)}
-                />
-              </div>
+      {/* AI-HAS-QUESTIONS POPUP — surfaces pipeline clarifications loudly */}
+      {clarifyPrompt && (
+        <div className="modal-overlay" onClick={() => setClarifyPrompt(null)}>
+          <div className="modal card" style={{ maxWidth: 460, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+            <div style={{
+              width: 48, height: 48, margin: '0 auto 14px', borderRadius: '50%',
+              background: 'rgba(232,55,44,0.12)', border: '1px solid var(--titan-red)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--titan-red)',
+            }}>
+              <HelpCircle size={24} />
             </div>
-
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 20 }}>
-              <button className="btn btn-primary" onClick={dismissOnboarding}>
-                Get Started
-              </button>
+            <h3 style={{ marginBottom: 8 }}>The AI has {clarifyPrompt.count} question{clarifyPrompt.count === 1 ? '' : 's'}</h3>
+            <p className="text-dim" style={{ fontSize: '0.85rem', lineHeight: 1.6, marginBottom: 18 }}>
+              Your takeoff is ready, but a few things couldn't be pinned down from the plans —
+              depths, mismatched lengths, or low-confidence quantities. Answering them
+              tightens the takeoff before you price it.
+            </p>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+              <button className="btn btn-secondary" onClick={() => setClarifyPrompt(null)}>Later</button>
+              <button
+                className="btn btn-primary"
+                onClick={() => { setClarifyPrompt(null); openResolvePanel() }}
+              >Answer Now</button>
             </div>
           </div>
         </div>
@@ -1781,14 +1576,14 @@ INSTRUCTIONS:
         <div className="sidebar-header">
           {/* Hidden on the empty state — the main-panel CTA is the single upload
               entry point there; this appears once a plan set is loaded. */}
-          {images.length > 0 && (
+          {sheetCount > 0 && (
             <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => fileInputRef.current?.click()}>
               <Upload size={15} /> Upload Sheets
             </button>
           )}
           <input ref={fileInputRef} type="file" accept="image/*,.png,.jpg,.jpeg,.webp,.pdf,application/pdf" multiple onChange={handleFileUpload} style={{ display: 'none' }} />
-          
-          {images.length > 1 && (
+
+          {sheetCount > 1 && (
             <button className="btn btn-secondary" style={{ width: '100%', marginTop: 6 }} onClick={analyzeAll} disabled={processingAll || loading}>
               {processingAll ? 'Processing...' : 'Analyze All'}
             </button>
@@ -1796,13 +1591,13 @@ INSTRUCTIONS:
         </div>
 
         <div className="sidebar-sheets">
-          {images.length === 0 && (
+          {sheetCount === 0 && (
             <div className="sidebar-empty">
               <FileText size={24} style={{ opacity: 0.3, marginBottom: 8 }} />
               <span>Upload PDF or image<br/>plan sheets to begin</span>
             </div>
           )}
-          {images.map((img, i) => (
+          {images.map((img, i) => img && (
             <div key={i} className={`sheet-item ${activeImage === i ? 'active' : ''}`} onClick={() => setActiveImage(i)}>
               <img src={img.preview} alt="" className="sheet-thumb" />
               <div className="sheet-info">
@@ -1815,7 +1610,14 @@ INSTRUCTIONS:
                       ✓ {sheetMaps[img.project_id]?.sheets?.length || 0} sheets classified
                     </span>
                   ) : img.jobStage === 'error' ? (
-                    <span className="text-red" title={img.jobError}>⚠ Processing error</span>
+                    <span className="text-red" title={img.jobError}>
+                      ⚠ {(img.jobError || 'Processing error').slice(0, 60)}
+                      <button
+                        className="btn btn-ghost"
+                        style={{ fontSize: '0.62rem', padding: '1px 6px', marginLeft: 6 }}
+                        onClick={(e) => { e.stopPropagation(); retryPipeline(i) }}
+                      >Retry</button>
+                    </span>
                   ) : img.jobStage === 'analysis_queued' || img.jobStage?.startsWith('analysis_pass') ? (
                     <span className="text-dim" title={img.jobDetail}>
                       {img.jobStage === 'analysis_queued' ? 'Analysis queued' : `Pass ${img.jobStage.slice(-1)}/5 — ${img.jobProgress || 0}%`}
@@ -1835,7 +1637,10 @@ INSTRUCTIONS:
                   ) : 'Not analyzed'}
                 </div>
               </div>
-              <button className="sheet-remove" onClick={(e) => { e.stopPropagation(); removeImage(i) }}>
+              <button className="sheet-remove" title="Rename project" onClick={(e) => { e.stopPropagation(); renameProject(i) }}>
+                <Pencil size={12} />
+              </button>
+              <button className="sheet-remove" title="Delete project" onClick={(e) => { e.stopPropagation(); removeImage(i) }}>
                 <X size={14} />
               </button>
             </div>
@@ -2086,9 +1891,17 @@ INSTRUCTIONS:
           >
             QA Mode
           </button>
+          <button
+            className="btn btn-ghost"
+            style={{ marginLeft: 'auto', fontSize: '0.75rem' }}
+            onClick={() => setReferenceOpen(true)}
+            title="Reference Bank — how everything works"
+          >
+            <BookOpen size={14} /> Reference
+          </button>
         </div>
 
-        {images.length === 0 ? (
+        {sheetCount === 0 ? (
           <div className="empty-state">
             <div className="empty-icon">
               <Upload size={40} strokeWidth={1} />
@@ -2106,14 +1919,14 @@ INSTRUCTIONS:
             {/* SHEET HEADER */}
             <div className="sheet-header">
               <div className="sheet-header-info">
-                <img src={images[activeImage]?.preview} alt="" className="sheet-header-thumb" onClick={() => window.open(images[activeImage]?.preview, '_blank')} />
+                <img src={images[activeImage]?.preview} alt="" className="sheet-header-thumb" onClick={() => { const u = images[activeImage]?.preview; if (u) window.open(u, '_blank') }} />
                 <div>
                   <div className="sheet-header-name">{images[activeImage]?.name}</div>
                   <div className="sheet-header-meta">
                     Sheet {activeImage + 1} of {images.length}
                     {result && (isQAResult
                       ? ` // QA Bid Risk Report // ${result.high_risk_misses?.length || 0} risk flags`
-                      : ` // ${result.items.length} items // ${result.summary?.high_confidence_count || 0} high confidence`)}
+                      : ` // ${result.items?.length || 0} items // ${result.summary?.high_confidence_count || 0} high confidence`)}
                   </div>
                 </div>
               </div>
@@ -2160,10 +1973,18 @@ INSTRUCTIONS:
                         <button className="btn btn-secondary" onClick={() => exportCSV(false)}>
                           <Download size={14} /> CSV
                         </button>
+                        <button className="btn btn-secondary" onClick={exportExcel}>
+                          <Download size={14} /> Excel
+                        </button>
                         <button className="btn btn-primary" onClick={exportPDF}>
                           <FileText size={14} /> PDF Report
                         </button>
                       </>
+                    )}
+                    {isQAResult && (
+                      <button className="btn btn-secondary" onClick={() => exportQACSV(result, exportMeta())}>
+                        <Download size={14} /> CSV
+                      </button>
                     )}
                     {activeJobId && (
                       feedbackDone[activeJobId]
@@ -2417,20 +2238,73 @@ INSTRUCTIONS:
                         ))}
                     </div>
                   )}
+                  {(result.quality?.failed_tiles?.length > 0 || result.quality?.merge_degraded || result.quality?.small_diameter_dedupe_degraded) && (
+                    <div style={{
+                      display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 14px',
+                      border: '1px solid var(--titan-red)', background: 'rgba(232,55,44,0.08)',
+                      borderRadius: 3, margin: '10px 0', fontSize: '0.8rem', lineHeight: 1.5,
+                    }}>
+                      <ShieldAlert size={16} style={{ color: 'var(--titan-red)', flexShrink: 0, marginTop: 1 }} />
+                      <div>
+                        {result.quality.failed_tiles?.length > 0 && (
+                          <div><strong>Coverage gap:</strong> {result.quality.failed_tiles.length} sheet area{result.quality.failed_tiles.length === 1 ? '' : 's'} could not be analyzed after retries ({result.quality.failed_tiles.slice(0, 4).join('; ')}{result.quality.failed_tiles.length > 4 ? '; …' : ''}). Quantities there may be missing — verify manually or re-run.</div>
+                        )}
+                        {result.quality.merge_degraded && (
+                          <div><strong>Dedupe degraded:</strong> automated overlap merging fell back to a conservative pass — watch for duplicate line items.</div>
+                        )}
+                        {result.quality.small_diameter_dedupe_degraded && (
+                          <div><strong>Small-line dedupe degraded:</strong> ≤2" sweep items are marked LOW confidence — check them against the main takeoff.</div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   <div className="table-wrap">
                     <table className="titan-table">
                       <thead>
                         <tr>
                           {(result.depth_summary
-                            ? ['#', 'Cat', 'Mat', 'Description', 'Unit', 'Qty', 'Conf', 'Depth Avg', 'Depth Max', 'Notes']
-                            : ['#', 'Cat', 'Description', 'Unit', 'Qty', 'Conf', 'Notes']
-                          ).map(h => (
-                            <th key={h}>{h}</th>
+                            ? ['#', 'Cat', 'Mat', 'Description', 'Unit', 'Qty', 'Conf', 'Depth Avg', 'Depth Max', 'Notes', '']
+                            : ['#', 'Cat', 'Description', 'Unit', 'Qty', 'Conf', 'Notes', '']
+                          ).map((h, hi) => (
+                            <th key={hi}>{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
-                        {result.items.map((item, i) => (
+                        {(result.items || []).map((item, i) => (
+                          editingItem === item.item_no ? (
+                            <tr key={i} style={{ background: 'rgba(232,55,44,0.06)' }}>
+                              <td className="text-muted">{item.item_no}</td>
+                              <td><span className="cat-badge">{categoryIcon(item.category)} {item.category}</span></td>
+                              {result.depth_summary && <td className="mat-cell" />}
+                              <td style={{ maxWidth: 320 }}>
+                                <input className="input" style={{ width: '100%', fontSize: '0.8rem' }}
+                                  value={editDraft.description}
+                                  onChange={e => setEditDraft(d => ({ ...d, description: e.target.value }))}
+                                  onKeyDown={e => { if (e.key === 'Enter') saveItemEdit(item.item_no); if (e.key === 'Escape') setEditingItem(null) }}
+                                  autoFocus />
+                              </td>
+                              <td>
+                                <input className="input text-mono" style={{ width: 56, fontSize: '0.8rem' }}
+                                  value={editDraft.unit}
+                                  onChange={e => setEditDraft(d => ({ ...d, unit: e.target.value }))}
+                                  onKeyDown={e => { if (e.key === 'Enter') saveItemEdit(item.item_no); if (e.key === 'Escape') setEditingItem(null) }} />
+                              </td>
+                              <td>
+                                <input className="input text-mono" type="number" min="0" style={{ width: 90, fontSize: '0.85rem', fontWeight: 600 }}
+                                  value={editDraft.quantity}
+                                  onChange={e => setEditDraft(d => ({ ...d, quantity: e.target.value }))}
+                                  onKeyDown={e => { if (e.key === 'Enter') saveItemEdit(item.item_no); if (e.key === 'Escape') setEditingItem(null) }} />
+                              </td>
+                              <td><span className={`badge ${confidenceColor(item.confidence)}`}>{item.confidence}</span></td>
+                              {result.depth_summary && <td colSpan={2} className="text-dim" style={{ fontSize: '0.72rem' }}>—</td>}
+                              <td className="text-dim" style={{ fontSize: '0.72rem' }}>Enter to save · Esc to cancel</td>
+                              <td style={{ whiteSpace: 'nowrap' }}>
+                                <button className="btn btn-primary" style={{ padding: '3px 8px', fontSize: '0.7rem' }} onClick={() => saveItemEdit(item.item_no)}><Check size={12} /></button>
+                                <button className="btn btn-ghost" style={{ padding: '3px 8px', fontSize: '0.7rem', marginLeft: 4 }} onClick={() => setEditingItem(null)}><X size={12} /></button>
+                              </td>
+                            </tr>
+                          ) : (
                           <tr key={i}>
                             <td className="text-muted">{item.item_no}</td>
                             <td><span className="cat-badge">{categoryIcon(item.category)} {item.category}</span></td>
@@ -2447,7 +2321,7 @@ INSTRUCTIONS:
                                 ) : <span className="mat-thumb-empty">—</span>}
                               </td>
                             )}
-                            <td style={{ maxWidth: 320 }}>{item.description}</td>
+                            <td style={{ maxWidth: 320 }}>{item.edited && <span title="Edited by estimator" style={{ color: 'var(--titan-red)', marginRight: 4 }}>✎</span>}{item.description}</td>
                             <td className="text-mono text-dim">{item.unit}</td>
                             <td className="text-mono" style={{ fontWeight: 600, color: 'var(--titan-white)', fontSize: '0.9rem' }}>{item.quantity}</td>
                             <td><span className={`badge ${confidenceColor(item.confidence)}`}>{item.confidence}</span></td>
@@ -2462,7 +2336,14 @@ INSTRUCTIONS:
                               )
                             )}
                             <td className="text-dim" style={{ maxWidth: 240, fontSize: '0.75rem', lineHeight: 1.4 }}>{item.notes}</td>
+                            <td>
+                              <button className="btn btn-ghost" style={{ padding: '2px 6px' }} title="Edit this line item"
+                                onClick={() => startItemEdit(item)}>
+                                <Pencil size={12} />
+                              </button>
+                            </td>
                           </tr>
+                          )
                         ))}
                       </tbody>
                     </table>
@@ -2596,7 +2477,7 @@ INSTRUCTIONS:
                   {/* ── RISK FLAGS ── */}
                   {(() => {
                     const rm = result.risk_and_misses
-                    const lowItems = result.items.filter(it => it.confidence === 'LOW')
+                    const lowItems = (result.items || []).filter(it => it.confidence === 'LOW')
 
                     // Build geotech flags from AI output + loaded report
                     const geotechFlags = []
@@ -2631,7 +2512,7 @@ INSTRUCTIONS:
                     const aiScopeGaps = rm?.scope_gaps || []
                     ALWAYS_CHECK.forEach(({ key, label, hint }) => {
                       const aiMatch = aiScopeGaps.find(s => s.item?.toLowerCase().includes(key.replace('_', ' ').split('/')[0]))
-                      const inScope = result.items.some(it =>
+                      const inScope = (result.items || []).some(it =>
                         (it.description + ' ' + (it.notes || '')).toLowerCase().includes(key.replace('_', ' '))
                       )
                       if (aiMatch?.status === 'OK' || inScope) {
@@ -2967,7 +2848,7 @@ INSTRUCTIONS:
                       <div className="compare-panel">
                         <div className="compare-panel-header" style={{ color: 'var(--titan-red)' }}>AI Output</div>
                         <div className="compare-panel-body text-mono">
-                          {result.items.map((item, i) => (
+                          {(result.items || []).map((item, i) => (
                             <div key={i}>[{item.confidence[0]}] {item.description}, {item.unit}, {item.quantity}</div>
                           ))}
                         </div>
@@ -2986,7 +2867,7 @@ INSTRUCTIONS:
                 <div className="summary-content animate-fade">
                   <div className="stats-grid">
                     {[
-                      ['Total Items', result.summary?.total_items || result.items.length, ''],
+                      ['Total Items', result.summary?.total_items || result.items?.length || 0, ''],
                       ['High Confidence', result.summary?.high_confidence_count || 0, 'high'],
                       ['Medium Confidence', result.summary?.medium_confidence_count || 0, 'medium'],
                       ['Low Confidence', result.summary?.low_confidence_count || 0, 'low']
@@ -3005,7 +2886,7 @@ INSTRUCTIONS:
                   )}
                   <div className="card" style={{ marginTop: 16 }}>
                     <h4 style={{ marginBottom: 12 }}>Items by Category</h4>
-                    {Object.entries(result.items.reduce((acc, item) => { acc[item.category] = (acc[item.category] || 0) + 1; return acc }, {}))
+                    {Object.entries((result.items || []).reduce((acc, item) => { acc[item.category] = (acc[item.category] || 0) + 1; return acc }, {}))
                       .sort((a, b) => b[1] - a[1])
                       .map(([cat, count]) => (
                         <div key={cat} className="category-row">
@@ -3116,17 +2997,29 @@ INSTRUCTIONS:
           </>
         )}
 
-        {/* PROACTIVE CHAT PANEL — QA Mode only */}
-        {isQAResult && (
+        {/* ASSISTANT CHAT PANEL — any result. QA results run the bid-clarification
+            persona; takeoff results run the project-aware assistant that can
+            answer questions, ask its own, and edit the takeoff on request. */}
+        {result && (
           <div className={`chat-panel ${chatOpen ? 'chat-open' : 'chat-collapsed'}`}>
             <button
               className="chat-panel-header"
-              onClick={() => setChatOpen(o => !o)}
-              aria-label={chatOpen ? 'Collapse chat' : 'Open bid clarification chat'}
+              onClick={() => {
+                if (chatOpen) { setChatOpen(false); return }
+                if (!chatMessages.length && !isQAResult) {
+                  const open = openClarifications(result)
+                  setChatMessages([{
+                    role: 'assistant',
+                    text: `I have the full takeoff loaded — ${result.items?.length || 0} line items${open.length ? `, ${open.length} still open` : ''}. Ask me why a quantity is what it is, what to verify before pricing, or tell me to change something ("set item 12 to 480 LF") and I'll update the takeoff.`,
+                  }])
+                }
+                setChatOpen(true)
+              }}
+              aria-label={chatOpen ? 'Collapse chat' : 'Open assistant chat'}
             >
               <div className="chat-header-left">
                 <MessageCircle size={14} />
-                <span className="chat-header-title">Bid Clarification</span>
+                <span className="chat-header-title">{isQAResult ? 'Bid Clarification' : 'Ask the Copilot'}</span>
                 {!chatOpen && chatMessages.length > 0 && (
                   <span className="chat-unread-badge">{chatMessages.filter(m => m.role === 'assistant').length}</span>
                 )}
@@ -3166,7 +3059,7 @@ INSTRUCTIONS:
                     value={chatInput}
                     onChange={e => setChatInput(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage() } }}
-                    placeholder="Answer or ask a follow-up..."
+                    placeholder={isQAResult ? 'Answer or ask a follow-up...' : 'Ask about the takeoff, or tell me what to change…'}
                     disabled={chatLoading}
                     autoFocus
                   />

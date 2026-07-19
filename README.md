@@ -1,103 +1,60 @@
 # Takeoff Copilot // Titan AI
 
-AI-powered plan analysis for utility contractors. Upload construction plan sheets, get structured takeoffs in minutes.
+AI-powered plan analysis for wet-utility contractors. Upload construction plan sets, get a structured, depth-aware takeoff with an audit trail.
 
 ## Stack
 
-- **React 18** + **Vite** — Fast dev and build
-- **React Router** — Client-side routing
-- **Supabase** — Authentication (email/password)
-- **pdf.js** — Client-side PDF to image conversion
-- **Claude API** (Anthropic) — Vision-based plan analysis
-- **Netlify** — Deploy target
+- **React 18** + **Vite** — SPA frontend
+- **Supabase** — Auth (email/password + Google/Microsoft/Apple OAuth), Postgres, Storage, Realtime
+- **Netlify** — Edge functions (`/api/*` auth-verifying proxies) + background functions (heavy processing)
+- **MuPDF (WASM)** — server-side rasterization + embedded text-layer extraction
+- **Claude API** (Anthropic) — tiled multi-pass vision analysis via Message Batches
 
-## Quick Start
+## Security model
+
+**The Anthropic API key lives server-side only** (`ANTHROPIC_API_KEY` in Netlify env). The browser only ever holds the user's Supabase JWT; edge functions verify it before proxying. Background functions additionally require the `x-fn-secret` shared secret (`WEBHOOK_SECRET`) — they run with the service-role key and must never be publicly invokable. Per-user daily quotas are enforced in `analyze.js` (AI calls) and `start-analysis.js` (analysis runs) via the `usage_events` ledger.
+
+## How an analysis runs
+
+1. Client gets a signed URL (`/api/get-upload-url`) and PUTs the PDF straight to Supabase Storage.
+2. `/api/confirm-upload` verifies ownership and fires `process-plan-background`: Haiku triage classifies every page, pages rasterize at 108 DPI, thumbnails land in Storage.
+3. The user picks sheets on the sheet map → `/api/start-analysis` → `analyze-project-background` runs 5 passes over 1568px tiles (15% overlap) through Message Batches: plan quantities, profiles, merge+reconcile, small-diameter sweep, engineer-table variance. The PDF text layer is attached per-tile as ground truth. Depth engine derives LF-by-depth buckets, OSHA trench-safety LF, and geotech flags.
+4. Results land in `line_items` + `analysis_results`; progress streams over Realtime with a polling fallback. Unresolved items surface as clarification questions the estimator answers in-app.
+
+## Environment variables (Netlify → Site settings)
+
+| Variable | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | All Claude calls (server-side only) |
+| `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | Supabase project + public key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Background functions + usage ledger (secret) |
+| `WEBHOOK_SECRET` | Shared secret: Supabase webhook → notify-signup, and edge → background function auth |
+| `RESEND_API_KEY` | Signup notification emails |
+| `QUOTA_AI_CALLS_PER_DAY` (opt) | Per-user daily single-call/chat cap (default 300) |
+| `QUOTA_ANALYSES_PER_DAY` (opt) | Per-user daily pipeline-run cap (default 10) |
+
+## Local development
 
 ```bash
-# Install dependencies
 npm install
-
-# Start dev server
-npm run dev
-
-# Build for production
+npm run dev        # UI only — upload/analysis needs the deployed backend
 npm run build
 ```
 
-## Deploy to Netlify
+The database schema is fully reproducible from `supabase/migrations/` (001–004). Apply them in order to a fresh Supabase project, create the private `plan-uploads` bucket per migration 001, enable Realtime on `processing_jobs`, and configure OAuth providers + the signup webhook (with `x-webhook-secret`) in the Supabase dashboard.
 
-1. Push to GitHub
-2. Connect repo in Netlify
-3. Build command: `npm run build`
-4. Publish directory: `dist`
-5. The `netlify.toml` handles SPA routing automatically
-6. **Add environment variables** in Netlify → Site Settings → Environment Variables:
-   - `VITE_SUPABASE_URL` — your Supabase project URL
-   - `VITE_SUPABASE_ANON_KEY` — your Supabase anon/public key
-
-## Environment Variables
-
-Copy `.env.example` to `.env` and fill in your Supabase credentials:
-
-```bash
-cp .env.example .env
-```
+## Project structure
 
 ```
-VITE_SUPABASE_URL=https://your-project-ref.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-key-here
+netlify/edge-functions/   # /api/* — JWT-verified proxies (analyze, uploads, start-analysis, delete-project)
+netlify/functions/        # background workers (triage, multi-pass analysis), notify-signup, parse-takeoff
+server/prompts/           # takeoff-brain.md — the analysis system prompt (edit + redeploy, no code changes)
+src/pages/                # Landing, Login, Reset, Dashboard, Admin
+src/components/           # Navbar, OnboardingFlow, ReferenceBank, RiskPill
+src/utils/                # prompts, exporters (CSV/XLSX/print), parseTakeoff, supabase, AuthContext
+supabase/migrations/      # 001 core, 002 schema sync, 003 hardening, 004 locks+quotas
 ```
 
-Get these from [app.supabase.com](https://app.supabase.com) → Project Settings → API.
+## Design system
 
-## Anthropic API Key
-
-The app requires an Anthropic API key for plan analysis. Users enter their key on first login via the onboarding modal — it's stored in localStorage and sent directly to the Anthropic API. No backend required for the analysis engine. Get a key at [console.anthropic.com](https://console.anthropic.com).
-
-## Project Structure
-
-```
-takeoff-copilot/
-├── public/
-│   └── favicon.svg
-├── src/
-│   ├── components/
-│   │   ├── Navbar.jsx
-│   │   └── Navbar.css
-│   ├── pages/
-│   │   ├── LandingPage.jsx / .css
-│   │   ├── Dashboard.jsx / .css
-│   │   └── LoginPage.jsx / .css
-│   ├── styles/
-│   │   └── global.css          # Titan AI Design System
-│   ├── utils/
-│   │   └── prompts.js          # AI system prompt
-│   ├── App.jsx
-│   └── main.jsx
-├── index.html
-├── vite.config.js
-├── netlify.toml
-├── package.json
-└── README.md
-```
-
-## Design System
-
-**Titan AI** — Construction tech aesthetic.
-
-- **Colors:** Black (#0A0A0A), Off-white (#F5F5F0), Titan Red (#E8372C)
-- **Fonts:** Bebas Neue (display), Outfit (body), JetBrains Mono (data/mono)
-- **Motifs:** "//" separators, angled ticker-tape accents, military precision
-
-## Roadmap
-
-- [ ] Authentication (Supabase)
-- [ ] Project management (save/organize takeoffs by job)
-- [ ] Multi-sheet aggregate takeoff
-- [ ] Supplier RFQ automation
-- [ ] Historical accuracy tracking
-- [ ] Geotechnical report analysis integration
-
----
-
-Built by **Titan AI** — Construction AI Operations
+**Titan AI** — construction-tech aesthetic. Black `#0A0A0A`, off-white `#F5F5F0`, Titan Red `#E8372C`. Bebas Neue (display), Outfit (body), JetBrains Mono (data). "//" separators.
