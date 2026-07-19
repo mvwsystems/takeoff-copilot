@@ -58,8 +58,11 @@ export default async (request) => {
 
   if (body.action === 'register') {
     const { storage_path } = body
-    // RLS scope check: users may only register files in their own folder
-    if (!storage_path || !storage_path.startsWith(`${user.id}/`)) {
+    // Users may only register files under their own docs folder. Exact-match
+    // the path shape issued by "sign" — a prefix check alone would let
+    // "../<other-user>/…" segments through.
+    const DOC_PATH = new RegExp(`^${user.id}/docs/[A-Za-z0-9._-]+$`)
+    if (typeof storage_path !== 'string' || !DOC_PATH.test(storage_path)) {
       return new Response('Invalid storage_path', { status: 400 })
     }
 

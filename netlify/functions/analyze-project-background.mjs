@@ -18,8 +18,21 @@
 // ESM (.mjs): root package.json has "type":"module" and ships in the function
 // bundle, so CommonJS .js files die at load with "module is not defined".
 import { createClient } from '@supabase/supabase-js'
+import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
+
+// Background functions are publicly POST-able at /.netlify/functions/* — every
+// caller (edge functions, self-chaining) must present the shared secret or an
+// outsider can drive Anthropic spend and service-role DB writes.
+export function fnSecretOk(headers) {
+  const provided = headers?.['x-fn-secret'] || headers?.['X-Fn-Secret']
+  const expected = process.env.WEBHOOK_SECRET
+  if (!provided || !expected) return false
+  const a = Buffer.from(String(provided))
+  const b = Buffer.from(String(expected))
+  return a.length === b.length && crypto.timingSafeEqual(a, b)
+}
 
 // NOTE: do NOT use import.meta.url here. Netlify's esbuild bundles these .mjs
 // functions to CommonJS, where import.meta.url is undefined — fileURLToPath()
@@ -74,8 +87,13 @@ const CHAIN_AFTER_MS = 12 * 60 * 1000
 const MAX_CHAINS = 150            // hard stop — batches max out at 24h anyway
 const BATCH_POLL_MS = 15_000
 const BATCH_CHUNK = 60            // tiles per batch — keeps request bodies ~50MB
-const BLANK_PNG_BYTES = 15_000    // a 1568px tile that compresses under this is empty
+// A 1568px tile that compresses under this is treated as empty. Kept low on
+// purpose: a lone 2" service line on an otherwise-empty tile is exactly what
+// Pass 4 exists to find, so err toward sending borderline tiles to the model.
+const BLANK_PNG_BYTES = 8_000
 const MAX_RESUBMITS = 2
+const MAX_POLL_FAILS = 5          // consecutive getBatch failures before a batch ID is abandoned
+const LEASE_MS = 14 * 60 * 1000   // job lock — one invocation past Netlify's 15-min kill
 
 // $/MTok at Message Batches pricing (50% of standard). Assembly Haiku calls
 // (merge/dedupe/materials) run synchronously at full price but cost pennies.
@@ -92,7 +110,7 @@ const tierOf = (modelId) => (modelId === HAIKU ? 'haiku' : modelId === SONNET ? 
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
-const PASS1_TYPES = new Set(['utility_plan', 'storm', 'sanitary', 'water', 'plan_profile', 'grading', 'paving', 'demo', 'erosion_control', 'landscape', 'electrical', 'other'])
+const PASS1_TYPES = new Set(['utility_plan', 'storm', 'sanitary', 'water', 'plan_profile', 'grading', 'paving', 'demo', 'erosion_control', 'landscape', 'electrical', 'other', 'unclassified'])
 const DEPTH_BUCKETS = [['0-6', 0, 6], ['6-8', 6, 8], ['8-10', 8, 10], ['10+', 10, Infinity]]
 const TRENCH_SAFETY_FT = 5  // OSHA 1926 Subpart P trigger
 const DEEP_EXCAVATION_FT = 10
@@ -172,8 +190,12 @@ async function updateJob(jobId, fields) {
   await supabase.from('processing_jobs').update(fields).eq('id', jobId)
 }
 
-async function callClaude({ model, system, content, maxTokens = 8192 }) {
-  for (let attempt = 1; attempt <= 3; attempt++) {
+// Extraction runs at temperature 0 — quantity reads should be deterministic,
+// not sampled. withMeta:true returns { text, stop_reason } so callers can
+// detect max_tokens truncation instead of trusting a clipped JSON tail.
+async function callClaude({ model, system, content, maxTokens = 8192, withMeta = false }) {
+  const MAX_ATTEMPTS = 5
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -184,18 +206,20 @@ async function callClaude({ model, system, content, maxTokens = 8192 }) {
       body: JSON.stringify({
         model,
         max_tokens: maxTokens,
+        temperature: 0,
         ...(system ? { system } : {}),
         messages: [{ role: 'user', content }],
       }),
     })
     if (res.ok) {
       const data = await res.json()
-      return data.content?.map(b => (b.type === 'text' ? b.text : '')).join('') || ''
+      const text = data.content?.map(b => (b.type === 'text' ? b.text : '')).join('') || ''
+      return withMeta ? { text, stop_reason: data.stop_reason } : text
     }
     const errText = await res.text()
-    if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+    if ((res.status === 429 || res.status >= 500) && attempt < MAX_ATTEMPTS) {
       console.warn(`Claude ${res.status}, retry ${attempt}`)
-      await new Promise(r => setTimeout(r, attempt * 5000))
+      await new Promise(r => setTimeout(r, Math.min(attempt * attempt * 5000, 60_000)))
       continue
     }
     throw new Error(`Claude API ${res.status}: ${errText.slice(0, 200)}`)
@@ -220,6 +244,14 @@ function num(v) {
   return null
 }
 
+// A takeoff quantity can't be negative, and anything past a million of any
+// unit is a misread — treat both as "no quantity" so they get flagged, not priced.
+function qty(v) {
+  const n = num(v)
+  if (n == null || n < 0 || n > 1_000_000) return null
+  return n
+}
+
 function validateItems(raw, passName) {
   if (!Array.isArray(raw)) return []
   const out = []
@@ -227,18 +259,23 @@ function validateItems(raw, passName) {
     if (!it || typeof it.description !== 'string' || !it.description.trim()) {
       console.warn(`${passName}: dropped item without description`); continue
     }
+    const category = CATEGORIES.has(it.category) ? it.category : 'OTHER'
     out.push({
-      category: CATEGORIES.has(it.category) ? it.category : 'OTHER',
+      category,
       description: it.description.trim().slice(0, 500),
-      quantity: num(it.quantity),
-      unit: typeof it.unit === 'string' && it.unit.trim() ? it.unit.trim().toUpperCase().slice(0, 8) : 'EA',
+      quantity: qty(it.quantity),
+      // A missing unit on a pipe run is LF, not EA — defaulting pipe to EA
+      // silently turned footage into "each" counts.
+      unit: typeof it.unit === 'string' && it.unit.trim()
+        ? it.unit.trim().toUpperCase().slice(0, 8)
+        : (category === 'PIPE' ? 'LF' : 'EA'),
       diameter_in: num(it.diameter_in),
       material: typeof it.material === 'string' ? it.material.slice(0, 80) : null,
       location: typeof it.location === 'string' ? it.location.slice(0, 200) : '',
       confidence: CONFIDENCES.has(it.confidence) ? it.confidence : 'LOW',
       note: typeof it.note === 'string' ? it.note.slice(0, 1000) : '',
       continues_beyond_tile: it.continues_beyond_tile === true,
-      source_ids: Array.isArray(it.source_ids) ? it.source_ids.filter(n => typeof n === 'number') : [],
+      source_ids: Array.isArray(it.source_ids) ? it.source_ids.filter(n => Number.isInteger(n) && n >= 0) : [],
     })
   }
   return out
@@ -248,17 +285,24 @@ function validateRuns(raw, passName) {
   if (!Array.isArray(raw)) return []
   const out = []
   for (const r of raw) {
-    if (!r || typeof r.run_id !== 'string' || !r.run_id.trim()) {
-      console.warn(`${passName}: dropped run without run_id`); continue
+    if (!r) continue
+    // A run with structures/elevations but a blank run_id is still real data —
+    // synthesize an identity instead of dropping the depths on the floor.
+    let runId = typeof r.run_id === 'string' && r.run_id.trim() ? r.run_id.trim() : null
+    if (!runId && typeof r.from_structure === 'string' && typeof r.to_structure === 'string') {
+      runId = `${r.from_structure.trim()} to ${r.to_structure.trim()}`.trim()
+    }
+    if (!runId) {
+      console.warn(`${passName}: dropped run without run_id or structures`); continue
     }
     out.push({
-      run_id: r.run_id.trim().slice(0, 120),
+      run_id: runId.slice(0, 120),
       utility: ['sanitary', 'storm', 'water'].includes(r.utility) ? r.utility : 'other',
       from_structure: typeof r.from_structure === 'string' ? r.from_structure.slice(0, 60) : null,
       to_structure: typeof r.to_structure === 'string' ? r.to_structure.slice(0, 60) : null,
       station_start: typeof r.station_start === 'string' ? r.station_start.slice(0, 30) : null,
       station_end: typeof r.station_end === 'string' ? r.station_end.slice(0, 30) : null,
-      length_lf: num(r.length_lf),
+      length_lf: qty(r.length_lf),
       slope_pct: num(r.slope_pct),
       diameter_in: num(r.diameter_in),
       material: typeof r.material === 'string' ? r.material.slice(0, 80) : null,
@@ -284,9 +328,11 @@ function validateEngineerRows(raw) {
     }))
 }
 
-// Pass 5 tile validator: only keep rows when the model confirmed a table.
+// Pass 5 tile validator. Rows are kept whenever the model actually produced
+// them — requiring table_found === true threw away correctly-parsed tables
+// whenever the model omitted the boolean.
 function validateEngineerTile(parsed) {
-  if (!parsed || parsed.table_found !== true) return []
+  if (!parsed || parsed.table_found === false) return []
   return validateEngineerRows(parsed.rows)
 }
 
@@ -320,10 +366,13 @@ function renderTiles(mupdf, doc, pageIndex) {
 
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < cols; col++) {
-      const tx0 = col * stepX - (col > 0 ? ovX : 0)
-      const tx1 = (col + 1) * stepX + (col < cols - 1 ? ovX : 0)
-      const ty0 = row * stepY - (row > 0 ? ovY : 0)
-      const ty1 = (row + 1) * stepY + (row < rows - 1 ? ovY : 0)
+      // Offset by the page origin — CropBoxes don't always start at (0,0), and
+      // an unoffset grid both renders the wrong region and mismatches the
+      // text-layer coordinates (which are absolute page space).
+      const tx0 = x0 + col * stepX - (col > 0 ? ovX : 0)
+      const tx1 = x0 + (col + 1) * stepX + (col < cols - 1 ? ovX : 0)
+      const ty0 = y0 + row * stepY - (row > 0 ? ovY : 0)
+      const ty1 = y0 + (row + 1) * stepY + (row < rows - 1 ? ovY : 0)
       const scale = Math.min(1568 / Math.max(tx1 - tx0, ty1 - ty0), maxScale)
       const matrix = mupdf.Matrix.scale(scale, scale)
       const bbox = [Math.floor(tx0 * scale), Math.floor(ty0 * scale), Math.ceil(tx1 * scale), Math.ceil(ty1 * scale)]
@@ -508,6 +557,16 @@ async function ingestBatchResults(batch, passes, sheetsById, jobId, usage) {
 
       const textOut = (msg.content || []).map(b => (b.type === 'text' ? b.text : '')).join('')
       const parsed = parseJson(textOut)
+
+      // A max_tokens-truncated or unparseable "success" is a FAILED tile, not an
+      // empty one — the densest (most item-rich) tiles are exactly the ones that
+      // overflow. Leave the tile missing so the resubmit machinery retries it;
+      // after MAX_RESUBMITS it lands in failed-tile reporting, never silent zero.
+      if (parsed == null || msg.stop_reason === 'max_tokens') {
+        console.error(`batch result ${entry.custom_id}: unusable output (stop_reason=${msg.stop_reason}, parsed=${parsed != null})`)
+        continue
+      }
+
       const raw = Array.isArray(parsed) ? parsed : (pass.resultKey ? parsed?.[pass.resultKey] : parsed)
       valid = pass.validator(raw, pass.name).map(v => ({
         ...v,
@@ -531,26 +590,50 @@ async function ingestBatchResults(batch, passes, sheetsById, jobId, usage) {
   return rows.length
 }
 
-// Reads back every persisted tile result for a pass, flattened.
+// Paginated read of analysis_tiles. Supabase caps un-ranged selects at 1000
+// rows; a 40-sheet set produces more tiles than that, and a silent cap here
+// meant "missing" tiles that were endlessly re-billed and re-run.
+async function loadAllTiles(jobId, columns, passKey = null) {
+  const PAGE = 1000
+  const all = []
+  for (let from = 0; ; from += PAGE) {
+    let q = supabase.from('analysis_tiles').select(columns).eq('job_id', jobId)
+    if (passKey) q = q.eq('pass', passKey)
+    const { data, error } = await q.range(from, from + PAGE - 1)
+    if (error) throw new Error(`analysis_tiles read failed: ${error.message}`)
+    all.push(...(data || []))
+    if (!data || data.length < PAGE) break
+  }
+  return all
+}
+
+// Reads back every persisted tile result for a pass, flattened. Throws on
+// read failure — an empty array here must mean "no items", never "the query
+// failed", because assembly deletes and rewrites line_items from it.
 async function loadPassResults(jobId, passKey) {
-  const { data } = await supabase
-    .from('analysis_tiles').select('result_json').eq('job_id', jobId).eq('pass', passKey)
-  return (data || []).flatMap(r => Array.isArray(r.result_json) ? r.result_json : [])
+  const data = await loadAllTiles(jobId, 'result_json', passKey)
+  return data.flatMap(r => Array.isArray(r.result_json) ? r.result_json : [])
 }
 
 // Re-invokes this background function to continue a paused job (fire-and-forget;
-// background functions ack 202 immediately).
+// background functions ack 202 immediately). Returns false on failure so the
+// caller can mark the job errored instead of stranding it mid-"Batched analysis".
 async function reinvokeSelf(jobId, projectId) {
   const site = process.env.URL || process.env.DEPLOY_PRIME_URL
-  if (!site) { console.error('reinvokeSelf: no site URL env'); return }
+  if (!site) { console.error('reinvokeSelf: no site URL env'); return false }
   try {
-    await fetch(`${site}/.netlify/functions/analyze-project-background`, {
+    const res = await fetch(`${site}/.netlify/functions/analyze-project-background`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-fn-secret': process.env.WEBHOOK_SECRET || '',
+      },
       body: JSON.stringify({ job_id: jobId, project_id: projectId }),
     })
+    return res.ok || res.status === 202
   } catch (e) {
     console.error('reinvokeSelf failed:', e.message)
+    return false
   }
 }
 
@@ -558,16 +641,34 @@ async function reinvokeSelf(jobId, projectId) {
 function normKey(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, '') }
 
 function dedupeRuns(runs) {
-  const byKey = new Map()
-  for (const r of runs) {
-    const key = normKey(r.from_structure && r.to_structure ? `${r.from_structure}>${r.to_structure}` : r.run_id)
-    const prev = byKey.get(key)
-    if (!prev) { byKey.set(key, r); continue }
-    // keep the record with more populated fields
-    const score = x => [x.length_lf, x.slope_pct, x.diameter_in, x.material].filter(v => v != null).length + x.structures.length
-    if (score(r) > score(prev)) byKey.set(key, { ...r, note: prev.note || r.note })
+  // Every alias a run answers to: the direction-normalized structure pair
+  // (so "SSMH-1 to SSMH-2" and "SSMH-2 to SSMH-1" collide) plus the raw
+  // run_id (so a tile that only produced run_id still matches one that
+  // produced the structure pair).
+  const aliasesOf = (r) => {
+    const keys = new Set()
+    if (r.from_structure && r.to_structure) {
+      keys.add([normKey(r.from_structure), normKey(r.to_structure)].sort().join('>'))
+    }
+    if (r.run_id) {
+      keys.add(normKey(r.run_id))
+      const m = r.run_id.match(/^(.+?)\s+to\s+(.+)$/i)
+      if (m) keys.add([normKey(m[1]), normKey(m[2])].sort().join('>'))
+    }
+    keys.delete('')
+    return keys
   }
-  return [...byKey.values()]
+  const score = x => [x.length_lf, x.slope_pct, x.diameter_in, x.material].filter(v => v != null).length + x.structures.length
+
+  const out = []            // [{ run, aliases }]
+  for (const r of runs) {
+    const aliases = aliasesOf(r)
+    const hit = out.find(o => [...aliases].some(k => o.aliases.has(k)))
+    if (!hit) { out.push({ run: r, aliases }); continue }
+    aliases.forEach(k => hit.aliases.add(k))
+    if (score(r) > score(hit.run)) hit.run = { ...r, note: hit.run.note || r.note }
+  }
+  return out.map(o => o.run)
 }
 
 function structureDepth(s) {
@@ -577,7 +678,12 @@ function structureDepth(s) {
 }
 
 function depthStats(run) {
-  const depths = run.structures.map(structureDepth).filter(d => d != null && d >= 0 && d < 100)
+  const rawDepths = run.structures.map(structureDepth).filter(d => d != null)
+  const depths = rawDepths.filter(d => d >= 0 && d < 100)
+  // Track how many elevations were unusable (e.g. rim < invert misreads) —
+  // interpolation over the survivors assumes even spacing between the wrong
+  // structures, so the result must carry a "verify this" marker.
+  const dropped = rawDepths.length - depths.length
   if (depths.length === 0) return null
   const avg = depths.reduce((a, b) => a + b, 0) / depths.length
   const max = Math.max(...depths)
@@ -609,19 +715,20 @@ function depthStats(run) {
     for (const { depth, lf } of samples) {
       const b = DEPTH_BUCKETS.find(([, lo, hi]) => depth >= lo && depth < hi)
       if (b) buckets[b[0]] += lf
-      if (depth > TRENCH_SAFETY_FT) lfOver5 += lf
+      // OSHA 1926.652 requires protection at 5 ft OR MORE — inclusive.
+      if (depth >= TRENCH_SAFETY_FT) lfOver5 += lf
     }
     for (const k of Object.keys(buckets)) buckets[k] = Math.round(buckets[k])
     lfOver5 = Math.round(lfOver5)
   }
-  return { avg: Math.round(avg * 10) / 10, max: Math.round(max * 10) / 10, buckets, lf_over_5: lfOver5, samples }
+  return { avg: Math.round(avg * 10) / 10, max: Math.round(max * 10) / 10, buckets, lf_over_5: lfOver5, samples, dropped }
 }
 
-// LF of a run deeper than a threshold (e.g. rock line), from the depth samples.
+// LF of a run at or below a threshold depth (e.g. rock line), from the samples.
 function lfOverThreshold(stats, threshold) {
   if (!stats?.samples) return null
   let lf = 0
-  for (const { depth, lf: segLf } of stats.samples) if (depth > threshold) lf += segLf
+  for (const { depth, lf: segLf } of stats.samples) if (depth >= threshold) lf += segLf
   return Math.round(lf)
 }
 
@@ -654,7 +761,12 @@ function buildDepthEngine(runs, merged, geotech) {
       depth_avg: st.avg, depth_max: st.max, buckets: st.buckets, lf_over_5: st.lf_over_5 ?? null,
     })
 
-    if (st.max > DEEP_EXCAVATION_FT) {
+    if (st.dropped > 0 && run._itemIdx != null && merged[run._itemIdx]) {
+      const it = merged[run._itemIdx]
+      it.note = `Some profile elevations for this run were unreadable — depth figures are partial, verify from profiles. ${it.note || ''}`.trim().slice(0, 1000)
+    }
+
+    if (st.max >= DEEP_EXCAVATION_FT) {
       deepRuns.push({ run_id: run.run_id, utility: run.utility, depth_max: st.max, length_lf: run.length_lf ?? null })
       if (run._itemIdx != null && merged[run._itemIdx]) {
         const it = merged[run._itemIdx]
@@ -734,23 +846,31 @@ function buildDepthEngine(runs, merged, geotech) {
   return { depthSummary, derivedItems }
 }
 
-// Match a profile run to a merged plan item (same diameter + utility/material token overlap)
+// Match a profile run to a merged plan item. The threshold requires real
+// evidence: a structure-ID hit in the item's location, or diameter AND utility
+// together. Diameter alone (the old bar) bound 8" storm profiles to 8"
+// sanitary plan items and then overwrote the wrong quantity.
 function matchRunToItem(run, items, used) {
   let best = null, bestScore = 0
   for (let i = 0; i < items.length; i++) {
     if (used.has(i) || items[i].category !== 'PIPE') continue
     const it = items[i]
     if (run.diameter_in != null && it.diameter_in != null && run.diameter_in !== it.diameter_in) continue
-    let score = run.diameter_in != null && it.diameter_in === run.diameter_in ? 2 : 0
     const desc = it.description.toLowerCase()
+    // A plan item that names a DIFFERENT utility can never be this run.
+    if (run.utility !== 'other') {
+      const others = ['sanitary', 'storm', 'water'].filter(u => u !== run.utility)
+      if (others.some(u => desc.includes(u.slice(0, 5)))) continue
+    }
+    let score = run.diameter_in != null && it.diameter_in === run.diameter_in ? 2 : 0
     if (run.utility !== 'other' && desc.includes(run.utility.slice(0, 5))) score += 2
     if (run.material && desc.includes(run.material.toLowerCase())) score += 1
     const loc = (it.location || '').toLowerCase()
-    if (run.from_structure && loc.includes(run.from_structure.toLowerCase())) score += 3
-    if (run.to_structure && loc.includes(run.to_structure.toLowerCase())) score += 3
+    if (run.from_structure && loc.includes(run.from_structure.toLowerCase())) score += 4
+    if (run.to_structure && loc.includes(run.to_structure.toLowerCase())) score += 4
     if (score > bestScore) { bestScore = score; best = i }
   }
-  return bestScore >= 2 ? best : null
+  return bestScore >= 4 ? best : null
 }
 
 // ── Pass 5 code-side: variance matching ────────────────────────
@@ -805,12 +925,16 @@ function buildVariance(engineerRows, items) {
     if (best != null && bestScore >= 0.4) {
       usedItems.add(best)
       const ours = items[best]
-      const pct = eng.quantity ? Math.round(((ours.quantity ?? 0) - eng.quantity) / eng.quantity * 1000) / 10 : null
+      // Only compute a % when we actually have a quantity — treating a null
+      // takeoff quantity as 0 painted every unquantified match as −100%.
+      const pct = eng.quantity && ours.quantity != null
+        ? Math.round((ours.quantity - eng.quantity) / eng.quantity * 1000) / 10
+        : null
       variance.push({
         engineer_description: eng.description, engineer_quantity: eng.quantity, unit: eng.unit,
         our_description: ours.description, our_quantity: ours.quantity,
         pct_difference: pct,
-        status: pct != null && Math.abs(pct) > 5 ? 'VARIANCE' : 'MATCHED',
+        status: pct == null ? 'UNQUANTIFIED' : Math.abs(pct) > 5 ? 'VARIANCE' : 'MATCHED',
       })
     } else {
       variance.push({
@@ -952,17 +1076,77 @@ Respond ONLY with JSON: {"matches":[{"i":<index>,"slug":"<slug-or-null>"}]}` }],
   return slugs
 }
 
+// ── Conservative code-level merge fallbacks ─────────────────────
+// Used when a Haiku merge/dedupe reply is truncated or unparseable. Exact-key
+// consolidation only: identical description+unit+diameter with the same
+// quantity (or one null quantity folding into a quantified sighting) merge;
+// anything else is kept. Never sums, never invents.
+function codeMerge(items) {
+  const groups = new Map()
+  for (const it of items) {
+    const key = `${normKey(it.description)}|${it.unit}|${it.diameter_in ?? ''}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(it)
+  }
+  const out = []
+  for (const group of groups.values()) {
+    const quantified = group.filter(g => g.quantity != null)
+    const nulls = group.filter(g => g.quantity == null)
+    if (quantified.length === 0) {
+      out.push({ ...group[0], source_ids: [] })
+      continue
+    }
+    // Same quantity sighted in overlap zones → one item. Distinct quantities
+    // are distinct runs/segments — keep them all.
+    const byQty = new Map()
+    for (const g of quantified) {
+      const qKey = String(g.quantity)
+      if (!byQty.has(qKey)) byQty.set(qKey, { ...g, source_ids: [] })
+    }
+    out.push(...byQty.values())
+    // Null-quantity continuation sightings fold into the group's first
+    // quantified entry (they're the same run crossing a tile boundary).
+    if (nulls.length && !quantified.length) out.push({ ...nulls[0], source_ids: [] })
+  }
+  return out
+}
+
 // ── Handler ────────────────────────────────────────────────────
 // Scoring primitives exported for offline rescoring / diagnostics.
 export { buildVariance, varianceMetrics, scoreAgainstTruth, tokenize }
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405 }
+  if (!fnSecretOk(event.headers)) return { statusCode: 401, body: 'Unauthorized' }
 
   let body
   try { body = JSON.parse(event.body) } catch { return { statusCode: 400, body: 'Invalid JSON' } }
   const { job_id, project_id } = body
   if (!job_id || !project_id) return { statusCode: 400, body: 'Missing fields' }
+
+  // ── Job lock ──────────────────────────────────────────────
+  // Two concurrent invocations on one job double-submit every tile (2× spend)
+  // and interleave the final delete+insert (doubled line items). The lease is
+  // an atomic conditional update: whoever wins the row runs; the loser exits.
+  try {
+    getSupabase()
+    const nowIso = new Date().toISOString()
+    const { data: leased, error: leaseErr } = await supabase
+      .from('processing_jobs')
+      .update({ lease_until: new Date(Date.now() + LEASE_MS).toISOString() })
+      .eq('id', job_id)
+      .or(`lease_until.is.null,lease_until.lt.${nowIso}`)
+      .select('id')
+    if (leaseErr) throw new Error(`lease acquire failed: ${leaseErr.message}`)
+    if (!leased?.length) {
+      console.log(`Job ${job_id}: lease held by another invocation — exiting`)
+      return { statusCode: 200 }
+    }
+  } catch (err) {
+    console.error('Lease error:', err)
+    await rawJobUpdate(job_id, { stage: 'error', error: `Could not start analysis: ${err.message}` })
+    return { statusCode: 200 }
+  }
 
   // Heartbeat via raw REST — proves the handler actually started. If the job
   // never leaves this state, the crash is at module load / cold start.
@@ -1045,10 +1229,35 @@ export const handler = async (event) => {
     state.resubmits = state.resubmits || {}
     state.usage = state.usage || {}
     for (const tier of ['opus', 'sonnet', 'haiku']) state.usage[tier] = state.usage[tier] || { in: 0, out: 0 }
+    state.pollFails = state.pollFails || {}
+    state.failedTiles = state.failedTiles || {}
+    state.blankSkipped = state.blankSkipped || 0
     state.chains = (state.chains || 0) + 1
     if (state.chains > MAX_CHAINS) throw new Error('Batch processing exceeded the maximum invocation chain — contact support.')
-    const persistState = () => updateJob(job_id, { batch_state: state })
+    // batch_state is the resume ledger — a silent write failure here means the
+    // next chain forgets submitted batches and re-bills every tile. Fail loudly.
+    const persistState = async (extra = {}) => {
+      const { error } = await supabase.from('processing_jobs')
+        .update({ batch_state: state, lease_until: new Date(Date.now() + LEASE_MS).toISOString(), ...extra })
+        .eq('id', job_id)
+      if (error) throw new Error(`batch_state persist failed: ${error.message}`)
+    }
     await persistState()
+
+    // Chain hand-off: persist state, release the lease, re-invoke. If the
+    // re-invocation cannot be confirmed, the job is marked errored (resumable
+    // by re-running analysis) instead of silently freezing mid-run.
+    const chainToFreshInvocation = async () => {
+      await persistState({ lease_until: null })
+      const ok = await reinvokeSelf(job_id, project_id)
+      if (!ok) {
+        await rawJobUpdate(job_id, {
+          stage: 'error',
+          error: 'Analysis paused and could not resume itself — run the analysis again to continue from where it stopped.',
+        })
+      }
+      return { statusCode: 200 }
+    }
 
     // Page geometry (grid dims) without rendering — cheap, needed for totals.
     const geomCache = new Map()
@@ -1071,11 +1280,12 @@ export const handler = async (event) => {
     }
 
     // Done tile keys per pass (from prior invocations / ingested batches).
+    // Paginated — the default 1000-row cap made large jobs' tiles look
+    // permanently missing, looping resubmits until MAX_CHAINS.
     const loadDone = async () => {
       const done = Object.fromEntries(TILE_PASSES.map(p => [p.key, new Set()]))
-      const { data } = await supabase
-        .from('analysis_tiles').select('pass, tile_key').eq('job_id', job_id)
-      ;(data || []).forEach(r => done[r.pass]?.add(r.tile_key))
+      const data = await loadAllTiles(job_id, 'pass, tile_key')
+      data.forEach(r => done[r.pass]?.add(r.tile_key))
       return done
     }
 
@@ -1098,22 +1308,32 @@ export const handler = async (event) => {
       return { missing, totalTiles, doneTiles }
     }
 
-    let blankSkipped = 0
     let done = await loadDone()
 
     // ── Poll / submit loop ────────────────────────────────────
     while (true) {
       // 1. Poll pending batches; ingest any that ended.
       let processing = 0
+      let ingestedAny = false
       for (const passKey of Object.keys(state.batches)) {
         const stillPending = []
         for (const batchId of state.batches[passKey]) {
           let batch
           try { batch = await getBatch(batchId) } catch (e) {
-            console.error(`poll ${batchId}:`, e.message); stillPending.push(batchId); continue
+            // A batch ID that permanently 404s (revoked/expired) would block
+            // this pass's resubmission forever — abandon it after repeated
+            // failures and let the missing-tile scan resubmit the work.
+            const fails = (state.pollFails[batchId] || 0) + 1
+            state.pollFails[batchId] = fails
+            console.error(`poll ${batchId} (fail ${fails}):`, e.message)
+            if (fails < MAX_POLL_FAILS) stillPending.push(batchId)
+            else console.error(`poll ${batchId}: abandoned after ${fails} failures`)
+            continue
           }
+          delete state.pollFails[batchId]
           if (batch.processing_status === 'ended') {
             await ingestBatchResults(batch, TILE_PASSES, sheetsById, job_id, state.usage)
+            ingestedAny = true
           } else {
             processing += batch.request_counts?.processing ?? 0
             stillPending.push(batchId)
@@ -1122,6 +1342,9 @@ export const handler = async (event) => {
         state.batches[passKey] = stillPending
         if (!stillPending.length) delete state.batches[passKey]
       }
+      // Persist immediately after ingesting — a crash between ingest and the
+      // next persist re-ingests the batch on resume and double-counts usage.
+      if (ingestedAny) await persistState()
 
       done = await loadDone()
       const { missing, totalTiles, doneTiles } = computeMissing(done)
@@ -1133,15 +1356,29 @@ export const handler = async (event) => {
         if (missing[pass.key].length === 0 || state.batches[pass.key]?.length) continue
         const resubmits = state.resubmits[pass.key] || 0
         if (resubmits > MAX_RESUBMITS) {
-          // Give up on the stragglers: record empty results so assembly proceeds.
+          // Give up on the stragglers — but NEVER silently. The tile identities
+          // go into state.failedTiles so the final report can tell the user
+          // exactly which sheet areas have no coverage.
           const rows = missing[pass.key].map(w => ({
             job_id, pass: pass.key, tile_key: `${w.sheet.id}_${w.idx}`, result_json: [],
           }))
+          state.failedTiles[pass.key] = [
+            ...new Set([...(state.failedTiles[pass.key] || []),
+              ...missing[pass.key].map(w => `${w.sheet.sheet_number || `pg ${w.sheet.page_number}`}: tile ${w.idx + 1}`)]),
+          ]
           for (let i = 0; i < rows.length; i += 100) {
-            await supabase.from('analysis_tiles').upsert(rows.slice(i, i + 100), { onConflict: 'job_id,pass,tile_key' })
+            const { error } = await supabase.from('analysis_tiles')
+              .upsert(rows.slice(i, i + 100), { onConflict: 'job_id,pass,tile_key' })
+            if (error) throw new Error(`straggler upsert failed: ${error.message}`)
           }
+          await persistState()
           continue
         }
+
+        // The render/submit burst can be long on big sets — don't start it if
+        // the window is nearly closed; a hard kill mid-burst orphans paid
+        // batches whose IDs were never persisted.
+        if (Date.now() > chainDeadline) return await chainToFreshInvocation()
 
         const requests = []
         for (const w of missing[pass.key]) {
@@ -1152,9 +1389,10 @@ export const handler = async (event) => {
           // Blank-tile skip: an essentially-empty tile compresses to almost
           // nothing — record an empty result instead of paying for an API call.
           if (tile.pngBytes < BLANK_PNG_BYTES) {
-            await supabase.from('analysis_tiles')
+            const { error } = await supabase.from('analysis_tiles')
               .upsert({ job_id, pass: pass.key, tile_key, result_json: [] }, { onConflict: 'job_id,pass,tile_key' })
-            blankSkipped++
+            if (error) throw new Error(`blank-tile upsert failed: ${error.message}`)
+            state.blankSkipped++
             continue
           }
           const embeddedText = getPageText(w.sheet.page_number - 1).runs
@@ -1164,6 +1402,7 @@ export const handler = async (event) => {
             params: {
               model: pass.model,
               max_tokens: pass.maxTokens,
+              temperature: 0,
               ...(pass.system ? { system: pass.system } : {}),
               messages: [{ role: 'user', content: buildTileContent(w.sheet, tile, embeddedText, pass.task) }],
             },
@@ -1175,6 +1414,9 @@ export const handler = async (event) => {
         for (let i = 0; i < requests.length; i += BATCH_CHUNK) {
           const id = await submitBatch(requests.slice(i, i + BATCH_CHUNK))
           state.batches[pass.key].push(id)
+          // Persist after EVERY chunk — a crash between submit and persist is
+          // an orphaned paid batch the resume ledger knows nothing about.
+          await persistState()
         }
         state.resubmits[pass.key] = resubmits + 1
         await persistState()
@@ -1188,18 +1430,20 @@ export const handler = async (event) => {
       await updateJob(job_id, {
         stage: currentPass?.stage || 'analysis_pass_5',
         progress,
-        stage_detail: `Batched analysis — ${doneTiles}/${totalTiles} tiles done${processing ? `, ${processing} in flight` : ''}${blankSkipped ? `, ${blankSkipped} blank skipped` : ''}`,
+        stage_detail: `Batched analysis — ${doneTiles}/${totalTiles} tiles done${processing ? `, ${processing} in flight` : ''}${state.blankSkipped ? `, ${state.blankSkipped} blank skipped` : ''}`,
         batch_state: state,
+        lease_until: new Date(Date.now() + LEASE_MS).toISOString(),
       })
 
       // 4. Chain or sleep.
-      if (Date.now() > chainDeadline) {
-        await persistState()
-        await reinvokeSelf(job_id, project_id)
-        return { statusCode: 200 }
-      }
+      if (Date.now() > chainDeadline) return await chainToFreshInvocation()
       await sleep(BATCH_POLL_MS)
     }
+
+    // Assembly (merge passes, depth engine, writes) needs its own clean window —
+    // starting it with the 15-min kill looming risks dying between the
+    // line_items delete and insert, leaving the project with zero items.
+    if (Date.now() > chainDeadline - 3 * 60 * 1000) return await chainToFreshInvocation()
 
     // All tiles done — assemble from persisted scratch.
     const p1Items = await loadPassResults(job_id, 'pass1')
@@ -1223,21 +1467,36 @@ export const handler = async (event) => {
     // ── PASS 3: merge + dedupe (Haiku) + code reconciliation ─
     await updateJob(job_id, { stage: 'analysis_pass_3', progress: 90, stage_detail: 'Pass 3/5 — merging tiles, reconciling plan vs profile' })
     let merged = []
+    let mergeDegraded = false
     if (p1Items.length > 0) {
-      const numbered = p1Items.map((it, i) => ({ id: i, sheet: it.sheet_label, tile: it.tile, ...it, sheet_id: undefined }))
-      const text = await callClaude({
-        model: HAIKU, maxTokens: 16384,
-        content: [{ type: 'text', text: `${MERGE_TASK}\n\nITEMS:\n${JSON.stringify(numbered)}` }],
-      })
-      merged = validateItems(parseJson(text)?.items, 'Pass 3/5 merge')
-      if (merged.length === 0 && p1Items.length > 0) {
-        console.warn('Merge returned nothing — falling back to unmerged items')
-        merged = p1Items.map(it => ({ ...it, source_ids: [] }))
+      // Chunked: one giant merge call over hundreds of items overflows even a
+      // 16K output budget, and a truncated reply used to silently keep every
+      // overlap duplicate. Chunks are sheet-contiguous, so overlap-zone
+      // duplicates (which live on the same or adjacent tiles) stay together.
+      const MERGE_CHUNK = 120
+      for (let start = 0; start < p1Items.length; start += MERGE_CHUNK) {
+        const slice = p1Items.slice(start, start + MERGE_CHUNK)
+        const numbered = slice.map((it, i) => ({ id: start + i, sheet: it.sheet_label, tile: it.tile, ...it, sheet_id: undefined }))
+        const { text, stop_reason } = await callClaude({
+          model: HAIKU, maxTokens: 16384, withMeta: true,
+          content: [{ type: 'text', text: `${MERGE_TASK}\n\nITEMS:\n${JSON.stringify(numbered)}` }],
+        })
+        const chunkMerged = stop_reason === 'max_tokens' ? [] : validateItems(parseJson(text)?.items, 'Pass 3/5 merge')
+        if (chunkMerged.length === 0 && slice.length > 0) {
+          // Model merge failed for this chunk → conservative code merge, and
+          // the degradation is surfaced in the report instead of hidden.
+          console.warn(`Merge chunk ${start}: degraded to code merge (stop_reason=${stop_reason})`)
+          mergeDegraded = true
+          merged.push(...codeMerge(slice))
+        } else {
+          merged.push(...chunkMerged)
+        }
       }
-      // Re-attach sheet_id from merged source_ids (first source wins)
+      // Re-attach sheet_id from merged source_ids. Only in-range ids count —
+      // a hallucinated id must not pin the item to an arbitrary sheet.
       merged.forEach(m => {
-        const src = m.source_ids.length ? p1Items[m.source_ids[0]] : null
-        m.sheet_id = src?.sheet_id || p1Items[0]?.sheet_id || null
+        const src = (m.source_ids || []).map(i => p1Items[i]).find(Boolean)
+        m.sheet_id = src?.sheet_id || m.sheet_id || null
       })
     }
 
@@ -1271,7 +1530,9 @@ export const handler = async (event) => {
       run._itemIdx = idx
       const item = merged[idx]
       if (stats) item.depth = stats
-      if (run.length_lf != null && item.quantity != null) {
+      // length_lf must be a real positive length — a model-emitted 0 used to
+      // divide by zero and then overwrite a genuine plan quantity with 0 LF.
+      if (run.length_lf > 0 && item.quantity != null) {
         const planLf = item.quantity
         const pct = Math.abs(planLf - run.length_lf) / run.length_lf * 100
         if (pct > 5) {
@@ -1281,7 +1542,7 @@ export const handler = async (event) => {
           item.note = `LENGTH MISMATCH: plan view shows ${Math.round(planLf)} LF, profile shows ${run.length_lf} LF (${Math.round(pct)}% apart). Profile value used — verify before pricing. ${item.note}`.slice(0, 1000)
           reconciliations.push({ run: run.run_id, plan_lf: planLf, profile_lf: run.length_lf, pct_diff: Math.round(pct) })
         }
-      } else if (run.length_lf != null && item.quantity == null) {
+      } else if (run.length_lf > 0 && item.quantity == null) {
         item.quantity = run.length_lf
         item.note = `Length taken from profile (${run.run_id}). ${item.note}`.slice(0, 1000)
       }
@@ -1290,18 +1551,34 @@ export const handler = async (event) => {
     // ── PASS 4 dedupe: fold small-diameter sweep into merged set (Haiku) ──
     // p4Items came from the resumable pass4 tiles loaded above.
     await updateJob(job_id, { progress: 92, stage_detail: 'Folding in small-diameter findings' })
+    let p4Degraded = false
     if (p4Items.length > 0) {
       const existingBrief = merged.map(m => ({ description: m.description, quantity: m.quantity, unit: m.unit, location: m.location }))
       const candidates = p4Items.map((it, i) => ({ id: i, sheet: it.sheet_label, tile: it.tile, ...it, sheet_id: undefined }))
-      const text = await callClaude({
-        model: HAIKU, maxTokens: 8192,
+      const { text, stop_reason } = await callClaude({
+        model: HAIKU, maxTokens: 8192, withMeta: true,
         content: [{ type: 'text', text: `${PASS4_DEDUPE_TASK}\n\nEXISTING:\n${JSON.stringify(existingBrief)}\n\nCANDIDATES:\n${JSON.stringify(candidates)}` }],
       })
-      const fresh = validateItems(parseJson(text)?.new_items, 'Pass 4/5 dedupe')
+      const parsed = stop_reason === 'max_tokens' ? null : parseJson(text)
+      let fresh
+      if (parsed && Array.isArray(parsed.new_items)) {
+        fresh = validateItems(parsed.new_items, 'Pass 4/5 dedupe')
+      } else {
+        // Dedupe reply truncated/unparseable. The old behavior dropped the
+        // ENTIRE small-diameter sweep — the pass built specifically because
+        // these items were systematically missed. Fall back to code dedupe:
+        // consolidate candidates, then drop any whose description already
+        // appears in the merged takeoff.
+        console.warn(`Pass 4 dedupe degraded to code path (stop_reason=${stop_reason})`)
+        p4Degraded = true
+        const existingKeys = new Set(merged.map(m => normKey(m.description)))
+        fresh = codeMerge(p4Items).filter(f => !existingKeys.has(normKey(f.description)))
+          .map(f => ({ ...f, confidence: 'LOW', note: `Possible duplicate — automated dedupe was degraded on this run, verify against main takeoff. ${f.note}`.slice(0, 1000) }))
+      }
       fresh.forEach(f => merged.push({
         ...f,
         note: `Found in dedicated small-diameter sweep. ${f.note}`.slice(0, 1000),
-        sheet_id: p4Items[0]?.sheet_id || null, status: 'active',
+        sheet_id: f.sheet_id || p4Items[0]?.sheet_id || null, status: 'active',
       }))
     }
 
@@ -1329,10 +1606,20 @@ export const handler = async (event) => {
     // ── Write results ────────────────────────────────────────
     await updateJob(job_id, { progress: 96, stage_detail: 'Writing line items' })
 
+    // A takeoff with zero items from a non-empty analysis set is a failure,
+    // not a result — completing here used to wipe the project's existing
+    // line_items and report "0 items" as success.
+    if (merged.length === 0 && (p1Sheets.length > 0 || p2Sheets.length > 0)) {
+      throw new Error('Analysis produced no line items from a non-empty sheet set — the previous takeoff was left untouched. Re-run the analysis; if this repeats, the sheets may be unreadable at this resolution.')
+    }
+
     // Calibration runs are experiments: they never touch the project's shared
     // line_items or the user's job history — their output lives only in
     // analysis_results, where the Admin calibration table reads it.
-    if (!cfg.calibration) await supabase.from('line_items').delete().eq('project_id', project_id)
+    if (!cfg.calibration) {
+      const { error: delErr } = await supabase.from('line_items').delete().eq('project_id', project_id)
+      if (delErr) throw new Error(`line_items clear failed: ${delErr.message}`)
+    }
     if (!cfg.calibration && merged.length > 0) {
       const rows = merged.map(m => ({
         project_id,
@@ -1378,13 +1665,25 @@ export const handler = async (event) => {
     const counts = { HIGH: 0, MEDIUM: 0, LOW: 0 }
     merged.forEach(m => { counts[m.confidence] = (counts[m.confidence] || 0) + 1 })
 
+    // Coverage gaps: tiles that failed all retries. These are the report's
+    // loudest caveat — quantities in those sheet areas may simply be missing.
+    const failedTiles = [...new Set(Object.values(state.failedTiles || {}).flat())]
+
     // ── Open clarifications: what the AI caught but couldn't pin down ──
-    // Depth gaps first (they price excavation), then plan/profile mismatches,
-    // then low-confidence big-quantity items. Capped so the resolve flow stays
+    // Coverage gaps first (whole sheet areas unanalyzed), then depth gaps
+    // (they price excavation), then plan/profile mismatches, then
+    // low-confidence big-quantity items. Capped so the resolve flow stays
     // approachable — one question at a time in the UI.
     const clarifications = []
     const asked = new Set()
     let cid = 1
+    if (failedTiles.length > 0) {
+      clarifications.push({
+        id: cid++, type: 'coverage', item_no: null,
+        question: `${failedTiles.length} sheet area${failedTiles.length === 1 ? '' : 's'} could not be analyzed after multiple retries (${failedTiles.slice(0, 6).join('; ')}${failedTiles.length > 6 ? '; …' : ''}). Quantities there may be missing — re-run the analysis or verify those areas manually. Acknowledge to continue.`,
+        context: 'Every failed area is listed in the report quality section. A re-run only re-processes the failed areas, not the whole set.',
+      })
+    }
     for (const it of items) {
       if (clarifications.length >= 12) break
       if (it.depth_unavailable && !asked.has(it.item_no)) {
@@ -1436,7 +1735,7 @@ export const handler = async (event) => {
         high_confidence_count: counts.HIGH,
         medium_confidence_count: counts.MEDIUM,
         low_confidence_count: counts.LOW,
-        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (>5 ft).` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
+        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
       },
       text_layer: {
         mode: textMode,
@@ -1445,6 +1744,15 @@ export const handler = async (event) => {
         sheets_total: sheets.length,
         tables_detected: textTables.length,
         table_rows_to_pass5: tableEngineerRows.length,
+      },
+      // Run-quality caveats — anything that degraded coverage or dedupe on
+      // this run. The UI must surface these; silence here reads as "covered
+      // everything" when it didn't.
+      quality: {
+        failed_tiles: failedTiles,
+        blank_tiles_skipped: state.blankSkipped || 0,
+        merge_degraded: mergeDegraded,
+        small_diameter_dedupe_degraded: p4Degraded,
       },
       clarifications,
       depth_summary: depthSummary,
@@ -1480,7 +1788,8 @@ export const handler = async (event) => {
       },
     }
 
-    await supabase.from('analysis_results').insert({ project_id, job_id, result_json: resultJson })
+    const { error: resErr } = await supabase.from('analysis_results').insert({ project_id, job_id, result_json: resultJson })
+    if (resErr) throw new Error(`analysis_results insert failed: ${resErr.message}`)
 
     // Write a job-history row server-side so the result is always reachable from
     // "Recent Jobs" — even if the user's browser wasn't open at completion (the
@@ -1497,18 +1806,29 @@ export const handler = async (event) => {
       })
     }
 
+    // Usage ledger — quota enforcement in the edge functions reads this.
+    if (proj?.user_id) {
+      await supabase.from('usage_events').insert({
+        user_id: proj.user_id,
+        kind: 'analysis_job',
+        project_id,
+        est_usd: resultJson.run_cost.est_usd,
+      })
+    }
+
     // Scratch tiles no longer needed once the result is persisted.
     await supabase.from('analysis_tiles').delete().eq('job_id', job_id)
     await updateJob(job_id, {
       stage: 'complete', progress: 100,
-      stage_detail: `${items.length} line items — $${resultJson.run_cost.est_usd} API cost`,
+      stage_detail: `${items.length} line items — $${resultJson.run_cost.est_usd} API cost${failedTiles.length ? ` — ⚠ ${failedTiles.length} area(s) not analyzed` : ''}`,
       batch_state: { usage: state.usage, chains: state.chains, done: true },
+      lease_until: null,
     })
     return { statusCode: 200 }
   } catch (err) {
     console.error('Analysis pipeline error:', err)
     // Raw REST — works even if the supabase-js client is what failed.
-    await rawJobUpdate(job_id, { stage: 'error', error: `Analysis failed: ${err.message}`, stage_detail: null })
+    await rawJobUpdate(job_id, { stage: 'error', error: `Analysis failed: ${err.message}`, stage_detail: null, lease_until: null })
     return { statusCode: 200 }
   }
 }

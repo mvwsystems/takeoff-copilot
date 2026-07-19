@@ -29,6 +29,17 @@ export default async (request) => {
   const file = incomingForm.get('file')
   if (!file) return new Response('Missing file field', { status: 400 })
 
+  // Same 100 MB ceiling as the plan-uploads bucket; plans and takeoffs are
+  // PDFs, images, or spreadsheets — nothing else belongs on our Files quota.
+  const MAX_BYTES = 100 * 1024 * 1024
+  const ALLOWED_TYPES = /^(application\/pdf|image\/(png|jpeg|webp|gif)|application\/vnd\.(ms-excel|openxmlformats-officedocument\.spreadsheetml\.sheet)|text\/csv)$/
+  if (typeof file.size === 'number' && file.size > MAX_BYTES) {
+    return new Response('File too large (100 MB max)', { status: 413 })
+  }
+  if (file.type && !ALLOWED_TYPES.test(file.type)) {
+    return new Response('Unsupported file type', { status: 415 })
+  }
+
   const outgoingForm = new FormData()
   outgoingForm.append('file', file, file.name || 'document.pdf')
 

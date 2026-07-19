@@ -64,8 +64,10 @@ export const handler = async (event) => {
   let body
   try { body = JSON.parse(event.body) } catch { return { statusCode: 400, body: 'Invalid JSON' } }
   const { storage_path } = body
-  // Users may only parse files in their own storage folder.
-  if (!storage_path || !storage_path.startsWith(`${user.id}/`)) {
+  // Users may only parse files in their own storage folder. Path segments are
+  // matched strictly — a bare prefix check lets "../<other-user>/…" through.
+  const SAFE_PATH = new RegExp(`^${user.id}/(docs/)?[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$`)
+  if (typeof storage_path !== 'string' || storage_path.includes('..') || !SAFE_PATH.test(storage_path)) {
     return { statusCode: 400, body: 'Invalid storage_path' }
   }
 

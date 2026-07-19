@@ -3,6 +3,7 @@ import Navbar from './components/Navbar'
 import LandingPage from './pages/LandingPage'
 import Dashboard from './pages/Dashboard'
 import LoginPage from './pages/LoginPage'
+import ResetPasswordPage from './pages/ResetPasswordPage'
 import AdminPage from './pages/AdminPage'
 import { useAuth } from './utils/AuthContext'
 
@@ -20,6 +21,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<LandingPage />} />
         <Route path="/login" element={<LoginPage />} />
+        <Route path="/reset" element={<ResetPasswordPage />} />
         <Route path="/dashboard" element={
           <ProtectedRoute>
             <Dashboard />

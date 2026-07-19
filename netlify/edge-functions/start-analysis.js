@@ -43,6 +43,22 @@ export default async (request) => {
     return new Response('Missing project_id', { status: 400 })
   }
 
+  // Per-user daily analysis ceiling. Every run is real Opus spend ($3–8), so
+  // an unbounded loop — malicious or accidental — must hit a wall. The RLS-
+  // scoped join counts only the caller's own jobs.
+  const cap = Number(Deno.env.get('QUOTA_ANALYSES_PER_DAY')) || 10
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const { count: recentRuns } = await supabase
+    .from('processing_jobs')
+    .select('id, projects!inner(user_id)', { count: 'exact', head: true })
+    .eq('kind', 'analysis')
+    .gte('created_at', since)
+  if (recentRuns != null && recentRuns >= cap) {
+    return new Response(JSON.stringify({
+      error: `Daily analysis limit reached (${cap} runs per 24h). Contact hello@6signal.co if you need more.`,
+    }), { status: 429, headers: { 'Content-Type': 'application/json' } })
+  }
+
   // Calibration config: sanitize to known fields and valid model tiers.
   let jobConfig = null
   if (config && typeof config === 'object') {
@@ -115,7 +131,10 @@ export default async (request) => {
   try {
     const bgRes = await fetch(bgUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-fn-secret': Deno.env.get('WEBHOOK_SECRET') || '',
+      },
       body: JSON.stringify({ job_id: job.id, project_id }),
     })
     if (!bgRes.ok && bgRes.status !== 202) {

@@ -33,7 +33,7 @@ export default function LoginPage() {
         <Auth
           supabaseClient={supabase}
           providers={['google', 'azure', 'apple']}
-          redirectTo="https://takeoffcopilot.com/dashboard"
+          redirectTo={`${window.location.origin}/dashboard`}
           appearance={{
             theme: ThemeSupa,
             variables: {
@@ -112,6 +112,12 @@ export default function LoginPage() {
                 button_label: 'Create Account',
                 link_text: "Don't have an account? Sign up",
                 confirmation_text: 'Check your email for a confirmation link from Takeoff Copilot.',
+              },
+              forgotten_password: {
+                email_label: 'Email',
+                button_label: 'Send Reset Link',
+                link_text: 'Forgot your password?',
+                confirmation_text: 'Check your email for a password reset link.',
               },
             },
           }}

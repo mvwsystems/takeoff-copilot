@@ -4,14 +4,31 @@
 //   RESEND_API_KEY  — from resend.com
 //   WEBHOOK_SECRET  — any random string, must match what you put in Supabase webhook headers
 
+const crypto = require('crypto')
+
+// Constant-time secret comparison — a plain !== leaks timing information.
+function secretMatches(provided, expected) {
+  if (!provided || !expected) return false
+  const a = Buffer.from(String(provided))
+  const b = Buffer.from(String(expected))
+  if (a.length !== b.length) return false
+  return crypto.timingSafeEqual(a, b)
+}
+
+// Profile fields are user-supplied — escape before interpolating into HTML.
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ))
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405, body: 'Method not allowed' }
   }
 
   // Verify the request is from our Supabase webhook
-  const secret = event.headers['x-webhook-secret']
-  if (!secret || secret !== process.env.WEBHOOK_SECRET) {
+  if (!secretMatches(event.headers['x-webhook-secret'], process.env.WEBHOOK_SECRET)) {
     return { statusCode: 401, body: 'Unauthorized' }
   }
 
@@ -51,21 +68,21 @@ exports.handler = async (event) => {
         <table style="width:100%;border-collapse:collapse;font-size:0.88rem">
           <tr>
             <td style="padding:8px 12px;color:#888;width:100px;border-bottom:1px solid #e8e8e3">Name</td>
-            <td style="padding:8px 12px;border-bottom:1px solid #e8e8e3;font-weight:600">${record.full_name || '—'}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e8e8e3;font-weight:600">${esc(record.full_name) || '—'}</td>
           </tr>
           <tr>
             <td style="padding:8px 12px;color:#888;border-bottom:1px solid #e8e8e3">Company</td>
-            <td style="padding:8px 12px;border-bottom:1px solid #e8e8e3;font-weight:600">${record.company || '—'}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e8e8e3;font-weight:600">${esc(record.company) || '—'}</td>
           </tr>
           <tr>
             <td style="padding:8px 12px;color:#888;border-bottom:1px solid #e8e8e3">Email</td>
             <td style="padding:8px 12px;border-bottom:1px solid #e8e8e3">
-              <a href="mailto:${record.email}" style="color:#E8372C">${record.email}</a>
+              <a href="mailto:${esc(record.email)}" style="color:#E8372C">${esc(record.email)}</a>
             </td>
           </tr>
           <tr>
             <td style="padding:8px 12px;color:#888;border-bottom:1px solid #e8e8e3">Phone</td>
-            <td style="padding:8px 12px;border-bottom:1px solid #e8e8e3">${record.phone || '—'}</td>
+            <td style="padding:8px 12px;border-bottom:1px solid #e8e8e3">${esc(record.phone) || '—'}</td>
           </tr>
           <tr>
             <td style="padding:8px 12px;color:#888">Signed up</td>

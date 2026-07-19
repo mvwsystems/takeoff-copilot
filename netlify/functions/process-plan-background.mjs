@@ -13,6 +13,19 @@
 // ESM (.mjs): root package.json has "type":"module" and ships in the function
 // bundle, so CommonJS .js files die at load with "module is not defined".
 import { createClient } from '@supabase/supabase-js'
+import crypto from 'crypto'
+
+// Background functions are publicly POST-able at /.netlify/functions/* — every
+// caller must present the shared secret or an outsider can drive Anthropic
+// spend and service-role DB writes against arbitrary projects.
+function fnSecretOk(headers) {
+  const provided = headers?.['x-fn-secret'] || headers?.['X-Fn-Secret']
+  const expected = process.env.WEBHOOK_SECRET
+  if (!provided || !expected) return false
+  const a = Buffer.from(String(provided))
+  const b = Buffer.from(String(expected))
+  return a.length === b.length && crypto.timingSafeEqual(a, b)
+}
 
 // Client is created lazily inside the handler — a module-level createClient
 // with a missing env var throws at cold start BEFORE any logging or DB write,
@@ -31,8 +44,10 @@ function getSupabase() {
 
 // Sheet types that proceed to the heavy analysis pass.
 // All others default to included_in_analysis = false.
+// 'unclassified' means the classification call itself failed — those default
+// IN (the user can exclude them on the sheet map) rather than silently out.
 const ANALYSIS_TYPES = new Set([
-  'utility_plan', 'plan_profile', 'storm', 'sanitary', 'water', 'details',
+  'utility_plan', 'plan_profile', 'storm', 'sanitary', 'water', 'details', 'unclassified',
 ])
 
 const CLASSIFY_PROMPT = `You are classifying construction plan sheets for a utility contractor.
@@ -82,6 +97,12 @@ async function updateJob(jobId, fields) {
   await supabase.from('processing_jobs').update(fields).eq('id', jobId)
 }
 
+// A whole-batch fallback marks pages "unclassified" (NOT 'other'): 'other' is
+// a real model verdict that excludes a sheet from analysis, while a failed API
+// call says nothing about the sheet. Unclassified pages default INTO the
+// analysis set so a transient 429 can never silently drop utility sheets.
+const FALLBACK = { classification: 'unclassified', sheet_number: null, sheet_title: null }
+
 async function classifyBatch(batchImages) {
   const contentParts = []
   batchImages.forEach((b64, i) => {
@@ -93,44 +114,57 @@ async function classifyBatch(batchImages) {
   })
   contentParts.push({ type: 'text', text: CLASSIFY_PROMPT })
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5-20251001',
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: contentParts }],
-    }),
-  })
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        // Enough headroom for a full sheet-index table — 1024 truncated them.
+        max_tokens: 4096,
+        temperature: 0,
+        messages: [{ role: 'user', content: contentParts }],
+      }),
+    })
 
-  if (!res.ok) {
-    const errText = await res.text()
-    console.error('Haiku classification error:', res.status, errText.slice(0, 200))
-    return batchImages.map(() => ({ classification: 'other', sheet_number: null, sheet_title: null }))
+    if (!res.ok) {
+      const errText = await res.text()
+      console.error(`Haiku classification error (attempt ${attempt}):`, res.status, errText.slice(0, 200))
+      if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+        await new Promise(r => setTimeout(r, attempt * 5000))
+        continue
+      }
+      return batchImages.map(() => ({ ...FALLBACK }))
+    }
+
+    const data = await res.json()
+    const text = (data.content || []).map(b => (b.type === 'text' ? b.text : '')).join('') || '[]'
+
+    try {
+      const clean = text.replace(/```json\s?|```/g, '').trim()
+      const parsed = JSON.parse(clean)
+      const arr = Array.isArray(parsed) ? parsed : Array.isArray(parsed.results) ? parsed.results : null
+      // Truncate hallucinated extras — one spurious entry misaligns every
+      // subsequent page's classification for the rest of the document.
+      if (arr) return arr.slice(0, batchImages.length)
+    } catch (e) {
+      console.error('Classification parse error:', e.message, text.slice(0, 200))
+    }
+    return batchImages.map(() => ({ ...FALLBACK }))
   }
-
-  const data = await res.json()
-  const text = data.content?.[0]?.text || '[]'
-
-  try {
-    const clean = text.replace(/```json\s?|```/g, '').trim()
-    const parsed = JSON.parse(clean)
-    if (Array.isArray(parsed)) return parsed
-    if (Array.isArray(parsed.results)) return parsed.results
-  } catch (e) {
-    console.error('Classification parse error:', e.message, text.slice(0, 200))
-  }
-
-  return batchImages.map(() => ({ classification: 'other', sheet_number: null, sheet_title: null }))
+  return batchImages.map(() => ({ ...FALLBACK }))
 }
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') {
     return { statusCode: 405 }
+  }
+  if (!fnSecretOk(event.headers)) {
+    return { statusCode: 401, body: 'Unauthorized' }
   }
 
   try {
@@ -202,7 +236,7 @@ export const handler = async (event) => {
       const batchResults = await classifyBatch(batchImages)
       // Pad fallback if Haiku returned fewer results than images
       while (batchResults.length < batchImages.length) {
-        batchResults.push({ classification: 'other', sheet_number: null, sheet_title: null })
+        batchResults.push({ ...FALLBACK })
       }
       allClassifications.push(...batchResults)
 
@@ -211,9 +245,10 @@ export const handler = async (event) => {
     }
   } catch (triageErr) {
     console.error('Triage error:', triageErr.message)
-    // Fill remaining with 'other' fallback so rasterization still runs
+    // Fill remaining as unclassified (defaults into analysis) so rasterization
+    // still runs and no utility sheet is silently excluded.
     while (allClassifications.length < pageCount) {
-      allClassifications.push({ classification: 'other', sheet_number: null, sheet_title: null })
+      allClassifications.push({ ...FALLBACK })
     }
   }
 
@@ -256,7 +291,7 @@ export const handler = async (event) => {
       page.destroy()
 
       const pagePath = `${baseStoragePath}/pages/page_${pageNum}.png`
-      const cls = allClassifications[i] || { classification: 'other', sheet_number: null, sheet_title: null }
+      const cls = allClassifications[i] || { ...FALLBACK }
 
       const { error: uploadErr } = await supabase.storage
         .from('plan-uploads')
@@ -276,7 +311,10 @@ export const handler = async (event) => {
           sheet_title: cls.sheet_title || null,
         }).eq('id', sheet_id)
       } else {
-        await supabase.from('sheets').insert({
+        // Upsert on (project_id, page_number) — a re-run after a mid-loop
+        // failure must update the existing rows, not insert duplicates that
+        // double every downstream tile and quantity.
+        const { error: upErr } = await supabase.from('sheets').upsert({
           project_id,
           page_number: pageNum,
           storage_path: pagePath,
@@ -285,7 +323,8 @@ export const handler = async (event) => {
           included_in_analysis: ANALYSIS_TYPES.has(cls.classification),
           sheet_number: cls.sheet_number || null,
           sheet_title: cls.sheet_title || null,
-        })
+        }, { onConflict: 'project_id,page_number' })
+        if (upErr) console.error(`Page ${pageNum} sheet upsert failed:`, upErr.message)
       }
 
       const progress = 40 + Math.round((pageNum / pageCount) * 55)
