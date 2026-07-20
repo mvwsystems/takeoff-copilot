@@ -1763,6 +1763,7 @@ INSTRUCTIONS:
       {/* ONBOARDING SEQUENCE */}
       <OnboardingFlow
         open={showOnboarding}
+        billingLive={import.meta.env.VITE_BILLING_ENABLED === 'true'}
         initialProfile={{ full_name: onboardName, company: onboardCompany, phone: onboardPhone }}
         onComplete={(profile) => {
           setOnboardName(profile.full_name || '')

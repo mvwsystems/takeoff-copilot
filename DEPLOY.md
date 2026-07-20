@@ -25,6 +25,7 @@ Status legend: ✅ already in place · ⚙️ you must set it · 🔵 optional.
 | `STRIPE_WEBHOOK_SECRET` | ⚙️ | Verifies Stripe webhook calls (see §4) |
 | `STRIPE_PRICE_ID` | 🔵 | Use a Stripe Price instead of the inline $97 |
 | `TAKEOFF_PRICE_CENTS` | 🔵 | Override the price in cents (default 9700 = $97) |
+| `VITE_BILLING_ENABLED` | ⚙️ | Set to `true` when Stripe is live so the onboarding shows the "$97 per plan set" line. Leave unset while free. Build-time flag (redeploy after changing). |
 
 ---
 

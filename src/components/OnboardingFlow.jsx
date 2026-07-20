@@ -17,7 +17,7 @@ const TOTAL_STEPS = 5
  * - onComplete      (profile) => void — receives { full_name, company, phone }
  * - onSkip          () => void — close without completing
  */
-export default function OnboardingFlow({ open, initialProfile, onComplete, onSkip }) {
+export default function OnboardingFlow({ open, initialProfile, onComplete, onSkip, billingLive = false }) {
   const [step, setStep] = useState(0)
   const [dir, setDir] = useState('fwd')
   const [confirmingSkip, setConfirmingSkip] = useState(false)
@@ -118,7 +118,9 @@ export default function OnboardingFlow({ open, initialProfile, onComplete, onSki
   ]
 
   const readyItems = [
-    { icon: DollarSign, text: 'Free to upload and preview your sheets. $97 per plan set to run the full takeoff — re-runs, edits, and exports of that set are included.' },
+    // Pricing line only appears once billing is live (VITE_BILLING_ENABLED),
+    // so testers in the free window aren't told about a charge that won't happen.
+    ...(billingLive ? [{ icon: DollarSign, text: 'Free to upload and preview your sheets. $97 per plan set to run the full takeoff — re-runs, edits, and exports of that set are included.' }] : []),
     { icon: FileText, text: 'Have your plan PDF ready — up to 100 MB.' },
     { icon: Gauge, text: 'Best fit: single-level pad sites & site-civil plans (storm, sanitary, water). Not built for multi-level building risers.' },
     { icon: BookOpen, text: 'The Reference Bank (book icon, top bar) answers questions any time.' },
