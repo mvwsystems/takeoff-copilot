@@ -68,6 +68,8 @@ export default function AdminPage() {
   const [fetching, setFetching] = useState(true)
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState({})
+  const [accuracy, setAccuracy] = useState(null)
+  const [corrections, setCorrections] = useState([])
 
   // ── Calibration state ──
   const [calProjects, setCalProjects] = useState([])
@@ -185,6 +187,14 @@ export default function AdminPage() {
       setJobs(j || [])
       setFeedback(f || [])
       setFetching(false)
+
+      // House accuracy rollup + recent corrections feed.
+      const [{ data: acc }, { data: corr }] = await Promise.all([
+        supabase.rpc('accuracy_stats'),
+        supabase.from('corrections').select('item_no, description, field, original_value, corrected_value, source, screening_grade, created_at').order('created_at', { ascending: false }).limit(40),
+      ])
+      if (acc && !acc.error) setAccuracy(acc)
+      setCorrections(corr || [])
     }
     load()
   }, [user, loading, navigate])
@@ -282,6 +292,90 @@ export default function AdminPage() {
           </button>
         </div>
       </div>
+
+      {/* ── HOUSE ACCURACY ── */}
+      {accuracy && (
+        <div className="cal-section" style={{ marginBottom: 20 }}>
+          <div className="cal-header">
+            <span className="cal-title">House Accuracy</span>
+            <span className="titan-label" style={{ fontSize: '0.62rem' }}>Agreement = share of AI line items the estimator did not correct</span>
+          </div>
+          <div className="admin-header-stats" style={{ padding: '14px 0', flexWrap: 'wrap', gap: 20 }}>
+            <div className="admin-stat">
+              <span className="admin-stat-value" style={{ color: 'var(--titan-red)' }}>{accuracy.agreement_rate != null ? `${accuracy.agreement_rate}%` : '—'}</span>
+              <span className="admin-stat-label">Agreement Rate</span>
+            </div>
+            <div className="admin-stat">
+              <span className="admin-stat-value">{accuracy.takeoffs || 0}</span>
+              <span className="admin-stat-label">Takeoffs</span>
+            </div>
+            <div className="admin-stat">
+              <span className="admin-stat-value">{(accuracy.line_items || 0).toLocaleString()}</span>
+              <span className="admin-stat-label">Line Items</span>
+            </div>
+            <div className="admin-stat">
+              <span className="admin-stat-value">{accuracy.edited_items || 0}</span>
+              <span className="admin-stat-label">Corrected</span>
+            </div>
+            <div className="admin-stat">
+              <span className="admin-stat-value">
+                {accuracy.engineer_matched ? `${Math.round((accuracy.engineer_within_5 / accuracy.engineer_matched) * 100)}%` : '—'}
+              </span>
+              <span className="admin-stat-label">Within 5% of Engineer</span>
+            </div>
+            <div className="admin-stat">
+              <span className="admin-stat-value">
+                {accuracy.engineer_matched ? `${Math.round((accuracy.engineer_within_15 / accuracy.engineer_matched) * 100)}%` : '—'}
+              </span>
+              <span className="admin-stat-label">Within 15%</span>
+            </div>
+          </div>
+
+          {accuracy.by_grade?.length > 0 && (
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+              {accuracy.by_grade.filter(g => g.grade !== '?').map(g => (
+                <div key={g.grade} style={{
+                  padding: '8px 14px', border: '1px solid var(--titan-border)', borderRadius: 6,
+                  background: 'var(--titan-card)', fontSize: '0.8rem',
+                }}>
+                  <strong>Grade {g.grade}</strong>: {g.agreement != null ? `${g.agreement}% agreement` : '—'}
+                  <span className="text-dim"> · {g.total} items</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="text-dim" style={{ fontSize: '0.72rem', lineHeight: 1.6, marginTop: 6 }}>
+            Marketing-ready when the sample is large enough: e.g. &ldquo;{accuracy.by_grade?.find(g => g.grade === 'A')?.agreement ?? '—'}% agreement on Grade A across {accuracy.by_grade?.find(g => g.grade === 'A')?.total ?? 0} line items.&rdquo;
+            {accuracy.corrections != null && ` ${accuracy.corrections} corrections captured for rule drafting.`}
+          </p>
+
+          {corrections.length > 0 && (
+            <details style={{ marginTop: 10 }}>
+              <summary style={{ cursor: 'pointer', fontSize: '0.78rem', color: 'var(--titan-text)' }}>
+                Recent corrections ({corrections.length}) — the raw material for Brain rules
+              </summary>
+              <div style={{ maxHeight: 260, overflowY: 'auto', marginTop: 8 }}>
+                <table className="titan-table" style={{ fontSize: '0.72rem' }}>
+                  <thead><tr>{['When', 'Grade', 'Field', 'Item', 'Was', 'Now', 'Via'].map(h => <th key={h}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {corrections.map((c, i) => (
+                      <tr key={i}>
+                        <td className="text-dim">{formatDate(c.created_at)}</td>
+                        <td>{c.screening_grade || '—'}</td>
+                        <td>{c.field}</td>
+                        <td style={{ maxWidth: 220 }}>{c.description || `#${c.item_no ?? '—'}`}</td>
+                        <td className="text-dim">{c.original_value ?? '—'}</td>
+                        <td style={{ fontWeight: 600 }}>{c.corrected_value ?? '—'}</td>
+                        <td className="text-dim">{c.source}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
+        </div>
+      )}
 
       {/* ── CALIBRATION HARNESS ── */}
       <div className="cal-section">

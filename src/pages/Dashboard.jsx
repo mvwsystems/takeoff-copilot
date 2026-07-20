@@ -507,6 +507,13 @@ INSTRUCTIONS:
     const newResult = { ...res, items: newItems }
     setResults(prev => ({ ...prev, [activeImage]: newResult }))
     persistResolvedResult(newResult)
+    recordCorrections([{
+      item_no: action.item_no ?? null,
+      description: action.description || null,
+      field: action.type === 'update_item' ? 'quantity' : action.type === 'add_item' ? 'added' : action.type === 'remove_item' ? 'removed' : 'note',
+      original: null,
+      corrected: action.quantity ?? action.note ?? action.description ?? null,
+    }], 'chat')
     return summary
   }
 
@@ -594,6 +601,10 @@ INSTRUCTIONS:
 
   const applyResolution = (c, verdict, rawAnswer) => {
     const res = results[activeImage]
+    const corrections = []
+    const target = c.item_no != null ? (res.items || []).find(i => i.item_no === c.item_no) : null
+    if (target && verdict.depth_ft != null) corrections.push({ item_no: c.item_no, description: target.description, field: 'depth', original: target.depth_max ?? null, corrected: verdict.depth_ft })
+    if (target && verdict.quantity != null) corrections.push({ item_no: c.item_no, description: target.description, field: 'quantity', original: target.quantity ?? null, corrected: verdict.quantity })
     const newItems = (res.items || []).map(it => {
       if (c.item_no == null || it.item_no !== c.item_no) return it
       const upd = { ...it }
@@ -621,7 +632,31 @@ INSTRUCTIONS:
     const newResult = { ...res, items: newItems, clarifications: newClar }
     setResults(prev => ({ ...prev, [activeImage]: newResult }))
     persistResolvedResult(newResult)
+    recordCorrections(corrections, 'clarification')
     return newResult
+  }
+
+  // Records estimator corrections structurally (not just in the result blob)
+  // so accuracy is measurable and corrections seed future Brain rules.
+  const recordCorrections = (list, source) => {
+    if (!user || !list?.length) return
+    const img = images[activeImage]
+    const grade = screenings[activeImage]?.grade || results[activeImage]?.plan_screening?.grade || null
+    const rows = list.map(c => ({
+      user_id: user.id,
+      project_id: img?.project_id || null,
+      job_id: activeJobId || null,
+      item_no: c.item_no ?? null,
+      description: (c.description || '').slice(0, 300) || null,
+      field: c.field,
+      original_value: c.original == null ? null : String(c.original).slice(0, 200),
+      corrected_value: c.corrected == null ? null : String(c.corrected).slice(0, 200),
+      source,
+      screening_grade: grade,
+    }))
+    supabase.from('corrections').insert(rows).then(({ error }) => {
+      if (error) console.warn('correction log failed:', error.message)
+    })
   }
 
   // ── Inline line-item editing ──────────────────────────────────
@@ -640,18 +675,20 @@ INSTRUCTIONS:
       setError('Quantity must be a non-negative number.')
       return
     }
+    const corrections = []
     const newItems = (res.items || []).map(it => {
       if (it.item_no !== itemNo) return it
       const changed = []
-      if (qty !== it.quantity) changed.push(`qty ${it.quantity ?? '—'} → ${qty ?? '—'}`)
-      if (editDraft.unit !== it.unit) changed.push(`unit ${it.unit} → ${editDraft.unit}`)
-      if (editDraft.description !== it.description) changed.push('description')
+      const newUnit = (editDraft.unit || it.unit || '').toUpperCase().slice(0, 8)
+      if (qty !== it.quantity) { changed.push(`qty ${it.quantity ?? '—'} → ${qty ?? '—'}`); corrections.push({ item_no: itemNo, description: it.description, field: 'quantity', original: it.quantity, corrected: qty }) }
+      if (newUnit !== it.unit) { changed.push(`unit ${it.unit} → ${newUnit}`); corrections.push({ item_no: itemNo, description: it.description, field: 'unit', original: it.unit, corrected: newUnit }) }
+      if (editDraft.description !== it.description) { changed.push('description'); corrections.push({ item_no: itemNo, description: it.description, field: 'description', original: it.description, corrected: editDraft.description }) }
       if (!changed.length) return it
       return {
         ...it,
         description: editDraft.description,
         quantity: qty,
-        unit: (editDraft.unit || it.unit || '').toUpperCase().slice(0, 8),
+        unit: newUnit,
         confidence: 'HIGH',
         edited: true,
         notes: `✎ Estimator edited (${changed.join(', ')}). ${it.notes || ''}`.slice(0, 600),
@@ -660,6 +697,7 @@ INSTRUCTIONS:
     const newResult = { ...res, items: newItems }
     setResults(prev => ({ ...prev, [activeImage]: newResult }))
     persistResolvedResult(newResult)
+    recordCorrections(corrections, 'inline_edit')
     setEditingItem(null)
   }
 
