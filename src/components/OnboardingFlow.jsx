@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import {
   Upload, LayoutGrid, Layers, FileCheck,
   BookOpen, FileText, Gauge, ArrowRight, ArrowLeft,
-  MessageCircleQuestion, Flag, ShieldCheck,
+  MessageCircleQuestion, Flag, ShieldCheck, DollarSign,
 } from 'lucide-react'
 import './OnboardingFlow.css'
 
@@ -95,7 +95,7 @@ export default function OnboardingFlow({ open, initialProfile, onComplete, onSki
   const howItWorks = [
     { icon: Upload, title: 'Upload your PDF', desc: 'Drop in the plan set — up to 100 MB.' },
     { icon: LayoutGrid, title: 'Sheets auto-classified', desc: 'You pick which sheets to analyze.' },
-    { icon: Layers, title: '5-pass AI analysis', desc: 'Plan, profiles, merge, small-lines sweep, engineer-table check.' },
+    { icon: Layers, title: '6-pass AI analysis', desc: 'Plan quantities, profiles, grading-plan depths, merge, small-line sweep, engineer-table check.' },
     { icon: FileCheck, title: 'Review & export', desc: 'Answer the AI’s questions, then export.' },
   ]
 
@@ -118,6 +118,7 @@ export default function OnboardingFlow({ open, initialProfile, onComplete, onSki
   ]
 
   const readyItems = [
+    { icon: DollarSign, text: 'Free to upload and preview your sheets. $97 per plan set to run the full takeoff — re-runs, edits, and exports of that set are included.' },
     { icon: FileText, text: 'Have your plan PDF ready — up to 100 MB.' },
     { icon: Gauge, text: 'Best fit: single-level pad sites & site-civil plans (storm, sanitary, water). Not built for multi-level building risers.' },
     { icon: BookOpen, text: 'The Reference Bank (book icon, top bar) answers questions any time.' },

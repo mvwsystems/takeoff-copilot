@@ -32,7 +32,8 @@ export default function LoginPage() {
 
         <Auth
           supabaseClient={supabase}
-          providers={['google', 'azure', 'apple']}
+          providers={[]}
+          onlyThirdPartyProviders={false}
           redirectTo={`${window.location.origin}/dashboard`}
           appearance={{
             theme: ThemeSupa,
