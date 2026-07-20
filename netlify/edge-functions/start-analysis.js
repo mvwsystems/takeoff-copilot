@@ -112,6 +112,41 @@ export default async (request) => {
     })
   }
 
+  // ── Billing gate ──────────────────────────────────────────
+  // Charged once per project (first analysis); re-runs/retries are free.
+  // When Stripe isn't configured (STRIPE_SECRET_KEY absent) billing is off and
+  // everything runs free — flip it on by setting the Stripe env vars.
+  // Calibration runs never charge. Uses the service role for the atomic RPC;
+  // the RPC itself re-checks that the project belongs to this user.
+  const billingOn = !!Deno.env.get('STRIPE_SECRET_KEY')
+  let charged = false
+  if (billingOn && !jobConfig?.calibration) {
+    const svc = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))
+    const { data: outcome, error: chargeErr } = await svc.rpc('charge_project', {
+      p_project: project_id, p_user: user.id,
+    })
+    if (chargeErr) {
+      return new Response(JSON.stringify({ error: 'Could not verify your takeoff credit — try again.' }), {
+        status: 500, headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    if (outcome === 'insufficient') {
+      return new Response(JSON.stringify({ error: 'payment_required', reason: 'no_credit' }), {
+        status: 402, headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    charged = outcome === 'charged'
+  }
+
+  // Refunds the credit if the run can't actually be launched — the customer
+  // must never pay for a takeoff that never started.
+  const refundIfCharged = async () => {
+    if (!charged) return
+    const svc = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))
+    await svc.rpc('grant_credits', { p_user: user.id, p_qty: 1, p_session: `refund_${project_id}_${Date.now()}` })
+    await svc.from('projects').update({ paid_at: null }).eq('id', project_id)
+  }
+
   const { data: job, error: jobErr } = await supabase
     .from('processing_jobs')
     .insert({ project_id, kind: 'analysis', stage: 'analysis_queued', progress: 0, config: jobConfig })
@@ -119,6 +154,7 @@ export default async (request) => {
     .single()
 
   if (jobErr) {
+    await refundIfCharged()
     return new Response(JSON.stringify({ error: `Could not create job: ${jobErr.message}` }), {
       status: 500, headers: { 'Content-Type': 'application/json' },
     })
@@ -145,12 +181,13 @@ export default async (request) => {
       .from('processing_jobs')
       .update({ stage: 'error', error: `Could not start analysis: ${err.message}` })
       .eq('id', job.id)
+    await refundIfCharged()
     return new Response(JSON.stringify({ error: err.message }), {
       status: 502, headers: { 'Content-Type': 'application/json' },
     })
   }
 
-  return new Response(JSON.stringify({ job_id: job.id, sheet_count: count }), {
+  return new Response(JSON.stringify({ job_id: job.id, sheet_count: count, charged }), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   })
 }

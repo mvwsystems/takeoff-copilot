@@ -119,7 +119,7 @@ export default function OnboardingFlow({ open, initialProfile, onComplete, onSki
 
   const readyItems = [
     { icon: FileText, text: 'Have your plan PDF ready — up to 100 MB.' },
-    { icon: Gauge, text: 'Grade A/B vector sets score best.' },
+    { icon: Gauge, text: 'Best fit: single-level pad sites & site-civil plans (storm, sanitary, water). Not built for multi-level building risers.' },
     { icon: BookOpen, text: 'The Reference Bank (book icon, top bar) answers questions any time.' },
   ]
 

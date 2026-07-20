@@ -38,6 +38,10 @@ export default function Dashboard() {
   const [clarifyPrompt, setClarifyPrompt] = useState(null) // { count } — post-analysis "AI has questions" popup
   const [editingItem, setEditingItem] = useState(null)     // item_no being edited inline
   const [editDraft, setEditDraft] = useState({})           // { description, quantity, unit }
+  const [credits, setCredits] = useState(null)             // takeoff credits; null = billing off / unknown
+  const [billingOn, setBillingOn] = useState(false)
+  const [paywall, setPaywall] = useState(null)             // { projectId, imgIdx } when a purchase is needed
+  const [buying, setBuying] = useState(false)
   const [onboardName, setOnboardName] = useState('')
   const [onboardCompany, setOnboardCompany] = useState('')
   const [onboardPhone, setOnboardPhone] = useState('')
@@ -717,6 +721,53 @@ INSTRUCTIONS:
       if (data) setMaterialsMap(Object.fromEntries(data.map(m => [m.slug, m])))
     })
   }, [])
+
+  // Takeoff-credit balance. Billing is "on" only when a user_credits row exists
+  // (created on first purchase); until then the server decides free vs paid, and
+  // the UI just shows the balance when there is one.
+  const loadCredits = useCallback(async () => {
+    if (!user) return
+    const { data } = await supabase.from('user_credits').select('balance').eq('user_id', user.id).maybeSingle()
+    if (data) { setCredits(data.balance); setBillingOn(true) }
+  }, [user])
+  useEffect(() => { loadCredits() }, [loadCredits])
+
+  // Handle the return trip from Stripe Checkout (?checkout=success|cancel).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const status = params.get('checkout')
+    if (!status) return
+    window.history.replaceState({}, '', window.location.pathname)
+    if (status === 'success') {
+      setBillingOn(true)
+      // The webhook grants the credit; poll briefly until the balance reflects it.
+      let tries = 0
+      const poll = setInterval(async () => {
+        tries++
+        const { data } = await supabase.from('user_credits').select('balance').eq('user_id', user?.id).maybeSingle()
+        if (data) setCredits(data.balance)
+        if ((data && data.balance > 0) || tries >= 8) clearInterval(poll)
+      }, 1500)
+    }
+  }, [user])
+
+  const startCheckout = async () => {
+    setBuying(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/create-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ return_to: '/dashboard' }),
+      })
+      const data = await res.json()
+      if (!res.ok || !data.url) throw new Error(data.error || 'Checkout unavailable')
+      window.location.href = data.url   // redirect to Stripe-hosted checkout
+    } catch (err) {
+      setError(`Could not start checkout: ${err.message}`)
+      setBuying(false)
+    }
+  }
 
   // Skip onboarding for users who already have a Supabase profile
   useEffect(() => {
@@ -1408,11 +1459,20 @@ INSTRUCTIONS:
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
         body: JSON.stringify({ project_id: projectId, geotech }),
       })
+      // 402 → out of takeoff credits. Open the paywall instead of erroring.
+      if (res.status === 402) {
+        setBillingOn(true)
+        setCredits(0)
+        setPaywall({ projectId, imgIdx })
+        return
+      }
       if (!res.ok) {
-        const msg = await res.text()
-        throw new Error(msg.slice(0, 160) || `start-analysis failed (${res.status})`)
+        let msg = `start-analysis failed (${res.status})`
+        try { const j = await res.json(); if (j.error) msg = j.error } catch { /* text */ }
+        throw new Error(msg)
       }
       const { job_id } = await res.json()
+      loadCredits()   // a credit may have been spent — refresh the badge
       setImages(prev => prev.map((img, i) =>
         i === imgIdx
           ? { ...img, job_id, jobStage: 'analysis_queued', jobProgress: 0, jobDetail: 'Queued for analysis', jobError: null }
@@ -1541,6 +1601,36 @@ INSTRUCTIONS:
 
       {/* REFERENCE BANK (help slide-over) */}
       <ReferenceBank open={referenceOpen} onClose={() => setReferenceOpen(false)} />
+
+      {/* PAYWALL — one takeoff = $97, charged once per plan set */}
+      {paywall && (
+        <div className="modal-overlay" onClick={() => setPaywall(null)}>
+          <div className="modal card" style={{ maxWidth: 460, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+            <button className="material-card-close" onClick={() => setPaywall(null)}><X size={16} /></button>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: '2.4rem', color: 'var(--titan-red)', lineHeight: 1 }}>$97</div>
+            <div className="titan-label" style={{ marginTop: 4 }}>Per takeoff // one plan set</div>
+            <h3 style={{ marginTop: 14, marginBottom: 8 }}>Run the full takeoff</h3>
+            <p className="text-dim" style={{ fontSize: '0.85rem', lineHeight: 1.6, marginBottom: 8 }}>
+              You've reviewed the sheet map for free. Unlock the complete multi-pass
+              analysis for this plan set — every pipe, structure, depth, trench-safety
+              LF, engineer-table variance, and the exportable report.
+            </p>
+            <p className="text-dim" style={{ fontSize: '0.78rem', lineHeight: 1.6, marginBottom: 18 }}>
+              One-time charge. Re-runs, edits, and exports of this same plan set are included —
+              you only pay again for a <em>new</em> plan set. Your account and past takeoffs are always free.
+            </p>
+            <button className="btn btn-primary btn-lg" style={{ width: '100%' }} disabled={buying} onClick={startCheckout}>
+              {buying ? 'Opening checkout…' : 'Buy this takeoff — $97'}
+            </button>
+            <button className="btn btn-ghost" style={{ marginTop: 8, fontSize: '0.78rem' }} onClick={() => setPaywall(null)}>
+              Maybe later
+            </button>
+            <p className="text-muted" style={{ fontSize: '0.68rem', marginTop: 12 }}>
+              Secure checkout by Stripe. Need volume pricing? <a href="mailto:hello@6signal.co" style={{ color: 'var(--titan-red)' }}>Contact us</a>.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* AI-HAS-QUESTIONS POPUP — surfaces pipeline clarifications loudly */}
       {clarifyPrompt && (
@@ -1891,9 +1981,19 @@ INSTRUCTIONS:
           >
             QA Mode
           </button>
+          {billingOn && (
+            <button
+              className="btn btn-ghost"
+              style={{ marginLeft: 'auto', fontSize: '0.75rem' }}
+              onClick={() => setPaywall({ projectId: null, imgIdx: null })}
+              title="Takeoff credits — click to buy more"
+            >
+              {credits ?? 0} takeoff{(credits ?? 0) === 1 ? '' : 's'} left
+            </button>
+          )}
           <button
             className="btn btn-ghost"
-            style={{ marginLeft: 'auto', fontSize: '0.75rem' }}
+            style={{ marginLeft: billingOn ? 8 : 'auto', fontSize: '0.75rem' }}
             onClick={() => setReferenceOpen(true)}
             title="Reference Bank — how everything works"
           >
@@ -1913,6 +2013,18 @@ INSTRUCTIONS:
             <button className="btn btn-primary btn-lg" onClick={() => fileInputRef.current?.click()}>
               <Upload size={18} /> Select Files
             </button>
+            <div className="scope-note" style={{
+              marginTop: 22, maxWidth: 520, fontSize: '0.78rem', lineHeight: 1.6,
+              color: 'var(--titan-text-muted)', borderTop: '1px solid var(--titan-border)', paddingTop: 16,
+            }}>
+              <strong style={{ color: 'var(--titan-text)' }}>Best fit:</strong> single-level pad sites, commercial site
+              development, and subdivision utility plans — storm, sanitary, and water in plan &amp; profile.
+              Every plan is graded A/B/C before you commit. Not built for vertical/multi-level building plumbing
+              risers or multi-story MEP.{' '}
+              <button className="btn-link" style={{ color: 'var(--titan-red)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, font: 'inherit' }} onClick={() => setReferenceOpen(true)}>
+                What works best →
+              </button>
+            </div>
           </div>
         ) : (
           <>

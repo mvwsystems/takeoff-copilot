@@ -49,6 +49,7 @@ const FAQS = [
 
 const SECTIONS = [
   { id: 'capabilities', label: 'CAPABILITIES' },
+  { id: 'built-for',    label: 'BUILT FOR'    },
   { id: 'sample-job',   label: 'SAMPLE JOB'   },
   { id: 'workflow',     label: 'WORKFLOW'      },
   { id: 'accuracy',     label: 'ACCURACY'      },
@@ -464,6 +465,82 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* BUILT FOR — scope / fit */}
+      <section className="fit-section" id="built-for">
+        <div className="fit-inner">
+          <div className="section-header" data-reveal>
+            <span className="titan-label">// Scope &amp; Fit</span>
+            <h2>Built For Site &amp; Civil Utilities</h2>
+            <p className="section-sub">
+              Optimized for single-level site work &mdash; not vertical building plumbing.
+              Every plan is screened A / B / C before you commit a dollar, so you never
+              pay to find out it wasn&apos;t a fit.
+            </p>
+          </div>
+
+          <div className="fit-grid" data-reveal>
+
+            {/* Best fit */}
+            <div className="fit-card fit-card-best">
+              <div className="fit-card-head">
+                <span className="fit-tag fit-tag-best">Best Fit</span>
+                <span className="fit-grade fit-grade-a">A</span>
+              </div>
+              <h4 className="fit-card-title">Single-Level Site &amp; Civil Plans</h4>
+              <ul className="fit-list">
+                <li>Pad sites &amp; commercial site development</li>
+                <li>Subdivision utility plans</li>
+                <li>Storm, sanitary &amp; water &mdash; plan + profile</li>
+              </ul>
+              <p className="fit-card-note">
+                Calibrated for exactly this work. Highest confidence, cleanest extraction.
+              </p>
+            </div>
+
+            {/* Works but grades lower */}
+            <div className="fit-card fit-card-mid">
+              <div className="fit-card-head">
+                <span className="fit-tag fit-tag-mid">Works &mdash; Grades Lower</span>
+                <span className="fit-grade fit-grade-c">C</span>
+              </div>
+              <h4 className="fit-card-title">Dense, Poorly-Drafted, or Scanned Sets</h4>
+              <ul className="fit-list">
+                <li>Cluttered or hand-marked plans</li>
+                <li>Scanned, raster-only sheets &mdash; no vector data</li>
+                <li>Incomplete or low-resolution sets</li>
+              </ul>
+              <p className="fit-card-note">
+                Still runs &mdash; but the report flags exactly what it couldn&apos;t confirm and
+                grades it honestly, so you know where to verify.
+              </p>
+            </div>
+
+            {/* Not designed for */}
+            <div className="fit-card fit-card-no">
+              <div className="fit-card-head">
+                <span className="fit-tag fit-tag-no">Not Designed For</span>
+                <span className="fit-grade fit-grade-x">&mdash;</span>
+              </div>
+              <h4 className="fit-card-title">Vertical / Multi-Level Building Plumbing</h4>
+              <ul className="fit-list">
+                <li>Plumbing risers &amp; stacks</li>
+                <li>Multi-story MEP</li>
+                <li>Scope that lives in section, not in plan</li>
+              </ul>
+              <p className="fit-card-note">
+                Out of scope by design. We&apos;d rather tell you up front than waste your spend.
+              </p>
+            </div>
+
+          </div>
+
+          <p className="fit-footnote" data-reveal>
+            Not sure your set qualifies? Upload it. The plan screen grades it A, B, or C
+            before you run the analysis &mdash; no charge to find out where it lands.
+          </p>
+        </div>
+      </section>
+
       {/* HOW WE CALIBRATE */}
       <section className="calibration-section" id="sample-job">
         <div className="calibration-inner">
@@ -756,8 +833,8 @@ export default function LandingPage() {
           <div className="pricing-col-left">
             <div className="section-header pricing-section-header" data-reveal>
               <span className="titan-label">Pricing</span>
-              <h2>Simple. Per Report.</h2>
-              <p className="section-sub">No subscription. No seat fees. Pay when you need a second set of eyes.</p>
+              <h2>Simple. Per Plan Set.</h2>
+              <p className="section-sub">No subscription. No seat fees. Creating an account, uploading plans, and viewing past takeoffs are free &mdash; you only pay when you run the analysis.</p>
             </div>
             <div data-reveal>
               <div className="pricing-card">
@@ -768,7 +845,17 @@ export default function LandingPage() {
                     <span className="pricing-num">97</span>
                     <span className="pricing-per">/ report</span>
                   </div>
-                  <p className="pricing-tagline">One submission. Full Bid Risk Report. Downloadable PDF.</p>
+                  <p className="pricing-tagline">One plan set. Full Bid Risk Report. Downloadable PDF.</p>
+                </div>
+                <div className="pricing-billing">
+                  <div className="pricing-billing-row">
+                    <span className="pricing-billing-tag pricing-billing-tag-free">Free</span>
+                    <span className="pricing-billing-text">Create an account, upload your plans, and view every past takeoff &mdash; no charge.</span>
+                  </div>
+                  <div className="pricing-billing-row">
+                    <span className="pricing-billing-tag pricing-billing-tag-paid">$97</span>
+                    <span className="pricing-billing-text">Charged once when you run the full multi-pass analysis on a new plan set. Re-runs of that same set are included.</span>
+                  </div>
                 </div>
                 <ul className="pricing-features">
                   {[
@@ -793,7 +880,7 @@ export default function LandingPage() {
                     <Upload size={16} />
                     Submit a Bid for QA Review
                   </Link>
-                  <p className="pricing-disclaimer">Upload your plans, geotech, and takeoff. Report is ready immediately.</p>
+                  <p className="pricing-disclaimer">Uploading and previewing are free. You&apos;re only charged the $97 when you run the full analysis on a new plan set. Report is ready immediately.</p>
                 </div>
               </div>
             </div>
@@ -1054,7 +1141,8 @@ export default function LandingPage() {
             </Link>
           </div>
           <p className="cta-disclaimer">
-            $97 per report. No subscription. Download the PDF immediately.
+            Free to create an account, upload, and view past takeoffs. $97 per plan set,
+            charged only when you run the analysis. No subscription.
           </p>
         </div>
       </section>

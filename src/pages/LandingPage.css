@@ -810,6 +810,138 @@
 }
 
 /* ============================================================
+   BUILT FOR — scope / fit
+   ============================================================ */
+
+.fit-section {
+  padding: var(--space-3xl) var(--space-lg);
+  background: var(--bg);
+}
+
+.fit-inner {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.fit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-md);
+  margin-top: var(--space-xl);
+}
+
+.fit-card {
+  position: relative;
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border);
+  border-top: 2px solid var(--titan-border);
+  border-radius: 4px;
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  transition:
+    border-color 0.4s var(--ease-silk),
+    transform    0.4s var(--ease-lux),
+    box-shadow   0.4s var(--ease-silk);
+}
+
+.fit-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.4);
+}
+
+.fit-card-best { border-top-color: #34d399; }
+.fit-card-mid  { border-top-color: #fbbf24; }
+.fit-card-no   { border-top-color: #E8372C; }
+
+.fit-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-md);
+}
+
+.fit-tag {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.fit-tag-best { background: rgba(52, 211, 153, 0.1); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.28); }
+.fit-tag-mid  { background: rgba(251, 191, 36, 0.1); color: #fbbf24; border: 1px solid rgba(251, 191, 36, 0.28); }
+.fit-tag-no   { background: rgba(232, 55, 44, 0.1); color: #E8372C; border: 1px solid rgba(232, 55, 44, 0.28); }
+
+.fit-grade {
+  font-family: var(--font-display);
+  font-size: 1.9rem;
+  line-height: 1;
+}
+
+.fit-grade-a { color: #34d399; text-shadow: 0 0 18px rgba(52, 211, 153, 0.35); }
+.fit-grade-c { color: #fbbf24; text-shadow: 0 0 18px rgba(251, 191, 36, 0.35); }
+.fit-grade-x { color: #E8372C; }
+
+.fit-card-title {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  color: var(--titan-white);
+  margin-bottom: var(--space-md);
+  line-height: 1.15;
+}
+
+.fit-list {
+  list-style: none;
+  margin: 0 0 var(--space-md);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.fit-list li {
+  position: relative;
+  padding-left: 18px;
+  font-size: 0.82rem;
+  color: var(--titan-text-dim);
+  line-height: 1.5;
+}
+
+.fit-list li::before {
+  content: '//';
+  position: absolute;
+  left: 0;
+  top: 1px;
+  color: var(--titan-red);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  opacity: 0.55;
+}
+
+.fit-card-note {
+  font-size: 0.75rem;
+  color: var(--titan-text-muted);
+  line-height: 1.6;
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--titan-border);
+}
+
+.fit-footnote {
+  margin: var(--space-xl) auto 0;
+  max-width: 640px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.5px;
+  color: var(--titan-text-muted);
+  line-height: 1.75;
+}
+
+/* ============================================================
    HOW WE CALIBRATE
    ============================================================ */
 
@@ -1957,6 +2089,52 @@
   line-height: 1.5;
 }
 
+.pricing-billing {
+  padding: 20px 36px;
+  border-bottom: 1px solid var(--titan-border);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pricing-billing-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.pricing-billing-tag {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  min-width: 46px;
+  text-align: center;
+  line-height: 1;
+}
+
+.pricing-billing-tag-free {
+  background: rgba(52, 211, 153, 0.1);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.28);
+}
+
+.pricing-billing-tag-paid {
+  background: rgba(0, 87, 255, 0.1);
+  color: var(--titan-red);
+  border: 1px solid rgba(0, 87, 255, 0.28);
+}
+
+.pricing-billing-text {
+  font-size: 0.78rem;
+  color: var(--titan-text-dim);
+  line-height: 1.55;
+}
+
 .pricing-features {
   list-style: none;
   padding: 28px 36px;
@@ -2202,7 +2380,10 @@
   }
   .pp-toc-grid { grid-template-columns: 1fr; }
   .pricing-card-header { padding: 28px 24px 20px; }
+  .pricing-billing { padding: 16px 24px; }
   .pricing-features { padding: 20px 24px; }
+  /* Built For — stack cards */
+  .fit-grid { grid-template-columns: 1fr; }
   .pricing-cta { padding: 20px 24px 28px; }
   .pricing-num { font-size: 3.5rem; }
 }
