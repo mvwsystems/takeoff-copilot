@@ -1,10 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ShieldAlert, MessageCircle, Send, ChevronUp, BookOpen, Pencil, Check, HelpCircle } from 'lucide-react'
+import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ShieldAlert, MessageCircle, Send, ChevronUp, BookOpen, Pencil, Check, HelpCircle, Crosshair, Package, Rows3 } from 'lucide-react'
 import { SYSTEM_PROMPT, QA_SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import { parseTakeoffFile } from '../utils/parseTakeoff'
 import { supabase } from '../utils/supabase'
 import { useAuth } from '../utils/AuthContext'
-import { exportTakeoffCSV, exportQACSV, exportXLSX, buildTakeoffReportHTML, buildQAReportHTML, printReport } from '../utils/exporters'
+import { exportTakeoffCSV, exportQACSV, exportXLSX, buildTakeoffReportHTML, buildQAReportHTML, printReport, buildRFQReportHTML } from '../utils/exporters'
 import OnboardingFlow from '../components/OnboardingFlow'
 import ReferenceBank from '../components/ReferenceBank'
 import './Dashboard.css'
@@ -45,6 +45,10 @@ export default function Dashboard() {
   const [dragActive, setDragActive] = useState(false)
   const [priceBook, setPriceBook] = useState({})           // key -> { unit_cost, unit, label }
   const [showPricing, setShowPricing] = useState(false)    // reveal the estimate view
+  const [locate, setLocate] = useState(null)               // { sheet_id, region, region_page } click-to-verify
+  const [groupBySheet, setGroupBySheet] = useState(false)  // phase/area breakdown
+  const [revisionModal, setRevisionModal] = useState(false)
+  const [revisionDiff, setRevisionDiff] = useState(null)   // { added, removed, changed }
   const [onboardName, setOnboardName] = useState('')
   const [onboardCompany, setOnboardCompany] = useState('')
   const [onboardPhone, setOnboardPhone] = useState('')
@@ -808,6 +812,79 @@ INSTRUCTIONS:
   }
 
   const fmtUSD = (n) => n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+
+  // ── Click-to-verify: jump to the sheet region an item was read from ──
+  const locateItem = (item) => {
+    if (!item?.region || !item?.source_sheet_id) return
+    setLocate({ sheet_id: item.source_sheet_id, region: item.region, region_page: item.region_page, item_no: item.item_no })
+    setActiveTab('plan')
+  }
+
+  // ── Revision diff (addendum comparison) ──────────────────────
+  // Compact token matcher mirroring the server's variance matcher so a re-run
+  // of a revised plan set can be compared against a prior takeoff.
+  const DIFF_STOP = new Set(['prop', 'proposed', 'ex', 'existing', 'new', 'the', 'of', 'and', 'with', 'for', 'per'])
+  const DIFF_SYN = { inch: 'in', inches: 'in', dia: 'in', diameter: 'in', sanitary: 'san', ss: 'san', sewer: 'swr', storm: 'stm', water: 'wtr', manhole: 'mh', hydrant: 'hyd', cleanout: 'co', linear: 'lf', ft: 'lf', feet: 'lf' }
+  const diffTokens = (s) => {
+    const out = new Set()
+    for (let t of (s || '').toLowerCase().replace(/["']/g, ' in ').split(/[^a-z0-9.]+/)) {
+      if (t.length < 2 && !/^\d$/.test(t)) continue
+      t = DIFF_SYN[t] || t
+      if (!DIFF_STOP.has(t)) out.add(t)
+    }
+    return out
+  }
+  const diffTakeoffs = (baseItems, newItems) => {
+    const base = (baseItems || []).map(it => ({ it, tk: diffTokens(it.description) }))
+    const used = new Set()
+    const changed = [], added = []
+    for (const n of (newItems || [])) {
+      const ntk = diffTokens(n.description)
+      let best = -1, bestScore = 0
+      base.forEach((b, i) => {
+        if (used.has(i)) return
+        if (n.unit && b.it.unit && n.unit !== b.it.unit) return
+        let overlap = 0; ntk.forEach(t => { if (b.tk.has(t)) overlap++ })
+        const score = overlap / Math.max(ntk.size, 1)
+        if (score > bestScore) { bestScore = score; best = i }
+      })
+      if (best >= 0 && bestScore >= 0.4) {
+        used.add(best)
+        const b = base[best].it
+        const delta = (n.quantity ?? 0) - (b.quantity ?? 0)
+        if (Math.abs(delta) > 0.5) changed.push({ description: n.description, unit: n.unit, was: b.quantity, now: n.quantity, delta })
+      } else {
+        added.push(n)
+      }
+    }
+    const removed = base.filter((_, i) => !used.has(i)).map(b => b.it)
+    return { changed, added, removed }
+  }
+
+  const runRevisionDiff = (baselineJob) => {
+    const cur = results[activeImage]
+    if (!cur?.items || !baselineJob?.result_json?.items) return
+    setRevisionDiff({ baseline: baselineJob.plan_filename || 'Previous version', ...diffTakeoffs(baselineJob.result_json.items, cur.items) })
+    setRevisionModal(false)
+  }
+
+  // ── Phase / area breakdown: group items by their source sheet ──
+  const groupedBySheet = (items) => {
+    const sheetName = (id) => {
+      for (const map of Object.values(sheetMaps)) {
+        const s = map.sheets?.find(x => x.id === id)
+        if (s) return [s.sheet_number, s.sheet_title].filter(Boolean).join(' — ') || `Page ${s.page_number}`
+      }
+      return 'Unassigned'
+    }
+    const groups = {}
+    for (const it of (items || [])) {
+      const key = it.source_sheet_id || 'unassigned'
+      if (!groups[key]) groups[key] = { name: sheetName(it.source_sheet_id), items: [] }
+      groups[key].items.push(it)
+    }
+    return Object.values(groups)
+  }
 
   // Estimate rollup for a takeoff: grand total, by-category subtotals, and how
   // many items still need a unit cost.
@@ -1699,6 +1776,75 @@ INSTRUCTIONS:
       {/* REFERENCE BANK (help slide-over) */}
       <ReferenceBank open={referenceOpen} onClose={() => setReferenceOpen(false)} />
 
+      {/* REVISION DIFF — pick a prior takeoff to compare this one against */}
+      {revisionModal && (
+        <div className="modal-overlay" onClick={() => setRevisionModal(false)}>
+          <div className="modal card" style={{ maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+            <button className="material-card-close" onClick={() => setRevisionModal(false)}><X size={16} /></button>
+            <h3 style={{ marginBottom: 6 }}>Compare to a previous version</h3>
+            <p className="text-dim" style={{ fontSize: '0.82rem', lineHeight: 1.5, marginBottom: 14 }}>
+              Pick an earlier takeoff to see what changed — added, removed, and quantity deltas. Re-upload the revised plan set, run it, then diff it against the prior revision to catch a moved storm line or a resized main.
+            </p>
+            <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+              {jobHistory.filter(j => j.id !== activeJobId && j.result_json?.items).length === 0 ? (
+                <div className="text-dim" style={{ fontSize: '0.82rem', padding: 12 }}>No earlier takeoffs to compare against yet.</div>
+              ) : jobHistory.filter(j => j.id !== activeJobId && j.result_json?.items).map(j => (
+                <button key={j.id} className="btn btn-secondary" style={{ width: '100%', justifyContent: 'space-between', marginBottom: 6, textAlign: 'left' }} onClick={() => runRevisionDiff(j)}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{j.plan_filename || 'Untitled'}</span>
+                  <span className="text-dim" style={{ fontSize: '0.72rem' }}>{j.line_item_count || j.result_json.items.length} items · {formatHistoryDate(j.created_at)}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* REVISION DIFF RESULTS */}
+      {revisionDiff && (
+        <div className="modal-overlay" onClick={() => setRevisionDiff(null)}>
+          <div className="modal card" style={{ maxWidth: 720, maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+            <button className="material-card-close" onClick={() => setRevisionDiff(null)}><X size={16} /></button>
+            <h3 style={{ marginBottom: 4 }}>Revision diff</h3>
+            <p className="text-dim" style={{ fontSize: '0.8rem', marginBottom: 16 }}>
+              This takeoff vs <strong>{revisionDiff.baseline}</strong> — {revisionDiff.added.length} added, {revisionDiff.removed.length} removed, {revisionDiff.changed.length} changed.
+            </p>
+            {revisionDiff.changed.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div className="titan-label" style={{ color: 'var(--flag-medium)', marginBottom: 6 }}>Changed quantities</div>
+                <table className="titan-table" style={{ fontSize: '0.78rem' }}>
+                  <thead><tr>{['Item', 'Was', 'Now', 'Δ'].map(h => <th key={h}>{h}</th>)}</tr></thead>
+                  <tbody>
+                    {revisionDiff.changed.map((c, i) => (
+                      <tr key={i}>
+                        <td style={{ maxWidth: 340 }}>{c.description}</td>
+                        <td className="text-mono text-dim">{c.was ?? '—'} {c.unit}</td>
+                        <td className="text-mono" style={{ fontWeight: 600 }}>{c.now ?? '—'} {c.unit}</td>
+                        <td className="text-mono" style={{ color: c.delta > 0 ? 'var(--flag-high)' : 'var(--flag-low)', fontWeight: 600 }}>{c.delta > 0 ? '+' : ''}{Math.round(c.delta)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {revisionDiff.added.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div className="titan-label" style={{ color: 'var(--flag-high)', marginBottom: 6 }}>Added in this version ({revisionDiff.added.length})</div>
+                {revisionDiff.added.map((a, i) => <div key={i} style={{ fontSize: '0.8rem', padding: '3px 0' }}>+ {a.description} — <span className="text-mono">{a.quantity} {a.unit}</span></div>)}
+              </div>
+            )}
+            {revisionDiff.removed.length > 0 && (
+              <div>
+                <div className="titan-label" style={{ color: 'var(--flag-low)', marginBottom: 6 }}>Removed since {revisionDiff.baseline} ({revisionDiff.removed.length})</div>
+                {revisionDiff.removed.map((r, i) => <div key={i} style={{ fontSize: '0.8rem', padding: '3px 0' }}>− {r.description} — <span className="text-mono">{r.quantity} {r.unit}</span></div>)}
+              </div>
+            )}
+            {!revisionDiff.changed.length && !revisionDiff.added.length && !revisionDiff.removed.length && (
+              <p className="text-dim">No differences detected between the two takeoffs.</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* PAYWALL — one takeoff = $97, charged once per plan set */}
       {paywall && (
         <div className="modal-overlay" onClick={() => setPaywall(null)}>
@@ -2196,6 +2342,19 @@ INSTRUCTIONS:
                     </button>
                     {!isQAResult && (
                       <>
+                        <button className={`btn btn-ghost ${groupBySheet ? 'btn-active' : ''}`} title="Group the takeoff by sheet / area" onClick={() => setGroupBySheet(g => !g)}>
+                          <Rows3 size={14} /> By Sheet
+                        </button>
+                        <button className="btn btn-ghost" title="Compare this takeoff to a previous version (addendum diff)" onClick={() => setRevisionModal(true)}>
+                          <GitCompare size={14} /> Revisions
+                        </button>
+                        <button className="btn btn-secondary" title="Supplier Request for Quote (printable)" onClick={() => {
+                          const meta = { filename: images[activeImage]?.name, company: onboardCompany, contactName: onboardName, phone: onboardPhone, email: user?.email }
+                          const html = buildRFQReportHTML(result, materialsMap, meta)
+                          if (html) printReport(html); else setError('No purchasable materials to quote on this takeoff.')
+                        }}>
+                          <Package size={14} /> RFQ
+                        </button>
                         <button className="btn btn-secondary" onClick={() => exportCSV(false)}>
                           <Download size={14} /> CSV
                         </button>
@@ -2596,7 +2755,17 @@ INSTRUCTIONS:
                         </tr>
                       </thead>
                       <tbody>
-                        {(result.items || []).map((item, i) => (
+                        {(groupBySheet
+                          ? groupedBySheet(result.items).flatMap(g => [{ _header: g.name, _count: g.items.length }, ...g.items])
+                          : (result.items || [])
+                        ).map((item, i) => (
+                          item._header ? (
+                            <tr key={`h${i}`} className="group-header-row">
+                              <td colSpan={result.depth_summary ? 11 : 8} style={{ fontWeight: 700, background: '#eef2ff', color: 'var(--titan-red)', fontSize: '0.78rem', letterSpacing: '0.5px' }}>
+                                {item._header} <span className="text-dim" style={{ fontWeight: 400 }}>· {item._count} item{item._count === 1 ? '' : 's'}</span>
+                              </td>
+                            </tr>
+                          ) :
                           editingItem === item.item_no ? (
                             <tr key={i} style={{ background: 'rgba(0,87,255,0.06)' }}>
                               <td className="text-muted">{item.item_no}</td>
@@ -2661,7 +2830,13 @@ INSTRUCTIONS:
                               )
                             )}
                             <td className="text-dim" style={{ maxWidth: 240, fontSize: '0.75rem', lineHeight: 1.4 }}>{item.notes}</td>
-                            <td>
+                            <td style={{ whiteSpace: 'nowrap' }}>
+                              {item.region && item.source_sheet_id && (
+                                <button className="btn btn-ghost" style={{ padding: '2px 6px' }} title="Show where this was read on the plan"
+                                  onClick={() => locateItem(item)}>
+                                  <Crosshair size={12} />
+                                </button>
+                              )}
                               <button className="btn btn-ghost" style={{ padding: '2px 6px' }} title="Edit this line item"
                                 onClick={() => startItemEdit(item)}>
                                 <Pencil size={12} />
@@ -3160,12 +3335,38 @@ INSTRUCTIONS:
               {activeTab === 'plan' && images[activeImage] && (() => {
                 const img = images[activeImage]
                 const map = img.project_id ? sheetMaps[img.project_id] : null
-                if (map?.loaded && map.sheets.some(s => s.preview_url)) {
-                  return (
-                    <div className="plan-view animate-fade">
+                const locSheet = locate && map?.sheets?.find(s => s.id === locate.sheet_id && s.preview_url)
+                const overlay = locSheet && locate.region && locate.region_page && (() => {
+                  const [px0, py0, px1, py1] = locate.region_page
+                  const [rx0, ry0, rx1, ry1] = locate.region
+                  const pw = (px1 - px0) || 1, ph = (py1 - py0) || 1
+                  return {
+                    left: `${((rx0 - px0) / pw) * 100}%`, top: `${((ry0 - py0) / ph) * 100}%`,
+                    width: `${((rx1 - rx0) / pw) * 100}%`, height: `${((ry1 - ry0) / ph) * 100}%`,
+                  }
+                })()
+                const hasGrid = map?.loaded && map.sheets.some(s => s.preview_url)
+                return (
+                  <div className="plan-view animate-fade">
+                    {locSheet && overlay && (
+                      <div className="locate-panel">
+                        <div className="locate-head">
+                          <span><Crosshair size={13} /> Item #{locate.item_no} — read from {locSheet.sheet_number || `page ${locSheet.page_number}`}</span>
+                          <button className="btn btn-ghost" style={{ fontSize: '0.72rem' }} onClick={() => setLocate(null)}><X size={13} /> Clear</button>
+                        </div>
+                        <div className="locate-image-wrap">
+                          <img src={locSheet.preview_url} alt={locSheet.sheet_number || 'Located sheet'} />
+                          <div className="locate-box" style={overlay} />
+                        </div>
+                        <p className="text-dim" style={{ fontSize: '0.72rem', marginTop: 6 }}>
+                          The highlight is the tile region the AI read this item from — verify the callout against the drawing before you price it.
+                        </p>
+                      </div>
+                    )}
+                    {hasGrid ? (
                       <div className="plan-sheet-grid">
                         {map.sheets.filter(s => s.preview_url).map(s => (
-                          <a key={s.id} className="plan-sheet-cell" href={s.preview_url} target="_blank" rel="noopener noreferrer" title="Open full size">
+                          <a key={s.id} className={`plan-sheet-cell ${locate?.sheet_id === s.id ? 'plan-sheet-cell-active' : ''}`} href={s.preview_url} target="_blank" rel="noopener noreferrer" title="Open full size">
                             <img src={s.preview_url} alt={s.sheet_number || `Page ${s.page_number}`} loading="lazy" />
                             <span className="plan-sheet-label">
                               {s.sheet_number || `Pg ${s.page_number}`}{s.included_in_analysis ? ' ✓' : ''}
@@ -3173,19 +3374,11 @@ INSTRUCTIONS:
                           </a>
                         ))}
                       </div>
-                    </div>
-                  )
-                }
-                if (img.preview) {
-                  return (
-                    <div className="plan-view animate-fade">
+                    ) : img.preview ? (
                       <img src={img.preview} alt="Plan sheet" className="plan-image" />
-                    </div>
-                  )
-                }
-                return (
-                  <div className="loading-state">
-                    <p className="text-dim">No sheet previews available for this job.</p>
+                    ) : (
+                      <div className="loading-state"><p className="text-dim">No sheet previews available for this job.</p></div>
+                    )}
                   </div>
                 )
               })()}
@@ -3214,7 +3407,7 @@ INSTRUCTIONS:
                         <div className="compare-panel-header" style={{ color: 'var(--titan-red)' }}>AI Output</div>
                         <div className="compare-panel-body text-mono">
                           {(result.items || []).map((item, i) => (
-                            <div key={i}>[{item.confidence[0]}] {item.description}, {item.unit}, {item.quantity}</div>
+                            <div key={i}>[{item.confidence?.[0] || "?"}] {item.description}, {item.unit}, {item.quantity}</div>
                           ))}
                         </div>
                       </div>

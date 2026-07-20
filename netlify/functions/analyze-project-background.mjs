@@ -354,6 +354,27 @@ function tileName(row, col, rows, cols) {
   return `${rowNames[row]}-${colNames[col]}${rows === 2 ? ' quadrant' : ''}`
 }
 
+// Page-space bbox of every tile, keyed by row-major idx — the single source of
+// truth for tile geometry, used both to render tiles and to record where each
+// line item was read (click-to-verify). Returns { bboxes: [[x0,y0,x1,y1],...], page }.
+function tileBBoxes(x0, y0, pageW, pageH) {
+  const { cols, rows } = gridFor(pageW, pageH)
+  const stepX = pageW / cols, stepY = pageH / rows
+  const ovX = 0.075 * stepX, ovY = 0.075 * stepY
+  const bboxes = []
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      bboxes.push([
+        x0 + col * stepX - (col > 0 ? ovX : 0),
+        y0 + row * stepY - (row > 0 ? ovY : 0),
+        x0 + (col + 1) * stepX + (col < cols - 1 ? ovX : 0),
+        y0 + (row + 1) * stepY + (row < rows - 1 ? ovY : 0),
+      ])
+    }
+  }
+  return { bboxes, page: [x0, y0, x0 + pageW, y0 + pageH] }
+}
+
 function renderTiles(mupdf, doc, pageIndex) {
   const page = doc.loadPage(pageIndex)
   const [x0, y0, x1, y1] = page.getBounds()
@@ -660,6 +681,7 @@ async function ingestBatchResults(batch, passes, sheetsById, jobId, usage) {
         sheet_id: sheet.id,
         sheet_label: sheet.sheet_number || `pg ${sheet.page_number}`,
         tile: `tile ${Number(idxStr) + 1}`,
+        tile_idx: Number(idxStr),   // row-major tile index → region lookup (click-to-verify)
       }))
     } else {
       // errored / expired / canceled → leave as empty unless a resubmit picks it up
@@ -1350,16 +1372,25 @@ export const handler = async (event) => {
       return { statusCode: 200 }
     }
 
-    // Page geometry (grid dims) without rendering — cheap, needed for totals.
+    // Page geometry (grid dims + tile bboxes) without rendering — cheap.
     const geomCache = new Map()
-    const pageGeom = (pageIndex) => {
+    const pageGeomFull = (pageIndex) => {
       if (!geomCache.has(pageIndex)) {
         const page = doc.loadPage(pageIndex)
         const [x0, y0, x1, y1] = page.getBounds()
         page.destroy()
-        geomCache.set(pageIndex, gridFor(x1 - x0, y1 - y0))
+        const pageW = x1 - x0, pageH = y1 - y0
+        geomCache.set(pageIndex, { ...gridFor(pageW, pageH), ...tileBBoxes(x0, y0, pageW, pageH) })
       }
       return geomCache.get(pageIndex)
+    }
+    const pageGeom = (pageIndex) => pageGeomFull(pageIndex)
+
+    // sheet_id → { bboxes:[[x0,y0,x1,y1]...], page:[x0,y0,x1,y1] } for click-to-verify.
+    const tileRegionMap = new Map()
+    for (const s of p1Sheets) {
+      const g = pageGeomFull(s.page_number - 1)
+      tileRegionMap.set(s.id, { bboxes: g.bboxes, page: g.page })
     }
 
     // Rendered tiles, lazily, once per sheet — shared by all passes.
@@ -1584,10 +1615,16 @@ export const handler = async (event) => {
         }
       }
       // Re-attach sheet_id from merged source_ids. Only in-range ids count —
-      // a hallucinated id must not pin the item to an arbitrary sheet.
+      // a hallucinated id must not pin the item to an arbitrary sheet. Also
+      // record the tile region the item came from (click-to-verify).
       merged.forEach(m => {
         const src = (m.source_ids || []).map(i => p1Items[i]).find(Boolean)
         m.sheet_id = src?.sheet_id || m.sheet_id || null
+        const info = m.sheet_id ? tileRegionMap.get(m.sheet_id) : null
+        if (info && src && src.tile_idx != null && info.bboxes[src.tile_idx]) {
+          m.region = info.bboxes[src.tile_idx]
+          m.region_page = info.page
+        }
       })
     }
 
@@ -1666,11 +1703,17 @@ export const handler = async (event) => {
         fresh = codeMerge(p4Items).filter(f => !existingKeys.has(normKey(f.description)))
           .map(f => ({ ...f, confidence: 'LOW', note: `Possible duplicate — automated dedupe was degraded on this run, verify against main takeoff. ${f.note}`.slice(0, 1000) }))
       }
-      fresh.forEach(f => merged.push({
-        ...f,
-        note: `Found in dedicated small-diameter sweep. ${f.note}`.slice(0, 1000),
-        sheet_id: f.sheet_id || p4Items[0]?.sheet_id || null, status: 'active',
-      }))
+      fresh.forEach(f => {
+        const sid = f.sheet_id || p4Items[0]?.sheet_id || null
+        const info = sid ? tileRegionMap.get(sid) : null
+        const region = info && f.tile_idx != null && info.bboxes[f.tile_idx] ? info.bboxes[f.tile_idx] : null
+        merged.push({
+          ...f,
+          note: `Found in dedicated small-diameter sweep. ${f.note}`.slice(0, 1000),
+          sheet_id: sid, status: 'active',
+          ...(region ? { region, region_page: info.page } : {}),
+        })
+      })
     }
 
     // ── PASS 5 variance: engineerRows came from resumable pass5 tiles above ──
@@ -1741,6 +1784,10 @@ export const handler = async (event) => {
       quantity: m.quantity ?? 0,
       confidence: m.confidence,
       material_slug: m.material_slug || null,
+      // Click-to-verify: which sheet + page-space region this item was read from.
+      source_sheet_id: m.sheet_id || null,
+      region: m.region || null,           // [x0,y0,x1,y1] page points
+      region_page: m.region_page || null, // [x0,y0,x1,y1] full page bounds
       depth_avg: m.depth?.avg ?? null,
       depth_max: m.depth?.max ?? null,
       // Gravity pipe with no profile depth → explicit "unavailable" rather than blank.

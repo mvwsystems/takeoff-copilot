@@ -662,6 +662,226 @@ export const buildQAReportHTML = (result, meta = {}) => {
   return reportShell('Takeoff Copilot — QA Bid Risk Report', 'QA // Bid Risk Analysis', meta, body)
 }
 
+// ── Supplier RFQ (Request for Quote) ─────────────────────────
+// Purchasable materials only — what a contractor sends a pipe/utility
+// supplier (Core & Main, Ferguson) to price. Excludes excavation, testing,
+// other, and obvious labor / derived line items.
+
+const RFQ_CATEGORIES = ['PIPE', 'STRUCTURE', 'FITTING', 'SERVICE']
+
+const RFQ_EXCLUDE_RE = /trench safety|rock excavation|mobilization|traffic control/i
+
+const rfqNorm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+
+export const buildRFQItems = (result, materialsMap = {}) => {
+  const items = arr(result?.items)
+  const catalog = materialsMap && typeof materialsMap === 'object' ? materialsMap : {}
+  const groups = {}
+  for (const it of items) {
+    const category = String(it?.category ?? '').toUpperCase()
+    if (!RFQ_CATEGORIES.includes(category)) continue
+    const description = it?.description ?? ''
+    if (RFQ_EXCLUDE_RE.test(description)) continue
+    const unit = it?.unit ?? ''
+    const key = `${category}|${rfqNorm(description)}|${rfqNorm(unit)}`
+    const qty = typeof it?.quantity === 'number' && Number.isFinite(it.quantity) ? it.quantity : 0
+    const spec = catalog[it?.material_slug]?.spec_summary ?? ''
+    if (!groups[key]) {
+      groups[key] = { category, description, spec, quantity: 0, unit }
+    }
+    groups[key].quantity += qty
+    if (!groups[key].spec && spec) groups[key].spec = spec
+  }
+  return Object.values(groups).sort((a, b) =>
+    a.category.localeCompare(b.category) || a.description.localeCompare(b.description))
+}
+
+export const exportRFQCSV = (result, materialsMap = {}, meta = {}) => {
+  const rfqItems = buildRFQItems(result, materialsMap)
+  if (!rfqItems.length) return false
+
+  const rows = []
+  rows.push(['REQUEST FOR QUOTE'])
+  rows.push(['Project / File', meta.filename || '—'])
+  rows.push(['Date', today()])
+  if (meta.company) rows.push(['Company', meta.company])
+  if (meta.contactName) rows.push(['Contact', meta.contactName])
+  if (meta.phone) rows.push(['Phone', meta.phone])
+  if (meta.email) rows.push(['Email', meta.email])
+  rows.push([])
+  rows.push(['Category', 'Material / Description', 'Spec', 'Quantity', 'Unit', 'Unit Price (supplier)', 'Extended (supplier)'])
+  rfqItems.forEach((r) => rows.push([
+    r.category,
+    r.description,
+    r.spec,
+    typeof r.quantity === 'number' && Number.isFinite(r.quantity) ? r.quantity : r.quantity ?? '',
+    r.unit,
+    '', // Unit Price — blank for supplier to fill
+    '', // Extended — blank for supplier to fill
+  ]))
+  downloadCSV(rows, `rfq_${safeName(meta.filename)}_${today()}.csv`)
+  return true
+}
+
+const RFQ_REPORT_CSS = `
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: #F5F5F0; color: #1A1A1A; font-size: 10pt; line-height: 1.55;
+  }
+  .page { max-width: 1060px; margin: 0 auto; padding: 0 0 40px; }
+  .band {
+    background: #0A0A0A; color: #F5F5F0; padding: 28px 40px 22px;
+    border-bottom: 4px solid #0057FF;
+    display: flex; justify-content: space-between; align-items: flex-end; gap: 24px;
+  }
+  .brand { font-size: 19pt; font-weight: 800; letter-spacing: 2.5px; text-transform: uppercase; line-height: 1.1; }
+  .brand .accent { color: #0057FF; }
+  .brand-sub {
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 7pt;
+    letter-spacing: 2px; text-transform: uppercase; color: #999; margin-top: 4px;
+  }
+  .band-meta { text-align: right; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 8pt; color: #AAA; }
+  .band-meta strong { color: #F5F5F0; }
+  .body-pad { padding: 24px 40px 0; }
+  .parties { display: flex; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
+  .party {
+    flex: 1; min-width: 220px; background: #FFFFFF; border: 1px solid #DDD;
+    border-top: 3px solid #0057FF; padding: 12px 16px;
+  }
+  .party-label {
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 7pt; font-weight: 700;
+    letter-spacing: 1.5px; text-transform: uppercase; color: #0057FF; margin-bottom: 6px;
+  }
+  .party-line { font-size: 9pt; color: #333; line-height: 1.5; }
+  .party-line.small { font-size: 7.5pt; color: #888; }
+  .section { margin-bottom: 26px; }
+  .section-head {
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 7.5pt; font-weight: 700;
+    letter-spacing: 2px; text-transform: uppercase; color: #0057FF;
+    padding-bottom: 5px; border-bottom: 2px solid #0A0A0A; margin-bottom: 10px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 8.5pt; background: #FFFFFF; }
+  thead th {
+    background: #0A0A0A; color: #F5F5F0; padding: 6px 10px; text-align: left;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 7pt;
+    letter-spacing: 1px; text-transform: uppercase; white-space: nowrap;
+  }
+  td { padding: 6px 10px; border-bottom: 1px solid #E5E5DE; vertical-align: top; }
+  .cat-row td {
+    background: #EDEDE6; font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 7pt; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+    color: #0A0A0A; border-bottom: 2px solid #0057FF;
+  }
+  .qty { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 700; text-align: right; white-space: nowrap; }
+  .num { font-family: ui-monospace, Menlo, Consolas, monospace; text-align: right; white-space: nowrap; }
+  .small { font-size: 7.5pt; color: #666; }
+  .price-box { border: 1px solid #BBB; background: #FCFCFA; height: 22px; min-width: 110px; }
+  .footer {
+    margin-top: 34px; padding: 12px 0 0; border-top: 2px solid #0A0A0A;
+    display: flex; justify-content: space-between; gap: 16px;
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 7.5pt; color: #888;
+  }
+  .footer-note { color: #0057FF; font-weight: 700; }
+  @media print {
+    body { background: #FFFFFF; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .page { max-width: none; padding-bottom: 16px; }
+    .band { padding: 20px 24px 16px; }
+    .body-pad { padding: 18px 24px 0; }
+    .section { break-inside: auto; page-break-inside: auto; }
+    tr { break-inside: avoid; page-break-inside: avoid; }
+    thead { display: table-header-group; }
+    @page { margin: 12mm; }
+  }
+`
+
+export const buildRFQReportHTML = (result, materialsMap = {}, meta = {}) => {
+  const rfqItems = buildRFQItems(result, materialsMap)
+
+  // FROM block — omit any missing contractor field.
+  const fromLines = [
+    meta.company ? `<div class="party-line"><strong>${esc(meta.company)}</strong></div>` : '',
+    meta.contactName ? `<div class="party-line">${esc(meta.contactName)}</div>` : '',
+    meta.phone ? `<div class="party-line">${esc(meta.phone)}</div>` : '',
+    meta.email ? `<div class="party-line">${esc(meta.email)}</div>` : '',
+  ].filter(Boolean).join('')
+  const fromBlock = fromLines
+    ? `<div class="party"><div class="party-label">From</div>${fromLines}</div>`
+    : ''
+
+  // Grouped materials table — category subheaders then line items.
+  let rowsHtml = ''
+  let lastCat = null
+  rfqItems.forEach((r) => {
+    if (r.category !== lastCat) {
+      rowsHtml += `<tr class="cat-row"><td colspan="5">${esc(r.category)}</td></tr>`
+      lastCat = r.category
+    }
+    rowsHtml += `<tr>
+      <td>${esc(r.description)}</td>
+      <td class="small">${esc(r.spec)}</td>
+      <td class="qty">${fmtQty(r.quantity)}</td>
+      <td class="num">${esc(r.unit)}</td>
+      <td><div class="price-box"></div></td>
+    </tr>`
+  })
+
+  const tableSectionHtml = rfqItems.length
+    ? `<div class="section">
+        <div class="section-head">Materials to Quote — ${rfqItems.length} Line${rfqItems.length === 1 ? '' : 's'}</div>
+        <table>
+          <thead><tr>
+            <th>Material / Description</th><th>Spec</th><th>Quantity</th><th>Unit</th><th>Unit Price</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </div>`
+    : `<div class="section"><div class="section-head">Materials to Quote</div><div class="party-line">No purchasable materials found in this takeoff.</div></div>`
+
+  const body = `
+    <div class="parties">
+      ${fromBlock}
+      <div class="party">
+        <div class="party-label">To</div>
+        <div class="party-line"><strong>___________________________</strong></div>
+        <div class="party-line small">(Supplier)</div>
+      </div>
+    </div>
+    ${tableSectionHtml}`
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>${esc('Takeoff Copilot — Request for Quote')}</title>
+<style>${RFQ_REPORT_CSS}</style>
+</head>
+<body>
+<div class="page">
+  <div class="band">
+    <div>
+      <div class="brand">REQUEST FOR <span class="accent">QUOTE</span></div>
+      <div class="brand-sub">// Takeoff Copilot</div>
+    </div>
+    <div class="band-meta">
+      <div><strong>${esc(meta.filename || '—')}</strong></div>
+      <div>${esc(prettyDate())}</div>
+      <div>takeoffcopilot.com</div>
+    </div>
+  </div>
+  <div class="body-pad">
+    ${body}
+    <div class="footer">
+      <span>Generated by Takeoff Copilot</span>
+      <span class="footer-note">Please quote pricing and lead time. Quantities are estimated from plans — verify before fabrication.</span>
+      <span>${esc(prettyDate())}</span>
+    </div>
+  </div>
+</div>
+</body>
+</html>`
+}
+
 // ── printing ─────────────────────────────────────────────────
 
 export const printReport = (html) => {

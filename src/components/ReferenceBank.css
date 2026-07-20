@@ -1,7 +1,7 @@
 /* ════════════════════════════════════════════════════════════════
    REFERENCE BANK — slide-over help panel
    Titan AI dark theme. Tokens scoped locally so the panel always
-   renders in the canonical black / off-white / red palette.
+   renders in the canonical black / off-white / blue palette.
    ════════════════════════════════════════════════════════════════ */
 
 .rb-root {
@@ -11,8 +11,8 @@
   --rb-surface: #1A1A1A;
   --rb-border: #222222;
   --rb-border-light: #333333;
-  --rb-accent: #E8372C;
-  --rb-accent-glow: rgba(232, 55, 44, 0.25);
+  --rb-accent: #0057FF;
+  --rb-accent-glow: rgba(0, 87, 255, 0.25);
   --rb-white: #F5F5F0;
   --rb-text: #CCCCCC;
   --rb-text-dim: #888888;

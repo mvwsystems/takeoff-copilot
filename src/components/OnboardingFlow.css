@@ -1,15 +1,15 @@
 /* ============================================
    ONBOARDING FLOW — Titan AI aesthetic
    Self-contained: all classes prefixed .onb-
-   Red accent pinned to #E8372C per spec.
+   Blue accent pinned to #0057FF per spec.
    ============================================ */
 
 .onb-overlay {
   /* Local accent tokens (do not rely on --titan-red, which may drift) */
-  --onb-accent: #E8372C;
-  --onb-accent-bright: #FF4A3E;
-  --onb-accent-glow: rgba(232, 55, 44, 0.25);
-  --onb-accent-bg: rgba(232, 55, 44, 0.08);
+  --onb-accent: #0057FF;
+  --onb-accent-bright: #1A6BFF;
+  --onb-accent-glow: rgba(0, 87, 255, 0.25);
+  --onb-accent-bg: rgba(0, 87, 255, 0.08);
 
   position: fixed;
   inset: 0;
