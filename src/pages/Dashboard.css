@@ -571,6 +571,40 @@
 }
 .scope-more:hover { text-decoration: underline; }
 
+/* —— BID ESTIMATE —— */
+.estimate-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  margin: 12px 0;
+  background: #fff;
+  border: 1px solid var(--titan-border);
+  border-left: 3px solid var(--titan-red);
+  border-radius: 6px;
+}
+.estimate-bar-total { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.estimate-bar-label {
+  font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 1.5px;
+  text-transform: uppercase; color: var(--titan-text-dim);
+}
+.estimate-bar-amt {
+  font-family: var(--font-mono); font-size: 1.4rem; font-weight: 700;
+  color: var(--titan-red); font-variant-numeric: tabular-nums;
+}
+.estimate-bar-sub { font-size: 0.76rem; color: #777; }
+
+.estimate-panel { margin: 8px 0 20px; }
+.estimate-table input { text-align: right; }
+.estimate-table tfoot td { border-top: 1px solid var(--titan-border); }
+.estimate-subtotal td { padding-top: 6px; padding-bottom: 6px; font-size: 0.8rem; }
+.estimate-grand td {
+  padding-top: 10px; padding-bottom: 10px;
+  border-top: 2px solid var(--titan-red);
+  font-variant-numeric: tabular-nums;
+}
+
 /* SHEET HEADER */
 .sheet-header {
   display: flex;

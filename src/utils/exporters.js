@@ -78,6 +78,18 @@ const depthCell = (item, key) => {
 }
 
 const LINE_ITEM_HEADER = ['Item #', 'Category', 'Description', 'Qty', 'Unit', 'Depth Avg (ft)', 'Depth Max (ft)', 'Confidence', 'Notes']
+const PRICED_HEADER = ['Item #', 'Category', 'Description', 'Qty', 'Unit', 'Unit Cost', 'Extended', 'Confidence', 'Notes']
+
+// Price-book keying — MUST match Dashboard.priceKeyOf so exports resolve the
+// same unit costs the on-screen estimate shows.
+const priceKeyOf = (it) =>
+  it?.material_slug ? `mat:${it.material_slug}`
+    : `desc:${(it?.description || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 80)}`
+const unitCostOf = (it, book) => book?.[priceKeyOf(it)]?.unit_cost ?? null
+const extendedOf = (it, book) => {
+  const c = unitCostOf(it, book)
+  return c != null && typeof it?.quantity === 'number' && Number.isFinite(it.quantity) ? c * it.quantity : null
+}
 
 const lineItemRow = (it) => [
   it?.item_no ?? '',
@@ -91,18 +103,52 @@ const lineItemRow = (it) => [
   it?.notes ?? '',
 ]
 
+const pricedItemRow = (it, book) => {
+  const c = unitCostOf(it, book)
+  const ext = extendedOf(it, book)
+  return [
+    it?.item_no ?? '',
+    it?.category ?? '',
+    it?.description ?? '',
+    typeof it?.quantity === 'number' && Number.isFinite(it.quantity) ? it.quantity : it?.quantity ?? '',
+    it?.unit ?? '',
+    c ?? '',
+    ext ?? '',
+    it?.confidence ?? '',
+    it?.notes ?? '',
+  ]
+}
+
+// Category subtotals + grand total rows for a priced export.
+const pricedTotals = (items, book) => {
+  const byCat = {}
+  let total = 0
+  for (const it of items) {
+    const ext = extendedOf(it, book)
+    if (ext == null) continue
+    total += ext
+    byCat[it?.category || 'OTHER'] = (byCat[it?.category || 'OTHER'] || 0) + ext
+  }
+  const rows = [[]]
+  Object.entries(byCat).forEach(([cat, sub]) => rows.push(['', '', `${cat} subtotal`, '', '', '', sub, '', '']))
+  rows.push(['', '', 'GRAND TOTAL', '', '', '', total, '', ''])
+  return rows
+}
+
 export const exportTakeoffCSV = (result, meta = {}) => {
   const items = arr(result?.items)
   if (!items.length) return false
+  const priced = meta.priced && meta.priceBook
   const rows = []
-  rows.push(['TAKEOFF COPILOT // QUANTITY TAKEOFF'])
+  rows.push([priced ? 'TAKEOFF COPILOT // PRICED ESTIMATE' : 'TAKEOFF COPILOT // QUANTITY TAKEOFF'])
   rows.push(['File', meta.filename || '—'])
   rows.push(['Generated', today()])
   if (meta.gradeLabel) rows.push(['Plan Grade', meta.gradeLabel, meta.gradeRationale || ''])
   rows.push([])
-  rows.push(LINE_ITEM_HEADER)
-  items.forEach((it) => rows.push(lineItemRow(it)))
-  downloadCSV(rows, `takeoff_${safeName(meta.filename)}_${today()}.csv`)
+  rows.push(priced ? PRICED_HEADER : LINE_ITEM_HEADER)
+  items.forEach((it) => rows.push(priced ? pricedItemRow(it, meta.priceBook) : lineItemRow(it)))
+  if (priced) pricedTotals(items, meta.priceBook).forEach((r) => rows.push(r))
+  downloadCSV(rows, `${priced ? 'estimate' : 'takeoff'}_${safeName(meta.filename)}_${today()}.csv`)
   return true
 }
 
@@ -244,6 +290,12 @@ export const exportXLSX = (result, meta = {}) => {
         [LINE_ITEM_HEADER, ...items.map(lineItemRow)],
         [8, 12, 46, 10, 8, 14, 14, 12, 55])
       added = true
+    }
+    // Priced estimate tab — only when a price book is supplied.
+    if (items.length && meta.priced && meta.priceBook) {
+      addSheet(wb, 'Priced Estimate',
+        [PRICED_HEADER, ...items.map((it) => pricedItemRow(it, meta.priceBook)), ...pricedTotals(items, meta.priceBook)],
+        [8, 12, 46, 10, 8, 12, 14, 12, 40])
     }
     const runs = arr(result.depth_summary?.runs)
     if (runs.length) {

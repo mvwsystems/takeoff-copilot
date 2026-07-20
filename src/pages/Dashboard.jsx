@@ -43,6 +43,8 @@ export default function Dashboard() {
   const [paywall, setPaywall] = useState(null)             // { projectId, imgIdx } when a purchase is needed
   const [buying, setBuying] = useState(false)
   const [dragActive, setDragActive] = useState(false)
+  const [priceBook, setPriceBook] = useState({})           // key -> { unit_cost, unit, label }
+  const [showPricing, setShowPricing] = useState(false)    // reveal the estimate view
   const [onboardName, setOnboardName] = useState('')
   const [onboardCompany, setOnboardCompany] = useState('')
   const [onboardPhone, setOnboardPhone] = useState('')
@@ -732,6 +734,58 @@ INSTRUCTIONS:
     if (data) { setCredits(data.balance); setBillingOn(true) }
   }, [user])
   useEffect(() => { loadCredits() }, [loadCredits])
+
+  // ── Price book (bid-ready pricing) ────────────────────────────
+  // A unit cost entered once auto-prices that item on every future takeoff.
+  const loadPriceBook = useCallback(async () => {
+    if (!user) return
+    const { data } = await supabase.from('price_book').select('key, label, unit, unit_cost').eq('user_id', user.id)
+    if (data) setPriceBook(Object.fromEntries(data.map(r => [r.key, r])))
+  }, [user])
+  useEffect(() => { loadPriceBook() }, [loadPriceBook])
+
+  const priceKeyOf = (item) =>
+    item.material_slug ? `mat:${item.material_slug}`
+      : `desc:${(item.description || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 80)}`
+
+  const unitCostOf = (item) => priceBook[priceKeyOf(item)]?.unit_cost ?? null
+  const extendedOf = (item) => {
+    const c = unitCostOf(item)
+    return c != null && item.quantity != null ? c * item.quantity : null
+  }
+
+  const saveUnitCost = async (item, raw) => {
+    const key = priceKeyOf(item)
+    const val = raw === '' ? null : Number(raw)
+    if (raw !== '' && (!isFinite(val) || val < 0)) { setError('Unit cost must be a non-negative number.'); return }
+    if (val == null) {
+      setPriceBook(prev => { const n = { ...prev }; delete n[key]; return n })
+      await supabase.from('price_book').delete().eq('user_id', user.id).eq('key', key)
+      return
+    }
+    const row = { user_id: user.id, key, label: item.description?.slice(0, 200) || null, unit: item.unit || null, unit_cost: val }
+    setPriceBook(prev => ({ ...prev, [key]: row }))
+    const { error } = await supabase.from('price_book').upsert(row, { onConflict: 'user_id,key' })
+    if (error) setError('Could not save that unit cost — check your connection.')
+  }
+
+  const fmtUSD = (n) => n == null ? '—' : n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 })
+
+  // Estimate rollup for a takeoff: grand total, by-category subtotals, and how
+  // many items still need a unit cost.
+  const estimateFor = (res) => {
+    const items = res?.items || []
+    let total = 0, priced = 0, unpriced = 0
+    const byCat = {}
+    for (const it of items) {
+      const ext = extendedOf(it)
+      if (ext == null) { unpriced++; continue }
+      priced++
+      total += ext
+      byCat[it.category] = (byCat[it.category] || 0) + ext
+    }
+    return { total, priced, unpriced, byCat, count: items.length }
+  }
 
   // Handle the return trip from Stripe Checkout (?checkout=success|cancel).
   useEffect(() => {
@@ -2392,6 +2446,105 @@ INSTRUCTIONS:
                       </div>
                     </div>
                   )}
+                  {/* ── BID ESTIMATE summary bar (surface the total before detail) ── */}
+                  {(() => {
+                    const est = estimateFor(result)
+                    return (
+                      <div className="estimate-bar">
+                        <div className="estimate-bar-total">
+                          <span className="estimate-bar-label">Bid estimate</span>
+                          <span className="estimate-bar-amt">{est.priced ? fmtUSD(est.total) : '—'}</span>
+                          <span className="estimate-bar-sub">
+                            {est.priced} of {est.count} items priced{est.unpriced ? ` · ${est.unpriced} need a unit cost` : ''}
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 8 }}>
+                          <button className="btn btn-secondary" onClick={() => setShowPricing(s => !s)}>
+                            {showPricing ? 'Hide pricing' : est.priced ? 'Edit pricing' : 'Price this takeoff'}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {/* ── BID ESTIMATE editor ── */}
+                  {showPricing && (
+                    <div className="estimate-panel">
+                      <div className="risk-flags-header">
+                        <span className="risk-flags-title">Bid Estimate</span>
+                        <span className="risk-flags-subtitle">Enter your unit costs — saved to your price book and auto-applied to future takeoffs. Extended = quantity × unit cost.</span>
+                      </div>
+                      <div className="table-wrap">
+                        <table className="titan-table estimate-table">
+                          <thead><tr>{['#', 'Description', 'Qty', 'Unit', 'Unit $', 'Extended', ''].map((h, i) => <th key={i}>{h}</th>)}</tr></thead>
+                          <tbody>
+                            {(result.items || []).map((item, i) => {
+                              const cost = unitCostOf(item)
+                              const ext = extendedOf(item)
+                              return (
+                                <tr key={i}>
+                                  <td className="text-muted">{item.item_no}</td>
+                                  <td style={{ maxWidth: 320 }}>{item.description}</td>
+                                  <td className="text-mono" style={{ fontWeight: 600 }}>{item.quantity ?? '—'}</td>
+                                  <td className="text-mono text-dim">{item.unit}</td>
+                                  <td>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                                      <span className="text-dim" style={{ fontSize: '0.8rem' }}>$</span>
+                                      <input
+                                        className="input text-mono"
+                                        type="number" min="0" step="0.01"
+                                        style={{ width: 92, fontSize: '0.82rem' }}
+                                        defaultValue={cost ?? ''}
+                                        placeholder="0.00"
+                                        onBlur={e => { if (e.target.value !== String(cost ?? '')) saveUnitCost(item, e.target.value) }}
+                                        onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+                                      />
+                                    </div>
+                                  </td>
+                                  <td className="text-mono" style={{ fontWeight: 700, color: ext != null ? 'var(--titan-red)' : 'var(--titan-text-muted)' }}>
+                                    {ext != null ? fmtUSD(ext) : '—'}
+                                  </td>
+                                  <td className="text-dim" style={{ fontSize: '0.7rem' }}>{cost != null ? 'from price book' : ''}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                          <tfoot>
+                            {(() => {
+                              const est = estimateFor(result)
+                              return (
+                                <>
+                                  {Object.entries(est.byCat).map(([cat, sub]) => (
+                                    <tr key={cat} className="estimate-subtotal">
+                                      <td></td><td colSpan={4} className="text-dim">{cat} subtotal</td>
+                                      <td className="text-mono" style={{ fontWeight: 600 }}>{fmtUSD(sub)}</td><td></td>
+                                    </tr>
+                                  ))}
+                                  <tr className="estimate-grand">
+                                    <td></td>
+                                    <td colSpan={4} style={{ fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                                      Grand total{est.unpriced ? ` (${est.unpriced} unpriced)` : ''}
+                                    </td>
+                                    <td className="text-mono" style={{ fontWeight: 800, fontSize: '1rem', color: 'var(--titan-red)' }}>{fmtUSD(est.total)}</td>
+                                    <td></td>
+                                  </tr>
+                                </>
+                              )
+                            })()}
+                          </tfoot>
+                        </table>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                        <button className="btn btn-secondary" onClick={() => exportTakeoffCSV(result, { ...exportMeta(), priceBook, priced: true })}>
+                          <Download size={14} /> Priced CSV
+                        </button>
+                        <button className="btn btn-primary" onClick={() => exportXLSX(result, { ...exportMeta(), priceBook, priced: true })}>
+                          <Download size={14} /> Priced Excel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="table-wrap">
                     <table className="titan-table">
                       <thead>
