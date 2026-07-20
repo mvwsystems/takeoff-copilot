@@ -64,7 +64,7 @@ export default async (request) => {
   if (config && typeof config === 'object') {
     const TIERS = new Set(['opus', 'sonnet', 'haiku'])
     const models = {}
-    for (const k of ['pass1', 'pass2', 'pass4', 'pass5']) {
+    for (const k of ['pass1', 'pass2', 'pass4', 'pass5', 'pass6']) {
       if (TIERS.has(config.models?.[k])) models[k] = config.models[k]
     }
     jobConfig = {

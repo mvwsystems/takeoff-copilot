@@ -110,7 +110,12 @@ const tierOf = (modelId) => (modelId === HAIKU ? 'haiku' : modelId === SONNET ? 
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms))
 
-const PASS1_TYPES = new Set(['utility_plan', 'storm', 'sanitary', 'water', 'plan_profile', 'grading', 'paving', 'demo', 'erosion_control', 'landscape', 'electrical', 'other', 'unclassified'])
+// Quantity extraction runs on utility/profile sheets. Grading & paving are
+// deliberately NOT here — they go to the grades pass (Pass 6) only, so we never
+// double-count utility linework that also appears on a grading plan.
+const PASS1_TYPES = new Set(['utility_plan', 'storm', 'sanitary', 'water', 'plan_profile', 'demo', 'erosion_control', 'landscape', 'electrical', 'other', 'unclassified'])
+// Grading/paving sheets — mined for finished-grade elevations at structures.
+const GRADE_TYPES = new Set(['grading', 'paving'])
 const DEPTH_BUCKETS = [['0-6', 0, 6], ['6-8', 6, 8], ['8-10', 8, 10], ['10+', 10, Infinity]]
 const TRENCH_SAFETY_FT = 5  // OSHA 1926 Subpart P trigger
 const DEEP_EXCAVATION_FT = 10
@@ -168,6 +173,13 @@ const PASS5_TASK = `You are reading a tile from a construction plan sheet. Deter
 
 Respond ONLY with this JSON, no markdown:
 {"table_found":boolean,"rows":[{"item_no":"string or null","description":"string","quantity":number,"unit":"string"}]}`
+
+const PASS6_TASK = `YOUR TASK (PASS 6 — FINISHED-GRADE ELEVATIONS FROM THE GRADING PLAN):
+This tile is from a grading or paving sheet. Utility structures (sanitary/storm manholes, curb & area inlets, junction boxes, cleanouts) sit on this sheet at their plan locations. For EACH utility structure you can identify by its label (e.g. SSMH-1, STMH-4, CB-2, JB-1, CO-3), read the FINISHED GRADE / RIM / TOP elevation at that structure. It may be labeled RIM, TG (top of grate), TC (top of curb), FG, FL, or shown as a spot elevation printed right at the structure. Return ONLY structures where you can actually read a grade elevation next to a labeled structure — do not guess, do not read contour line values that aren't tied to a structure.
+
+Respond ONLY with this JSON, no markdown, no preamble:
+{"grades":[{"structure_id":"e.g. SSMH-1","finished_grade_elev":number,"kind":"rim|top_grate|top_curb|finished_grade|spot","confidence":"HIGH|MEDIUM|LOW","note":"where read, max 15 words"}]}
+No labeled structure with a readable grade elevation in this tile: {"grades":[]}`
 
 const MERGE_TASK = `You are a takeoff data merger. Below is a JSON array of line items extracted from OVERLAPPING tiles of the same construction plan set. Tiles overlap by ~15%, so the same item often appears 2+ times (same description/size/material and same or adjacent location). Also, pipe runs crossing tile boundaries may appear as a callout-quantity entry in one tile and a "continues_beyond_tile" null-quantity entry in another — these are the SAME run.
 
@@ -334,6 +346,26 @@ function validateEngineerRows(raw) {
 function validateEngineerTile(parsed) {
   if (!parsed || parsed.table_found === false) return []
   return validateEngineerRows(parsed.rows)
+}
+
+// Pass 6: finished-grade elevations at structures (from the grading plan).
+const GRADE_KINDS = new Set(['rim', 'top_grate', 'top_curb', 'finished_grade', 'spot'])
+function validateGrades(raw) {
+  const rows = Array.isArray(raw) ? raw : (raw && Array.isArray(raw.grades) ? raw.grades : [])
+  const out = []
+  for (const g of rows) {
+    if (!g || typeof g.structure_id !== 'string' || !g.structure_id.trim()) continue
+    const elev = num(g.finished_grade_elev)
+    // Plausible civil finished-grade range; rejects misreads and page coords.
+    if (elev == null || elev < -500 || elev > 15000) continue
+    out.push({
+      structure_id: g.structure_id.trim().slice(0, 60),
+      finished_grade_elev: elev,
+      kind: GRADE_KINDS.has(g.kind) ? g.kind : 'spot',
+      confidence: CONFIDENCES.has(g.confidence) ? g.confidence : 'LOW',
+    })
+  }
+  return out
 }
 
 // ── Tiling ─────────────────────────────────────────────────────
@@ -780,14 +812,24 @@ function dedupeRuns(runs) {
   return out.map(o => o.run)
 }
 
-function structureDepth(s) {
+// gradeMap: normKey(structure_id) → finished-grade elevation read off the
+// grading plan. Used as the rim fallback — the automated version of "you have
+// to use the grading to find out" when the profile shows invert but no rim.
+function structureDepth(s, gradeMap) {
   if (s.depth_ft != null) return s.depth_ft
   if (s.rim_elev != null && s.invert_elev != null) return s.rim_elev - s.invert_elev
+  if (s.invert_elev != null && gradeMap) {
+    const g = gradeMap.get(normKey(s.id))
+    if (g != null) {
+      const d = g - s.invert_elev
+      if (d >= 0 && d < 100) { s._gradeDerived = true; return d }
+    }
+  }
   return null
 }
 
-function depthStats(run) {
-  const rawDepths = run.structures.map(structureDepth).filter(d => d != null)
+function depthStats(run, gradeMap) {
+  const rawDepths = run.structures.map(s => structureDepth(s, gradeMap)).filter(d => d != null)
   const depths = rawDepths.filter(d => d >= 0 && d < 100)
   // Track how many elevations were unusable (e.g. rim < invert misreads) —
   // interpolation over the survivors assumes even spacing between the wrong
@@ -845,30 +887,40 @@ function lfOverThreshold(stats, threshold) {
 // Consumes runs (each carrying ._stats from depthStats and ._itemIdx = the
 // matched merged line item, if any). Mutates merged to flag deep/unavailable
 // runs; returns derived line items + a depth_summary for the report UI.
-function buildDepthEngine(runs, merged, geotech) {
+function buildDepthEngine(runs, merged, geotech, gradeMap) {
   const rockDepth = geotech?.rock_depth_ft ?? null
   const gwDepth = geotech?.groundwater_depth_ft ?? null
 
   let trenchSafetyLf = 0
+  let gradeDerivedRuns = 0
   const runSummaries = [], deepRuns = [], rockHits = [], groundwaterRuns = [], unavailableRuns = []
 
   for (const run of runs) {
     const st = run._stats
     if (!st) {
-      // Gravity run with no usable elevation data — never guess.
+      // Gravity run with no usable elevation data — never guess. (The grading
+      // fallback already ran inside structureDepth; still nothing → ask.)
       unavailableRuns.push({ run_id: run.run_id, utility: run.utility })
       if (run._itemIdx != null && merged[run._itemIdx]) {
         const it = merged[run._itemIdx]
-        it.note = `DEPTH UNAVAILABLE — verify from profiles. ${it.note || ''}`.trim().slice(0, 1000)
+        it.note = `DEPTH UNAVAILABLE — no rim on the profile and no finished grade found on the grading plan for this run. Verify in the field. ${it.note || ''}`.trim().slice(0, 1000)
       }
       continue
     }
 
     trenchSafetyLf += st.lf_over_5 || 0
+    const gradeDerived = run.structures.some(s => s._gradeDerived)
+    if (gradeDerived) gradeDerivedRuns++
     runSummaries.push({
       run_id: run.run_id, utility: run.utility, length_lf: run.length_lf ?? null,
       depth_avg: st.avg, depth_max: st.max, buckets: st.buckets, lf_over_5: st.lf_over_5 ?? null,
+      grade_derived: gradeDerived || undefined,
     })
+
+    if (gradeDerived && run._itemIdx != null && merged[run._itemIdx]) {
+      const it = merged[run._itemIdx]
+      it.note = `Depth derived from the grading plan's finished grade (rim not called out on the profile) — verify before pricing. ${it.note || ''}`.trim().slice(0, 1000)
+    }
 
     if (st.dropped > 0 && run._itemIdx != null && merged[run._itemIdx]) {
       const it = merged[run._itemIdx]
@@ -898,7 +950,7 @@ function buildDepthEngine(runs, merged, geotech) {
   for (const run of runs) {
     if (!run._stats) continue
     for (const s of run.structures) {
-      const d = structureDepth(s)
+      const d = structureDepth(s, gradeMap)
       const key = normKey(s.id)
       if (d == null || !key) continue
       if (!structMap.has(key)) structMap.set(key, [])
@@ -942,6 +994,7 @@ function buildDepthEngine(runs, merged, geotech) {
     bucket_order: DEPTH_BUCKETS.map(b => b[0]),
     runs: runSummaries,
     trench_safety_lf: Math.round(trenchSafetyLf),
+    grade_derived_runs: gradeDerivedRuns,
     deep_runs: deepRuns,
     crossings,
     unavailable_runs: unavailableRuns,
@@ -1287,6 +1340,7 @@ export const handler = async (event) => {
 
     const p1Sheets = sheets.filter(s => PASS1_TYPES.has(s.classification))
     const p2Sheets = sheets.filter(s => s.classification === 'plan_profile')
+    const p6Sheets = sheets.filter(s => GRADE_TYPES.has(s.classification))
 
     const chainDeadline = Date.now() + CHAIN_AFTER_MS
     const brain = loadBrain()
@@ -1325,14 +1379,15 @@ export const handler = async (event) => {
     const { data: jobRow } = await supabase
       .from('processing_jobs').select('batch_state, config').eq('id', job_id).single()
     const cfg = jobRow?.config || {}
-    const tiers = { pass1: 'opus', pass2: 'opus', pass4: 'opus', pass5: 'haiku', ...(cfg.models || {}) }
+    const tiers = { pass1: 'opus', pass2: 'opus', pass4: 'opus', pass5: 'haiku', pass6: 'sonnet', ...(cfg.models || {}) }
     const M = (k) => MODEL_TIERS[tiers[k]] || OPUS
 
     const TILE_PASSES = [
-      { key: 'pass1', name: 'Pass 1/5 plan quantities', stage: 'analysis_pass_1', sheets: p1Sheets, task: PASS1_TASK, system: brain, model: M('pass1'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
-      { key: 'pass2', name: 'Pass 2/5 profiles', stage: 'analysis_pass_2', sheets: p2Sheets, task: PASS2_TASK, system: brain, model: M('pass2'), validator: validateRuns, resultKey: 'runs', maxTokens: 8192 },
-      { key: 'pass4', name: 'Pass 4/5 small-dia sweep', stage: 'analysis_pass_4', sheets: p1Sheets, task: PASS4_TASK, system: brain, model: M('pass4'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
-      { key: 'pass5', name: 'Pass 5/5 engineer tables', stage: 'analysis_pass_5', sheets, task: PASS5_TASK, system: null, model: M('pass5'), validator: validateEngineerTile, resultKey: null, maxTokens: 4096 },
+      { key: 'pass1', name: 'Pass 1 plan quantities', stage: 'analysis_pass_1', sheets: p1Sheets, task: PASS1_TASK, system: brain, model: M('pass1'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
+      { key: 'pass2', name: 'Pass 2 profiles', stage: 'analysis_pass_2', sheets: p2Sheets, task: PASS2_TASK, system: brain, model: M('pass2'), validator: validateRuns, resultKey: 'runs', maxTokens: 8192 },
+      { key: 'pass4', name: 'Pass 4 small-dia sweep', stage: 'analysis_pass_4', sheets: p1Sheets, task: PASS4_TASK, system: brain, model: M('pass4'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
+      { key: 'pass5', name: 'Pass 5 engineer tables', stage: 'analysis_pass_5', sheets, task: PASS5_TASK, system: null, model: M('pass5'), validator: validateEngineerTile, resultKey: null, maxTokens: 4096 },
+      { key: 'pass6', name: 'Pass 6 grading grades', stage: 'analysis_pass_2', sheets: p6Sheets, task: PASS6_TASK, system: brain, model: M('pass6'), validator: validateGrades, resultKey: 'grades', maxTokens: 4096 },
     ]
     const sheetsById = new Map(sheets.map(s => [s.id, s]))
 
@@ -1572,7 +1627,24 @@ export const handler = async (event) => {
     const p2Raw = await loadPassResults(job_id, 'pass2')
     const p4Items = await loadPassResults(job_id, 'pass4')
     const visionEngineerRows = await loadPassResults(job_id, 'pass5')
+    const p6Grades = await loadPassResults(job_id, 'pass6')
     const runs = dedupeRuns(p2Raw)
+
+    // Finished-grade elevations from the grading plan, keyed by structure id.
+    // Prefer an explicit RIM read, then higher confidence, so the best grade
+    // wins when the same structure is read on multiple tiles.
+    const gradeRank = (g) => (g.kind === 'rim' ? 3 : 0) + (g.confidence === 'HIGH' ? 2 : g.confidence === 'MEDIUM' ? 1 : 0)
+    const gradeMap = new Map()
+    const gradeBest = new Map()
+    for (const g of p6Grades) {
+      const k = normKey(g.structure_id)
+      if (!k) continue
+      const r = gradeRank(g)
+      if (!gradeBest.has(k) || r > gradeBest.get(k)) {
+        gradeBest.set(k, r)
+        gradeMap.set(k, g.finished_grade_elev)
+      }
+    }
 
     // Pass 5 structured-data path: schedule/quantity tables reconstructed from the
     // text layer feed the variance check directly (more reliable than vision).
@@ -1631,7 +1703,7 @@ export const handler = async (event) => {
     // Reconcile plan lengths vs profile lengths. Mismatch >5% becomes a flagged
     // item with both values shown — never silently averaged.
     // Depth stats per run, computed once and reused by the depth engine below.
-    runs.forEach(r => { r._stats = depthStats(r); r._itemIdx = null })
+    runs.forEach(r => { r._stats = depthStats(r, gradeMap); r._itemIdx = null })
 
     const usedItemIdx = new Set()
     const reconciliations = []
@@ -1728,7 +1800,7 @@ export const handler = async (event) => {
     const geotech = (projGeo && (projGeo.geotech_rock_depth_ft != null || projGeo.geotech_groundwater_depth_ft != null))
       ? { rock_depth_ft: projGeo.geotech_rock_depth_ft, groundwater_depth_ft: projGeo.geotech_groundwater_depth_ft }
       : null
-    const { depthSummary, derivedItems } = buildDepthEngine(runs, merged, geotech)
+    const { depthSummary, derivedItems } = buildDepthEngine(runs, merged, geotech, gradeMap)
     derivedItems.forEach(d => merged.push(d))
 
     // ── Material matching: every line item → a catalog material slug ──
@@ -1871,7 +1943,7 @@ export const handler = async (event) => {
         clarifications.push({
           id: cid++, type: 'depth', item_no: it.item_no,
           question: `Depth for "${it.description}" isn't readable on the plans. What depth (in feet) should we use?`,
-          context: 'No rim/invert elevations were legible for this run. Check the profile sheet or verify in the field — excavation, bedding, and trench safety all price off this number.',
+          context: 'No rim on the profile and no finished grade for it on the grading plan. Check the details/grading sheet or verify in the field — excavation, bedding, and trench safety all price off this number.',
         })
       }
     }
@@ -1883,7 +1955,7 @@ export const handler = async (event) => {
         clarifications.push({
           id: cid++, type: 'depth', item_no: it.item_no,
           question: `No depth found for "${it.description}". What's the depth (in feet)?`,
-          context: 'Structure depth drives excavation and shoring cost. If the plans don\'t show it, rim minus invert from the profile is the usual source.',
+          context: 'We checked the profile (rim − invert) and the grading plan finished grade and still couldn\'t pin it down. Grab it from the details sheet or the field.',
         })
       }
     }
@@ -1915,7 +1987,7 @@ export const handler = async (event) => {
         high_confidence_count: counts.HIGH,
         medium_confidence_count: counts.MEDIUM,
         low_confidence_count: counts.LOW,
-        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
+        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
       },
       text_layer: {
         mode: textMode,
@@ -1947,6 +2019,8 @@ export const handler = async (event) => {
         merged_items: merged.length,
         pass4_raw_items: p4Items.length,
         engineer_rows: engineerRows.length,
+        grading_grades: p6Grades.length,
+        grade_derived_depths: depthSummary.grade_derived_runs || 0,
         trench_safety_lf: depthSummary.trench_safety_lf,
       },
       // Real spend for this run (Message Batches pricing). Excludes the few

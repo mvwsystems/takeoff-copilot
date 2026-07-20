@@ -48,6 +48,10 @@ function getSupabase() {
 // IN (the user can exclude them on the sheet map) rather than silently out.
 const ANALYSIS_TYPES = new Set([
   'utility_plan', 'plan_profile', 'storm', 'sanitary', 'water', 'details', 'unclassified',
+  // Grading is auto-included so the depth engine can pull finished-grade
+  // elevations for structures whose rim isn't called out on the profile
+  // ("sometimes it's not and you have to use the grading to find out").
+  'grading',
 ])
 
 const CLASSIFY_PROMPT = `You are classifying construction plan sheets for a utility contractor.
