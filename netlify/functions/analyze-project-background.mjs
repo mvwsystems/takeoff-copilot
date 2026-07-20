@@ -399,7 +399,10 @@ function renderTiles(mupdf, doc, pageIndex) {
 
 function tileContext(sheet, tile) {
   const label = [sheet.sheet_number, sheet.sheet_title].filter(Boolean).join(' — ') || `page ${sheet.page_number}`
-  return `CONTEXT: Sheet "${label}" (classification: ${sheet.classification || 'unknown'}). This image is the ${tile.position} of a ${tile.grid} tile grid; tiles overlap neighbors by ~15%.`
+  const scale = sheet.drawing_scale
+    ? ` Drawing scale ${sheet.drawing_scale} — use it to sanity-check any length: if a run's callout length looks inconsistent with how long it's drawn, lower its confidence and note the discrepancy.`
+    : ''
+  return `CONTEXT: Sheet "${label}" (classification: ${sheet.classification || 'unknown'}). This image is the ${tile.position} of a ${tile.grid} tile grid; tiles overlap neighbors by ~15%.${scale}`
 }
 
 // ── Embedded text layer (MuPDF structured text) ──────────────────
@@ -478,6 +481,90 @@ function tableToEngineerRows(table) {
     if (desc && desc.length > 2) out.push({ item_no: null, description: desc.slice(0, 300), quantity: qty, unit })
   }
   return out
+}
+
+// ── Scale-aware measurement (beta) ──────────────────────────────
+// Detects the drawing scale from the text layer and measures pipe-candidate
+// linework straight from the PDF's vector geometry — so a run can be checked
+// against the drawing even when its callout is wrong or missing (the exact
+// failure mode on poorly-labeled plans). Advisory only: it never overwrites a
+// quantity; it surfaces the longest measured runs + a detected scale so the
+// estimator can eyeball the mains and catch a missed line.
+const INCH_MK = '["”″]'
+const FOOT_MK = "['’′]"
+// US civil convention: 1"=N'. Prefers a HORIZ-labeled scale (profiles carry a
+// separate, finer vertical scale we must not use for plan-view lengths).
+const SCALE_RE = new RegExp(`(horiz[a-z.:\\s]{0,14})?1\\s*(?:${INCH_MK}|in\\.?|inch(?:es)?)\\s*=\\s*(\\d+(?:\\.\\d+)?)\\s*(?:${FOOT_MK}|ft\\b|feet\\b|foot\\b)?`, 'gi')
+
+function detectScale(runs) {
+  const text = runs.map(r => r.text).join(' ')
+  const ms = [...text.matchAll(SCALE_RE)].map(m => ({ n: Number(m[2]), horiz: !!m[1] })).filter(m => isFinite(m.n) && m.n > 0)
+  if (!ms.length) return null
+  const h = ms.find(m => m.horiz)
+  const n = h ? h.n : Math.max(...ms.map(m => m.n))
+  return { label: `1"=${n}'`, ft_per_pt: n / 72, ft_per_in: n }
+}
+
+const applyCtm = (c, x, y) => [c[0] * x + c[2] * y + c[4], c[1] * x + c[3] * y + c[5]]
+const NOOP = () => {}
+
+// Captures every stroked path's polyline length (in page points). Fully
+// guarded — a device error on an odd PDF returns [] rather than failing the run.
+// The callbacks object MUST implement every device method or the native device
+// throws when it hits an unimplemented op (text/image/clip on a real sheet).
+function extractPolylines(mupdf, doc, pageIndex) {
+  const out = []
+  let page = null
+  try {
+    page = doc.loadPage(pageIndex)
+    const cb = {
+      strokePath(path, stroke, ctm) {
+        try {
+          const p = []
+          path.walk({
+            moveTo: (x, y) => p.push(applyCtm(ctm, x, y)),
+            lineTo: (x, y) => p.push(applyCtm(ctm, x, y)),
+            curveTo: (a, b, c, d, e, f) => p.push(applyCtm(ctm, e, f)),
+            closePath: NOOP,
+          })
+          if (p.length < 2) return
+          let len = 0
+          for (let i = 1; i < p.length; i++) len += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1])
+          out.push({ len_pt: len, segs: p.length - 1 })
+        } catch { /* skip bad path */ }
+      },
+      fillPath: NOOP, clipPath: NOOP, clipStrokePath: NOOP, fillText: NOOP, strokeText: NOOP,
+      clipText: NOOP, clipStrokeText: NOOP, ignoreText: NOOP, fillShade: NOOP, fillImage: NOOP,
+      fillImageMask: NOOP, clipImageMask: NOOP, popClip: NOOP, beginMask: NOOP, endMask: NOOP,
+      beginGroup: NOOP, endGroup: NOOP, beginTile: () => 0, endTile: NOOP, beginLayer: NOOP,
+      endLayer: NOOP, close: NOOP,
+    }
+    page.run(new mupdf.Device(cb), mupdf.Matrix.identity)
+  } catch (e) {
+    console.error(`extractPolylines page ${pageIndex}:`, e.message)
+  } finally {
+    if (page) try { page.destroy() } catch { /* ignore */ }
+  }
+  return out
+}
+
+// Per-sheet measurement: detected scale + the longest measured runs in real LF.
+// Multi-segment polylines (segs >= 2) are favored — pipe runs bend through
+// bends/structures, whereas a straight property line is one long segment.
+function measureSheet(runs, mupdf, doc, pageIndex) {
+  const scale = detectScale(runs)
+  if (!scale) return { scale: null }
+  const polys = extractPolylines(mupdf, doc, pageIndex)
+  const measured = polys
+    .map(p => ({ lf: Math.round(p.len_pt * scale.ft_per_pt), segs: p.segs }))
+    .filter(r => r.lf >= 20 && r.lf <= 20000)   // drop marks and full-sheet borders
+  measured.sort((a, b) => b.lf - a.lf)
+  return {
+    scale: scale.label,
+    top_runs: measured.slice(0, 8).map(r => r.lf),
+    candidate_count: measured.length,
+    total_candidate_lf: measured.reduce((s, r) => s + r.lf, 0),
+  }
 }
 
 // ── Message Batches machinery ─────────────────────────────────────
@@ -1196,9 +1283,13 @@ export const handler = async (event) => {
     // vision. Surface that so confidence is read accordingly.
     let totalRuns = 0, sheetsWithText = 0
     for (const s of sheets) {
-      const n = getPageText(s.page_number - 1).runs.length
+      const pageText = getPageText(s.page_number - 1)
+      const n = pageText.runs.length
       totalRuns += n
       if (n >= 5) sheetsWithText++
+      // Detected drawing scale rides in tileContext so the model can sanity-
+      // check callout lengths against how long each run is actually drawn.
+      s.drawing_scale = detectScale(pageText.runs)?.label || null
     }
     const textMode = sheetsWithText >= Math.max(1, Math.ceil(sheets.length * 0.25)) ? 'hybrid' : 'raster-only'
     await updateJob(job_id, { stage_detail: `Text layer: ${textMode} (${totalRuns} runs across ${sheetsWithText}/${sheets.length} sheets)` })
@@ -1665,6 +1756,48 @@ export const handler = async (event) => {
     const counts = { HIGH: 0, MEDIUM: 0, LOW: 0 }
     merged.forEach(m => { counts[m.confidence] = (counts[m.confidence] || 0) + 1 })
 
+    // ── Scale-aware measurement (beta): vector geometry cross-check ──
+    // Per plan sheet, detect scale and measure the longest drawn runs. Compare
+    // the total measured pipe-candidate LF to the total extracted pipe LF — a
+    // large shortfall hints at runs the model missed on a poorly-labeled sheet.
+    let measurement = null
+    try {
+      const measuredSheets = []
+      let measuredLf = 0, sheetsWithScale = 0
+      for (const s of p1Sheets) {
+        const ms = measureSheet(getPageText(s.page_number - 1).runs, mupdf, doc, s.page_number - 1)
+        if (!ms.scale) continue
+        sheetsWithScale++
+        measuredLf += ms.total_candidate_lf || 0
+        measuredSheets.push({
+          sheet: s.sheet_number || `pg ${s.page_number}`,
+          scale: ms.scale,
+          longest_runs_lf: ms.top_runs,
+          candidate_runs: ms.candidate_count,
+        })
+      }
+      if (sheetsWithScale > 0) {
+        const extractedPipeLf = merged
+          .filter(m => m.category === 'PIPE' && (m.unit === 'LF') && m.quantity != null)
+          .reduce((sum, m) => sum + m.quantity, 0)
+        // Candidate linework includes non-pipe strokes, so measured >> extracted
+        // is normal; only a MASSIVE shortfall (extracted < 25% of measured) is a
+        // usable signal, and even then it's advisory.
+        const shortfall = measuredLf > 0 && extractedPipeLf > 0 && extractedPipeLf < measuredLf * 0.25
+        measurement = {
+          beta: true,
+          sheets: measuredSheets,
+          sheets_with_scale: sheetsWithScale,
+          extracted_pipe_lf: Math.round(extractedPipeLf),
+          measured_candidate_lf: Math.round(measuredLf),
+          possible_missed_runs: shortfall,
+          note: 'Measured from the PDF vector geometry using the detected drawing scale. Candidate linework includes some non-pipe strokes — treat the longest measured runs as a reference to cross-check your mains, not exact quantities.',
+        }
+      }
+    } catch (e) {
+      console.error('measurement failed:', e.message)   // never breaks the run
+    }
+
     // Coverage gaps: tiles that failed all retries. These are the report's
     // loudest caveat — quantities in those sheet areas may simply be missing.
     const failedTiles = [...new Set(Object.values(state.failedTiles || {}).flat())]
@@ -1754,6 +1887,7 @@ export const handler = async (event) => {
         merge_degraded: mergeDegraded,
         small_diameter_dedupe_degraded: p4Degraded,
       },
+      measurement,
       clarifications,
       depth_summary: depthSummary,
       variance_table: variance,
