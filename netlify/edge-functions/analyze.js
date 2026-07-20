@@ -117,7 +117,7 @@ export default async (request) => {
     anthropicBody = {
       model: 'claude-sonnet-5',
       max_tokens: tokens,
-      temperature: 0,
+      // No `temperature` — Sonnet 5 deprecated it and 400s if present.
       ...(typeof systemPrompt === 'string' && systemPrompt.trim() ? { system: systemPrompt } : {}),
       messages: [{ role: 'user', content: contentParts }],
     }

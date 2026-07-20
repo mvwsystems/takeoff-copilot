@@ -130,7 +130,8 @@ async function classifyBatch(batchImages) {
         model: 'claude-haiku-4-5-20251001',
         // Enough headroom for a full sheet-index table — 1024 truncated them.
         max_tokens: 4096,
-        temperature: 0,
+        // No `temperature` — omitted everywhere for consistency (Opus/Sonnet
+        // 400 on it; Haiku tolerates it but we keep the request shape uniform).
         messages: [{ role: 'user', content: contentParts }],
       }),
     })

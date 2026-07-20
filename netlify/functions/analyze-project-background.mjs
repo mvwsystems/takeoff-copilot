@@ -202,9 +202,13 @@ async function updateJob(jobId, fields) {
   await supabase.from('processing_jobs').update(fields).eq('id', jobId)
 }
 
-// Extraction runs at temperature 0 — quantity reads should be deterministic,
-// not sampled. withMeta:true returns { text, stop_reason } so callers can
-// detect max_tokens truncation instead of trusting a clipped JSON tail.
+// NOTE: do NOT set `temperature` — Opus 4.8 and Sonnet 5 have DEPRECATED the
+// parameter and return 400 "temperature is deprecated for this model" if it's
+// present (even 0). Haiku still accepts it, but we omit it everywhere for
+// consistency. (Setting temperature:0 here silently 400'd every Opus/Sonnet
+// request in pre-launch testing — extraction returned zero items.)
+// withMeta:true returns { text, stop_reason } so callers can detect max_tokens
+// truncation instead of trusting a clipped JSON tail.
 async function callClaude({ model, system, content, maxTokens = 8192, withMeta = false }) {
   const MAX_ATTEMPTS = 5
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -218,7 +222,6 @@ async function callClaude({ model, system, content, maxTokens = 8192, withMeta =
       body: JSON.stringify({
         model,
         max_tokens: maxTokens,
-        temperature: 0,
         ...(system ? { system } : {}),
         messages: [{ role: 'user', content }],
       }),
@@ -1579,7 +1582,7 @@ export const handler = async (event) => {
             params: {
               model: pass.model,
               max_tokens: pass.maxTokens,
-              temperature: 0,
+              // No `temperature` — Opus 4.8 / Sonnet 5 deprecated it and 400 if present.
               ...(pass.system ? { system: pass.system } : {}),
               messages: [{ role: 'user', content: buildTileContent(w.sheet, tile, embeddedText, pass.task) }],
             },

@@ -43,10 +43,6 @@
   path = "/api/create-checkout"
   function = "create-checkout"
 
-[[edge_functions]]
-  path = "/api/diag-model"
-  function = "diag-model"
-
 [[redirects]]
   from = "/*"
   to = "/index.html"
