@@ -42,6 +42,7 @@ export default function Dashboard() {
   const [billingOn, setBillingOn] = useState(false)
   const [paywall, setPaywall] = useState(null)             // { projectId, imgIdx } when a purchase is needed
   const [buying, setBuying] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
   const [onboardName, setOnboardName] = useState('')
   const [onboardCompany, setOnboardCompany] = useState('')
   const [onboardPhone, setOnboardPhone] = useState('')
@@ -954,6 +955,10 @@ INSTRUCTIONS:
   const handleFileUpload = useCallback(async (e) => {
     const files = Array.from(e.target.files)
     e.target.value = ''
+    await processFiles(files)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const processFiles = useCallback(async (files) => {
     for (const file of files) {
       const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
       if (isPdf) {
@@ -1638,7 +1643,7 @@ INSTRUCTIONS:
           <div className="modal card" style={{ maxWidth: 460, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
             <div style={{
               width: 48, height: 48, margin: '0 auto 14px', borderRadius: '50%',
-              background: 'rgba(232,55,44,0.12)', border: '1px solid var(--titan-red)',
+              background: 'var(--titan-red-glow)', border: '1px solid var(--titan-red)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--titan-red)',
             }}>
               <HelpCircle size={24} />
@@ -2003,25 +2008,42 @@ INSTRUCTIONS:
 
         {sheetCount === 0 ? (
           <div className="empty-state">
-            <div className="empty-icon">
-              <Upload size={40} strokeWidth={1} />
+            <div
+              className={`upload-dropzone ${dragActive ? 'drag-active' : ''}`}
+              onClick={() => fileInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); if (!dragActive) setDragActive(true) }}
+              onDragLeave={(e) => { e.preventDefault(); setDragActive(false) }}
+              onDrop={(e) => {
+                e.preventDefault(); setDragActive(false)
+                const files = Array.from(e.dataTransfer.files || [])
+                if (files.length) processFiles(files)
+              }}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click() }}
+            >
+              <div className="empty-icon">
+                <Upload size={34} strokeWidth={1.5} />
+              </div>
+              <h2>Drop your plan set to start</h2>
+              <p className="dropzone-sub">
+                Drag a PDF plan set here, or <span className="dropzone-link">browse your files</span>.
+                Storm, sanitary &amp; water — plan and profile.
+              </p>
+              <div className="dropzone-formats">PDF up to 100 MB · or PNG / JPG single sheets</div>
             </div>
-            <h2>Upload Your Files</h2>
-            <p className="text-dim">
-              Upload PDF plan sets or individual sheets, geotech analysis, and your takeoff. The AI will analyze your work for accuracy.
-            </p>
-            <button className="btn btn-primary btn-lg" onClick={() => fileInputRef.current?.click()}>
-              <Upload size={18} /> Select Files
-            </button>
-            <div className="scope-note" style={{
-              marginTop: 22, maxWidth: 520, fontSize: '0.78rem', lineHeight: 1.6,
-              color: 'var(--titan-text-muted)', borderTop: '1px solid var(--titan-border)', paddingTop: 16,
-            }}>
-              <strong style={{ color: 'var(--titan-text)' }}>Best fit:</strong> single-level pad sites, commercial site
-              development, and subdivision utility plans — storm, sanitary, and water in plan &amp; profile.
-              Every plan is graded A/B/C before you commit. Not built for vertical/multi-level building plumbing
-              risers or multi-story MEP.{' '}
-              <button className="btn-link" style={{ color: 'var(--titan-red)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, font: 'inherit' }} onClick={() => setReferenceOpen(true)}>
+
+            <div className="empty-capabilities">
+              <div className="cap-chip"><Layers size={15} /><span>Quantities by size &amp; material</span></div>
+              <div className="cap-chip"><BarChart3 size={15} /><span>Depths &amp; OSHA trench safety</span></div>
+              <div className="cap-chip"><ShieldAlert size={15} /><span>Bid-risk &amp; scope-gap flags</span></div>
+            </div>
+
+            <div className="empty-scope">
+              <span className="scope-tag scope-tag-fit">Best fit</span>
+              Single-level pad sites, commercial site development &amp; subdivision utility plans. Every plan is
+              graded A/B/C before you commit — not built for vertical/multi-level building risers.
+              <button className="scope-more" onClick={(e) => { e.stopPropagation(); setReferenceOpen(true) }}>
                 What works best →
               </button>
             </div>
@@ -2353,10 +2375,10 @@ INSTRUCTIONS:
                   {(result.quality?.failed_tiles?.length > 0 || result.quality?.merge_degraded || result.quality?.small_diameter_dedupe_degraded) && (
                     <div style={{
                       display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 14px',
-                      border: '1px solid var(--titan-red)', background: 'rgba(232,55,44,0.08)',
+                      border: '1px solid var(--flag-low)', background: 'var(--flag-low-bg)',
                       borderRadius: 3, margin: '10px 0', fontSize: '0.8rem', lineHeight: 1.5,
                     }}>
-                      <ShieldAlert size={16} style={{ color: 'var(--titan-red)', flexShrink: 0, marginTop: 1 }} />
+                      <ShieldAlert size={16} style={{ color: 'var(--flag-low)', flexShrink: 0, marginTop: 1 }} />
                       <div>
                         {result.quality.failed_tiles?.length > 0 && (
                           <div><strong>Coverage gap:</strong> {result.quality.failed_tiles.length} sheet area{result.quality.failed_tiles.length === 1 ? '' : 's'} could not be analyzed after retries ({result.quality.failed_tiles.slice(0, 4).join('; ')}{result.quality.failed_tiles.length > 4 ? '; …' : ''}). Quantities there may be missing — verify manually or re-run.</div>
@@ -2385,7 +2407,7 @@ INSTRUCTIONS:
                       <tbody>
                         {(result.items || []).map((item, i) => (
                           editingItem === item.item_no ? (
-                            <tr key={i} style={{ background: 'rgba(232,55,44,0.06)' }}>
+                            <tr key={i} style={{ background: 'rgba(0,87,255,0.06)' }}>
                               <td className="text-muted">{item.item_no}</td>
                               <td><span className="cat-badge">{categoryIcon(item.category)} {item.category}</span></td>
                               {result.depth_summary && <td className="mat-cell" />}

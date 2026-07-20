@@ -112,10 +112,34 @@
 }
 
 /* —— JOB CONTEXT PANEL —— */
+/* Sidebar upload sections (Geotech / Specs / Completed Takeoff).
+   These had NO styling, so their titles sat flush at the sidebar's left
+   edge and the first glyph was clipped. Give them consistent padding and a
+   proper section-header treatment. */
+.sidebar-geotech {
+  border-top: 1px solid var(--titan-border);
+  flex-shrink: 0;
+  padding-bottom: 10px;
+}
+.sidebar-geotech-header {
+  padding: 12px 12px 6px;
+}
+.sidebar-geotech-title {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--titan-text-dim);
+}
+.sidebar-geotech-body { padding: 0 12px; }
+.sidebar-upload-btn { margin: 0 12px; width: calc(100% - 24px); }
+
 .sidebar-job-context {
   border-top: 1px solid var(--titan-border);
   flex-shrink: 0;
+  padding-bottom: 10px;
 }
+.sidebar-job-context .sidebar-geotech-header { padding-bottom: 8px; }
 
 .job-context-body {
   padding: 0 10px 10px;
@@ -337,40 +361,51 @@
 .mode-toggle-bar {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 8px 12px;
-  background: var(--titan-card);
+  gap: 6px;
+  padding: 8px 14px;
+  background: #fff;
   border-bottom: 1px solid var(--titan-border);
   flex-shrink: 0;
 }
 
+/* Segmented control — the two mode buttons share one pill container */
+.mode-toggle-bar > .mode-toggle-btn:first-of-type { border-radius: 6px 0 0 6px; }
+.mode-toggle-bar > .mode-toggle-btn:nth-of-type(2) { border-radius: 0 6px 6px 0; border-left: none; }
+
 .mode-toggle-btn {
   font-family: var(--font-body);
-  font-size: 0.75rem;
+  font-size: 0.74rem;
   font-weight: 600;
   letter-spacing: 0.4px;
   text-transform: uppercase;
-  padding: 5px 16px;
+  padding: 6px 18px;
   border: 1px solid var(--titan-border);
-  border-radius: 2px;
-  background: transparent;
+  background: #f4f4f4;
   color: var(--titan-text-dim);
   cursor: pointer;
   transition:
-    background  0.25s var(--ease-silk),
-    color       0.25s var(--ease-silk),
-    border-color 0.25s var(--ease-silk);
+    background  0.2s var(--ease-silk),
+    color       0.2s var(--ease-silk),
+    box-shadow  0.2s var(--ease-silk);
 }
 
 .mode-toggle-btn:hover {
-  color: var(--titan-text);
-  border-color: var(--titan-border-light);
+  color: #222;
+  background: #ececec;
 }
 
 .mode-toggle-btn.active {
   background: var(--titan-red);
   color: #fff;
   border-color: var(--titan-red);
+  box-shadow: inset 0 0 0 1px var(--titan-red);
+}
+
+/* Tab-bar mode help hint next to the toggle */
+.mode-hint {
+  font-size: 0.72rem;
+  color: #888;
+  margin-left: 4px;
 }
 
 /* —— MAIN CONTENT — light theme —— */
@@ -411,28 +446,130 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: safe center;   /* centers, but never clips the top on short viewports */
+  gap: 0;
   padding: var(--space-2xl);
+  overflow-y: auto;
 }
+
+/* Drop zone — the primary first-run target */
+.upload-dropzone {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 48px 32px;
+  border: 2px dashed var(--titan-border-light);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out),
+              background var(--duration-fast) var(--ease-out),
+              transform var(--duration-fast) var(--ease-out);
+}
+.upload-dropzone:hover {
+  border-color: var(--titan-red);
+  background: #fbfcff;
+}
+.upload-dropzone:focus-visible { outline: 2px solid var(--titan-red); outline-offset: 3px; }
+.upload-dropzone.drag-active {
+  border-color: var(--titan-red);
+  background: rgba(0, 87, 255, 0.05);
+  transform: scale(1.01);
+}
+
 .empty-icon {
-  width: 80px;
-  height: 80px;
+  width: 72px;
+  height: 72px;
   border-radius: 50%;
   border: 1px solid var(--titan-border-light);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--titan-text-muted);
+  color: var(--titan-red);
   margin-bottom: var(--space-lg);
+  transition: border-color var(--duration-fast) var(--ease-out);
 }
-.empty-state h2 { margin-bottom: var(--space-sm); }
-.empty-state p {
-  max-width: 420px;
+.upload-dropzone:hover .empty-icon,
+.upload-dropzone.drag-active .empty-icon { border-color: var(--titan-red); }
+
+.empty-state h2 { margin-bottom: 10px; font-size: 1.5rem; }
+.dropzone-sub {
+  max-width: 400px;
+  line-height: 1.6;
+  font-size: 0.9rem;
+  color: #4a4a4a;
+  margin-bottom: 14px;
+}
+.dropzone-link { color: var(--titan-red); font-weight: 600; }
+.dropzone-formats {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.5px;
+  color: #999;
+  text-transform: uppercase;
+}
+
+/* Capability chips */
+.empty-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 26px;
+}
+.cap-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #fff;
+  border: 1px solid var(--titan-border);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #333;
+}
+.cap-chip svg { color: var(--titan-red); flex-shrink: 0; }
+
+/* Scope guidance */
+.empty-scope {
+  max-width: 560px;
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--titan-border);
   text-align: center;
-  margin-bottom: var(--space-xl);
-  line-height: 1.7;
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+  line-height: 1.65;
+  color: #666;
 }
+.scope-tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.scope-tag-fit { background: var(--flag-high-bg); color: var(--flag-high); border: 1px solid var(--flag-high); }
+.scope-more {
+  display: inline;
+  background: none;
+  border: none;
+  padding: 0 0 0 6px;
+  font: inherit;
+  color: var(--titan-red);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.scope-more:hover { text-decoration: underline; }
 
 /* SHEET HEADER */
 .sheet-header {
