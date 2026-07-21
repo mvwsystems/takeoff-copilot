@@ -112,7 +112,7 @@ export default function LoginPage() {
                 password_label: 'Password',
                 button_label: 'Create Account',
                 link_text: "Don't have an account? Sign up",
-                confirmation_text: 'Check your email for a confirmation link from Takeoff Copilot.',
+                confirmation_text: 'Account created — signing you in…',
               },
               forgotten_password: {
                 email_label: 'Email',
