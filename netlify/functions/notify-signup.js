@@ -107,8 +107,13 @@ exports.handler = async (event) => {
         'Authorization': `Bearer ${process.env.RESEND_API_KEY}`
       },
       body: JSON.stringify({
-        from: 'Takeoff Copilot <onboarding@resend.dev>',
-        to: ['mvw@mattvincentwalker.com'],
+        // Send from the verified takeoffcopilot.com domain (NOT the resend.dev
+        // sandbox, which only delivers to the account owner). Sending works as
+        // soon as the domain is verified — no mailbox required.
+        from: 'Takeoff Copilot <hello@takeoffcopilot.com>',
+        reply_to: 'hello@6signal.co',
+        // Signup alerts go to both addresses so one is never missed.
+        to: ['hello@6signal.co', 'mvw@mattvincentwalker.com'],
         subject,
         html
       })
