@@ -144,7 +144,7 @@ export default function OnboardingFlow({ open, initialProfile, onComplete, onSki
 
           {step === 0 && (
             <div className="onb-step onb-step-welcome">
-              <div className="onb-logo-mark">T</div>
+              <img src="/logo-ascent-blue.svg" alt="" className="onb-logo-mark" />
               <div className="onb-kicker"><span className="onb-slashes">//</span> WELCOME</div>
               <h2 className="onb-title onb-title-brand">
                 TAKEOFF <span className="onb-accent-text">COPILOT</span>

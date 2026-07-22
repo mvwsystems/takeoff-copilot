@@ -145,19 +145,14 @@
   margin-bottom: 14px;
 }
 
+/* Ascent logo mark — the SVG supplies its own brand blue, so the old
+   lettermark badge styling (background, clip-path, glow) is gone. */
 .onb-logo-mark {
   width: 56px;
   height: 56px;
   margin-bottom: 18px;
-  background: var(--onb-accent);
-  color: var(--titan-white, #F5F5F0);
-  font-family: var(--font-display, 'Bebas Neue', Impact, sans-serif);
-  font-size: 2rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  clip-path: polygon(0 0, 100% 0, 100% 85%, 85% 100%, 0 100%);
-  box-shadow: 0 0 32px var(--onb-accent-glow);
+  display: block;
+  object-fit: contain;
 }
 
 /* —— STEP 2: PROFILE —— */

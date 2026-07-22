@@ -27,17 +27,14 @@
   text-decoration: none;
 }
 
+/* Ascent logo mark — the SVG carries its own brand blue, so no background
+   or clip-path here (those were for the old lettermark badge). */
 .brand-mark {
-  width: 32px;
-  height: 32px;
-  background: var(--titan-red);
-  color: var(--titan-white);
-  font-family: var(--font-display);
-  font-size: 1.25rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  clip-path: polygon(0 0, 100% 0, 100% 85%, 85% 100%, 0 100%);
+  width: 30px;
+  height: 30px;
+  display: block;
+  flex-shrink: 0;
+  object-fit: contain;
 }
 
 .brand-text {

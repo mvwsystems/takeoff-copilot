@@ -19,12 +19,7 @@ export default function LoginPage() {
       <div className="login-card card animate-in">
         <div className="login-header">
           <div className="login-brand">
-            <div style={{
-              width: 40, height: 40, background: 'var(--titan-red)', color: 'var(--titan-white)',
-              fontFamily: 'var(--font-display)', fontSize: '1.5rem',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              clipPath: 'polygon(0 0, 100% 0, 100% 85%, 85% 100%, 0 100%)'
-            }}>T</div>
+            <img src="/logo-ascent-blue.svg" alt="Takeoff Copilot" style={{ width: 48, height: 48, display: 'block' }} />
           </div>
           <h3>Takeoff Copilot</h3>
           <span className="titan-label">Secure Access</span>
