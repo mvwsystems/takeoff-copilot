@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Upload, FileText, BarChart3, AlertTriangle, Layers, Eye, ScanSearch, ChevronDown, CheckCircle, Check, Minus } from 'lucide-react'
+import { Upload, FileText, BarChart3, AlertTriangle, Layers, Eye, ScanSearch, ChevronDown, CheckCircle, Check, Minus, Mail } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import RiskPill from '../components/RiskPill'
 import './LandingPage.css'
@@ -829,65 +829,146 @@ export default function LandingPage() {
       <section className="pricing-section" id="pricing">
         <div className="pricing-inner">
 
-          {/* LEFT — sticky price card */}
-          <div className="pricing-col-left">
-            <div className="section-header pricing-section-header" data-reveal>
-              <span className="titan-label">Pricing</span>
-              <h2>Simple. Per Plan Set.</h2>
-              <p className="section-sub">No subscription. No seat fees. Creating an account, uploading plans, and viewing past takeoffs are free &mdash; you only pay when you run the analysis.</p>
-            </div>
-            <div data-reveal>
-              <div className="pricing-card">
-                <div className="pricing-card-header">
-                  <div className="pricing-tier-label">QA Bid Review</div>
-                  <div className="pricing-amount">
-                    <span className="pricing-dollar">$</span>
-                    <span className="pricing-num">97</span>
-                    <span className="pricing-per">/ report</span>
-                  </div>
-                  <p className="pricing-tagline">One plan set. Full Bid Risk Report. Downloadable PDF.</p>
-                </div>
-                <div className="pricing-billing">
-                  <div className="pricing-billing-row">
-                    <span className="pricing-billing-tag pricing-billing-tag-free">Free</span>
-                    <span className="pricing-billing-text">Create an account, upload your plans, and view every past takeoff &mdash; no charge.</span>
-                  </div>
-                  <div className="pricing-billing-row">
-                    <span className="pricing-billing-tag pricing-billing-tag-paid">$97</span>
-                    <span className="pricing-billing-text">Charged once when you run the full multi-pass analysis on a new plan set. Re-runs of that same set are included.</span>
-                  </div>
-                </div>
-                <ul className="pricing-features">
-                  {[
-                    'Plan grade assessment (A / B / C)',
-                    'Line-by-line quantity comparison against plans',
-                    'High Risk Misses table with risk level and notes',
-                    'Geotech cross-reference (dewatering, rock, lime, fill, haul-off)',
-                    'Scope gap check (CCTV, testing, traffic control, permits, and more)',
-                    'Clarification questions and assumptions needing approval',
-                    'Recommended bid notes formatted for the proposal letter',
-                    'Estimator confidence score (A–F)',
-                    'Full PDF download',
-                  ].map((item, i) => (
-                    <li key={i}>
-                      <CheckCircle size={14} className="pricing-check" />
-                      <span>{item}</span>
-                    </li>
-                  ))}
-                </ul>
-                <div className="pricing-cta">
-                  <Link to="/login" className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
-                    <Upload size={16} />
-                    Submit a Bid for QA Review
-                  </Link>
-                  <p className="pricing-disclaimer">Uploading and previewing are free. You&apos;re only charged the $97 when you run the full analysis on a new plan set. Report is ready immediately.</p>
-                </div>
+          {/* Header */}
+          <div className="section-header" data-reveal>
+            <span className="titan-label">Pricing</span>
+            <h2>Plans That Scale With Your Bid Volume</h2>
+            <p className="section-sub">
+              Metered in takeoffs &mdash; a takeoff is one full plan set. Start with
+              2 free takeoffs, no card required, then pick the plan that matches how
+              many bids you chase.
+            </p>
+          </div>
+
+          {/* 3-tier subscription grid */}
+          <div className="pricing-tiers" data-reveal>
+
+            {/* Solo Estimator */}
+            <div className="pricing-tier">
+              <div className="pricing-tier-head">
+                <span className="pricing-tier-name">Solo Estimator</span>
               </div>
+              <div className="pricing-tier-price">
+                <span className="pricing-tier-dollar">$</span>
+                <span className="pricing-tier-amount">197</span>
+                <span className="pricing-tier-per">/ month</span>
+              </div>
+              <div className="pricing-tier-meta">1 seat &middot; 20 takeoffs / month</div>
+              <p className="pricing-tier-desc">
+                For owner-operators and small utility subs bidding a few local jobs
+                a week &mdash; trenching, water lines, and service work.
+              </p>
+              <ul className="pricing-tier-features">
+                {[
+                  'Full Bid Risk Report per takeoff',
+                  'All 16 report pages + PDF export',
+                  'Re-runs, edits & exports included',
+                  'Plan grade + geotech cross-reference',
+                ].map((item, i) => (
+                  <li key={i}>
+                    <CheckCircle size={14} className="pricing-tier-check" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="pricing-tier-cta">
+                <Link to="/login" className="btn btn-secondary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
+                  Start Free
+                </Link>
+              </div>
+            </div>
+
+            {/* Growth Team — Most Popular */}
+            <div className="pricing-tier pricing-tier-featured">
+              <span className="pricing-tier-badge">Most Popular</span>
+              <div className="pricing-tier-head">
+                <span className="pricing-tier-name">Growth Team</span>
+              </div>
+              <div className="pricing-tier-price">
+                <span className="pricing-tier-dollar">$</span>
+                <span className="pricing-tier-amount">497</span>
+                <span className="pricing-tier-per">/ month</span>
+              </div>
+              <div className="pricing-tier-meta">3 seats &middot; 100 takeoffs / month</div>
+              <p className="pricing-tier-desc">
+                For mid-size contractors with a couple of estimators chasing
+                municipal and commercial site-work on tighter deadlines.
+              </p>
+              <ul className="pricing-tier-features">
+                {[
+                  '3 estimator seats included',
+                  '100 takeoffs across your team',
+                  'Shared price book & bid history',
+                  'Priority support',
+                ].map((item, i) => (
+                  <li key={i}>
+                    <CheckCircle size={14} className="pricing-tier-check" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="pricing-tier-cta">
+                <Link to="/login" className="btn btn-primary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
+                  Start Free
+                </Link>
+              </div>
+            </div>
+
+            {/* Enterprise / Heavy Civil */}
+            <div className="pricing-tier">
+              <div className="pricing-tier-head">
+                <span className="pricing-tier-name">Enterprise / Heavy Civil</span>
+              </div>
+              <div className="pricing-tier-price">
+                <span className="pricing-tier-amount pricing-tier-amount-custom">Custom</span>
+                <span className="pricing-tier-per">billed annually</span>
+              </div>
+              <div className="pricing-tier-meta">Unlimited seats &middot; custom volume</div>
+              <p className="pricing-tier-desc">
+                For large civil and utility firms bidding multi-million-dollar work
+                across multiple crews and offices.
+              </p>
+              <ul className="pricing-tier-features">
+                {[
+                  'Unlimited seats',
+                  'Custom takeoff volume',
+                  'SSO & dedicated onboarding',
+                  'Volume pricing + SLA',
+                ].map((item, i) => (
+                  <li key={i}>
+                    <CheckCircle size={14} className="pricing-tier-check" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="pricing-tier-cta">
+                <a href="mailto:hello@6signal.co" className="btn btn-secondary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
+                  <Mail size={16} />
+                  Contact Us
+                </a>
+              </div>
+            </div>
+
+          </div>
+
+          {/* Supporting copy — free trial / pay-as-you-go / what a takeoff is */}
+          <div className="pricing-notes" data-reveal>
+            <div className="pricing-note">
+              <span className="pricing-note-mark">//</span>
+              <span className="pricing-note-text"><strong>Start with 2 free takeoffs</strong> &mdash; no card required.</span>
+            </div>
+            <div className="pricing-note">
+              <span className="pricing-note-mark">//</span>
+              <span className="pricing-note-text"><strong>Need just one?</strong> Single takeoffs are $25 each.</span>
+            </div>
+            <div className="pricing-note">
+              <span className="pricing-note-mark">//</span>
+              <span className="pricing-note-text"><strong>A takeoff = one full plan set.</strong> Re-runs, edits, and exports of that set are included.</span>
             </div>
           </div>
 
-          {/* RIGHT — fanned PDF page previews */}
-          <div className="pricing-col-right">
+          {/* What's in the report — 16-page preview */}
+          <div className="pricing-report">
             <div className="pp-kicker">
               <span className="titan-label">// 16 Pages — What's In the Report</span>
             </div>
@@ -1103,7 +1184,7 @@ export default function LandingPage() {
               </div>
             </div>
 
-          </div>{/* end pricing-col-right */}
+          </div>{/* end pricing-report */}
 
         </div>
       </section>
@@ -1141,8 +1222,8 @@ export default function LandingPage() {
             </Link>
           </div>
           <p className="cta-disclaimer">
-            Free to create an account, upload, and view past takeoffs. $97 per plan set,
-            charged only when you run the analysis. No subscription.
+            Start with 2 free takeoffs — no card required. Plans from $197/month,
+            or single takeoffs at $25 each.
           </p>
         </div>
       </section>

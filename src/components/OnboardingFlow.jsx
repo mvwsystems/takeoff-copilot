@@ -120,7 +120,7 @@ export default function OnboardingFlow({ open, initialProfile, onComplete, onSki
   const readyItems = [
     // Pricing line only appears once billing is live (VITE_BILLING_ENABLED),
     // so testers in the free window aren't told about a charge that won't happen.
-    ...(billingLive ? [{ icon: DollarSign, text: 'Free to upload and preview your sheets. $97 per plan set to run the full takeoff — re-runs, edits, and exports of that set are included.' }] : []),
+    ...(billingLive ? [{ icon: DollarSign, text: 'Start with 2 free takeoffs — no card. Then plans from $197/mo (Solo, 20 takeoffs). A takeoff is one full plan set; re-runs and exports are included.' }] : []),
     { icon: FileText, text: 'Have your plan PDF ready — up to 100 MB.' },
     { icon: Gauge, text: 'Best fit: single-level pad sites & site-civil plans (storm, sanitary, water). Not built for multi-level building risers.' },
     { icon: BookOpen, text: 'The Reference Bank (book icon, top bar) answers questions any time.' },

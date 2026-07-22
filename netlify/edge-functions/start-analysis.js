@@ -112,38 +112,56 @@ export default async (request) => {
     })
   }
 
+  // Per-takeoff fair-use: bound COGS on giant sheet sets. Pad-site jobs are
+  // well under this; a huge highway set is asked to trim or contact us.
+  const SHEET_CAP = Number(Deno.env.get('MAX_SHEETS_PER_TAKEOFF')) || 60
+  if (count > SHEET_CAP && !jobConfig?.calibration) {
+    return new Response(JSON.stringify({
+      error: `This plan set has ${count} sheets selected — the per-takeoff limit is ${SHEET_CAP}. Trim the sheet selection, or contact us for a heavy-civil plan.`,
+      reason: 'too_many_sheets',
+    }), { status: 400, headers: { 'Content-Type': 'application/json' } })
+  }
+
   // ── Billing gate ──────────────────────────────────────────
-  // Charged once per project (first analysis); re-runs/retries are free.
-  // When Stripe isn't configured (STRIPE_SECRET_KEY absent) billing is off and
-  // everything runs free — flip it on by setting the Stripe env vars.
-  // Calibration runs never charge. Uses the service role for the atomic RPC;
-  // the RPC itself re-checks that the project belongs to this user.
+  // charge_project decides how this takeoff is covered (charged once per
+  // project; re-runs/retries free). Order: subscription quota → pay-as-you-go
+  // credit → 2 free-trial takeoffs → blocked. When Stripe isn't configured
+  // billing is off and everything runs free. Calibration runs never charge.
   const billingOn = !!Deno.env.get('STRIPE_SECRET_KEY')
   let charged = false
+  let chargeSource = null
   if (billingOn && !jobConfig?.calibration) {
     const svc = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))
     const { data: outcome, error: chargeErr } = await svc.rpc('charge_project', {
       p_project: project_id, p_user: user.id,
     })
     if (chargeErr) {
-      return new Response(JSON.stringify({ error: 'Could not verify your takeoff credit — try again.' }), {
+      return new Response(JSON.stringify({ error: 'Could not start this takeoff — try again.' }), {
         status: 500, headers: { 'Content-Type': 'application/json' },
       })
     }
     if (outcome === 'insufficient') {
-      return new Response(JSON.stringify({ error: 'payment_required', reason: 'no_credit' }), {
+      // Out of monthly takeoffs / trial / credits → the UI opens the plans + overage.
+      return new Response(JSON.stringify({ error: 'payment_required', reason: 'out_of_takeoffs' }), {
         status: 402, headers: { 'Content-Type': 'application/json' },
       })
     }
-    charged = outcome === 'charged'
+    chargeSource = outcome                        // subscription | credit | trial | already_paid | admin_free
+    charged = ['subscription', 'credit', 'trial'].includes(outcome)
   }
 
-  // Refunds the credit if the run can't actually be launched — the customer
-  // must never pay for a takeoff that never started.
+  // Refund if the run can't actually launch — never charge for a takeoff that
+  // never started. Undo whichever way it was covered (credit vs quota/trial ledger).
   const refundIfCharged = async () => {
     if (!charged) return
     const svc = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'))
-    await svc.rpc('grant_credits', { p_user: user.id, p_qty: 1, p_session: `refund_${project_id}_${Date.now()}` })
+    if (chargeSource === 'credit') {
+      await svc.rpc('grant_credits', { p_user: user.id, p_qty: 1, p_session: `refund_${project_id}_${Date.now()}` })
+    } else {
+      // subscription/trial were recorded as zero-delta ledger rows against this
+      // project; clearing paid_at frees the slot and the ledger row is harmless.
+      await svc.from('credit_ledger').delete().eq('project_id', project_id).in('reason', ['subscription_use', 'trial'])
+    }
     await svc.from('projects').update({ paid_at: null }).eq('id', project_id)
   }
 
@@ -187,7 +205,7 @@ export default async (request) => {
     })
   }
 
-  return new Response(JSON.stringify({ job_id: job.id, sheet_count: count, charged }), {
+  return new Response(JSON.stringify({ job_id: job.id, sheet_count: count, charged, charge_source: chargeSource }), {
     status: 200, headers: { 'Content-Type': 'application/json' },
   })
 }

@@ -23,9 +23,14 @@ Status legend: ✅ already in place · ⚙️ you must set it · 🔵 optional.
 | `QUOTA_ANALYSES_PER_DAY` | 🔵 | Per-user daily pipeline-run cap (default 10) |
 | `STRIPE_SECRET_KEY` | ⚙️ | **Turns billing ON.** Until set, everything runs free. |
 | `STRIPE_WEBHOOK_SECRET` | ⚙️ | Verifies Stripe webhook calls (see §4) |
-| `STRIPE_PRICE_ID` | 🔵 | Use a Stripe Price instead of the inline $97 |
-| `TAKEOFF_PRICE_CENTS` | 🔵 | Override the price in cents (default 9700 = $97) |
-| `VITE_BILLING_ENABLED` | ⚙️ | Set to `true` when Stripe is live so the onboarding shows the "$97 per plan set" line. Leave unset while free. Build-time flag (redeploy after changing). |
+| `STRIPE_PRICE_SOLO` | ⚙️ | Stripe **recurring** Price ID for Solo ($197/mo). Required for the Solo plan. |
+| `STRIPE_PRICE_GROWTH` | ⚙️ | Stripe recurring Price ID for Growth ($497/mo). Required for the Growth plan. |
+| `STRIPE_PRICE_SOLO_ANNUAL` | 🔵 | Annual Solo Price ID (optional; enables the annual toggle). |
+| `STRIPE_PRICE_GROWTH_ANNUAL` | 🔵 | Annual Growth Price ID (optional). |
+| `STRIPE_PRICE_SINGLE` | 🔵 | Price ID for a single/overage takeoff; else an inline $25 one-off is used. |
+| `SINGLE_TAKEOFF_CENTS` | 🔵 | Override the single-takeoff price in cents (default 2500 = $25). |
+| `MAX_SHEETS_PER_TAKEOFF` | 🔵 | Per-takeoff fair-use analyzed-sheet cap (default 60). |
+| `VITE_BILLING_ENABLED` | ⚙️ | Set to `true` when Stripe is live so the app shows plans/usage + onboarding pricing. Leave unset while free. Build-time flag (redeploy after changing). |
 
 ---
 
@@ -44,18 +49,19 @@ Status legend: ✅ already in place · ⚙️ you must set it · 🔵 optional.
 - ✅ Realtime enabled on `processing_jobs`.
 - ✅ Signup webhook (`Database → Webhooks`) posts to `/.netlify/functions/notify-signup` with the `x-webhook-secret` header = `WEBHOOK_SECRET`.
 
-## 4. Stripe (to turn on the $97 paywall)
+## 4. Stripe (to turn on subscription billing)
 Billing is dormant until `STRIPE_SECRET_KEY` exists. To go live:
 
-1. ⚙️ Create the account / get the **secret key** → set `STRIPE_SECRET_KEY` in Netlify.
-2. ⚙️ (Optional) Create a **Product + Price** at $97 → set `STRIPE_PRICE_ID`. Otherwise the code creates the $97 line inline.
+1. ⚙️ Get the **secret key** → set `STRIPE_SECRET_KEY` in Netlify.
+2. ⚙️ Create two **recurring Products/Prices**: Solo ($197/mo) and Growth ($497/mo). Copy the **Price IDs** → `STRIPE_PRICE_SOLO`, `STRIPE_PRICE_GROWTH`. (Optional: annual prices → the `_ANNUAL` vars; a single-takeoff price → `STRIPE_PRICE_SINGLE`, else a $25 one-off is created inline.)
 3. ⚙️ **Developers → Webhooks → Add endpoint**:
    - URL: `https://takeoffcopilot.com/.netlify/functions/stripe-webhook`
-   - Event: `checkout.session.completed`
-   - Copy the endpoint's **Signing secret** → set `STRIPE_WEBHOOK_SECRET` in Netlify.
-4. Test with a real card (or Stripe test mode keys first). On success the buyer's credit appears within a few seconds; starting a new plan set's analysis consumes it. Re-runs of the same plan set are free.
+   - Events: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`
+   - Copy the **Signing secret** → `STRIPE_WEBHOOK_SECRET`.
+4. ⚙️ Set `VITE_BILLING_ENABLED=true` and redeploy (shows plans/usage in-app).
+5. Test with Stripe test-mode keys first: subscribe → the plan + monthly quota activate within seconds; running a new plan set decrements the quota.
 
-**How the money model works:** free account + free upload/triage/sheet-map + free history. $97 is charged once, atomically, the first time a *project* (plan set) runs the multi-pass analysis. Admin emails and calibration runs never charge. If a run fails to launch, the credit auto-refunds.
+**How the money model works:** free account + free upload/triage/sheet-map. Metered in **takeoffs (plan sets), not sheets** — charged once per project (re-runs/edits/exports free). Coverage order per takeoff: **active-subscription monthly quota → pay-as-you-go credit (overage/$25) → 2 lifetime free-trial takeoffs → blocked** (opens the plans modal). Tiers: Solo $197/mo·20, Growth $497/mo·100, Enterprise custom. A **per-takeoff fair-use cap** (default 60 analyzed sheets) bounds COGS on giant sets. Admin emails and calibration runs never charge. If a run fails to launch, the charge auto-refunds. Quota resets each Stripe billing cycle automatically.
 
 ## 5. Post-deploy smoke test
 1. Sign up with a fresh email → confirm the profile row + signup email fire.

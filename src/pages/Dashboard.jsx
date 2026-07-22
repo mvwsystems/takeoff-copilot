@@ -38,10 +38,10 @@ export default function Dashboard() {
   const [clarifyPrompt, setClarifyPrompt] = useState(null) // { count } — post-analysis "AI has questions" popup
   const [editingItem, setEditingItem] = useState(null)     // item_no being edited inline
   const [editDraft, setEditDraft] = useState({})           // { description, quantity, unit }
-  const [credits, setCredits] = useState(null)             // takeoff credits; null = billing off / unknown
-  const [billingOn, setBillingOn] = useState(false)
-  const [paywall, setPaywall] = useState(null)             // { projectId, imgIdx } when a purchase is needed
-  const [buying, setBuying] = useState(false)
+  const [usage, setUsage] = useState(null)                 // { plan, status, quota, used, credits, trial_used, ... }
+  const [paywall, setPaywall] = useState(null)             // truthy = open the plans modal
+  const [buying, setBuying] = useState(null)               // which button is mid-checkout
+  const BILLING = import.meta.env.VITE_BILLING_ENABLED === 'true'
   const [dragActive, setDragActive] = useState(false)
   const [priceBook, setPriceBook] = useState({})           // key -> { unit_cost, unit, label }
   const [showPricing, setShowPricing] = useState(false)    // reveal the estimate view
@@ -770,12 +770,27 @@ INSTRUCTIONS:
   // Takeoff-credit balance. Billing is "on" only when a user_credits row exists
   // (created on first purchase); until then the server decides free vs paid, and
   // the UI just shows the balance when there is one.
-  const loadCredits = useCallback(async () => {
+  // Subscription plan + this month's takeoff usage (quota, credits, trial).
+  const loadUsage = useCallback(async () => {
     if (!user) return
-    const { data } = await supabase.from('user_credits').select('balance').eq('user_id', user.id).maybeSingle()
-    if (data) { setCredits(data.balance); setBillingOn(true) }
+    const { data } = await supabase.rpc('my_takeoff_usage')
+    if (data) setUsage(data)
   }, [user])
-  useEffect(() => { loadCredits() }, [loadCredits])
+  useEffect(() => { loadUsage() }, [loadUsage])
+
+  // A short human label for the takeoffs the user has left, by coverage source.
+  const takeoffsLeftLabel = () => {
+    if (!usage) return null
+    if (usage.plan) {
+      const left = Math.max(0, (usage.quota || 0) - (usage.used || 0))
+      const name = usage.plan === 'growth' ? 'Growth' : usage.plan === 'solo' ? 'Solo' : 'Enterprise'
+      return `${name} · ${left} of ${usage.quota} takeoffs left`
+    }
+    if ((usage.credits || 0) > 0) return `${usage.credits} takeoff${usage.credits === 1 ? '' : 's'} available`
+    const trialLeft = Math.max(0, (usage.trial_total ?? 2) - (usage.trial_used || 0))
+    if (trialLeft > 0) return `${trialLeft} free takeoff${trialLeft === 1 ? '' : 's'} left`
+    return 'No takeoffs left — choose a plan'
+  }
 
   // ── Price book (bid-ready pricing) ────────────────────────────
   // A unit cost entered once auto-prices that item on every future takeoff.
@@ -909,33 +924,35 @@ INSTRUCTIONS:
     if (!status) return
     window.history.replaceState({}, '', window.location.pathname)
     if (status === 'success') {
-      setBillingOn(true)
-      // The webhook grants the credit; poll briefly until the balance reflects it.
+      setPaywall(null)
+      // Stripe webhook activates the subscription / grants the credit — poll the
+      // usage RPC briefly until it reflects the new plan or balance.
       let tries = 0
       const poll = setInterval(async () => {
         tries++
-        const { data } = await supabase.from('user_credits').select('balance').eq('user_id', user?.id).maybeSingle()
-        if (data) setCredits(data.balance)
-        if ((data && data.balance > 0) || tries >= 8) clearInterval(poll)
+        const { data } = await supabase.rpc('my_takeoff_usage')
+        if (data) setUsage(data)
+        if ((data && (data.plan || (data.credits || 0) > 0)) || tries >= 10) clearInterval(poll)
       }, 1500)
     }
   }, [user])
 
-  const startCheckout = async () => {
-    setBuying(true)
+  // plan: 'solo' | 'growth' | 'single'.  interval: 'month' | 'year'.
+  const startCheckout = async (plan, interval = 'month') => {
+    setBuying(plan)
     try {
       const { data: { session } } = await supabase.auth.getSession()
       const res = await fetch('/api/create-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ return_to: '/dashboard' }),
+        body: JSON.stringify({ plan, interval, return_to: '/dashboard' }),
       })
       const data = await res.json()
       if (!res.ok || !data.url) throw new Error(data.error || 'Checkout unavailable')
       window.location.href = data.url   // redirect to Stripe-hosted checkout
     } catch (err) {
       setError(`Could not start checkout: ${err.message}`)
-      setBuying(false)
+      setBuying(null)
     }
   }
 
@@ -1633,11 +1650,10 @@ INSTRUCTIONS:
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
         body: JSON.stringify({ project_id: projectId, geotech }),
       })
-      // 402 → out of takeoff credits. Open the paywall instead of erroring.
+      // 402 → out of monthly takeoffs / trial / credits. Open the plans modal.
       if (res.status === 402) {
-        setBillingOn(true)
-        setCredits(0)
-        setPaywall({ projectId, imgIdx })
+        setPaywall(true)
+        loadUsage()
         return
       }
       if (!res.ok) {
@@ -1646,7 +1662,7 @@ INSTRUCTIONS:
         throw new Error(msg)
       }
       const { job_id } = await res.json()
-      loadCredits()   // a credit may have been spent — refresh the badge
+      loadUsage()   // a takeoff may have been spent — refresh the badge
       setImages(prev => prev.map((img, i) =>
         i === imgIdx
           ? { ...img, job_id, jobStage: 'analysis_queued', jobProgress: 0, jobDetail: 'Queued for analysis', jobError: null }
@@ -1846,31 +1862,65 @@ INSTRUCTIONS:
         </div>
       )}
 
-      {/* PAYWALL — one takeoff = $97, charged once per plan set */}
+      {/* PLANS — subscription tiers, metered in takeoffs (plan sets) */}
       {paywall && (
         <div className="modal-overlay" onClick={() => setPaywall(null)}>
-          <div className="modal card" style={{ maxWidth: 460, textAlign: 'center' }} onClick={e => e.stopPropagation()}>
+          <div className="modal card plans-modal" onClick={e => e.stopPropagation()}>
             <button className="material-card-close" onClick={() => setPaywall(null)}><X size={16} /></button>
-            <div style={{ fontFamily: 'var(--font-display)', fontSize: '2.4rem', color: 'var(--titan-red)', lineHeight: 1 }}>$97</div>
-            <div className="titan-label" style={{ marginTop: 4 }}>Per takeoff // one plan set</div>
-            <h3 style={{ marginTop: 14, marginBottom: 8 }}>Run the full takeoff</h3>
-            <p className="text-dim" style={{ fontSize: '0.85rem', lineHeight: 1.6, marginBottom: 8 }}>
-              You've reviewed the sheet map for free. Unlock the complete multi-pass
-              analysis for this plan set — every pipe, structure, depth, trench-safety
-              LF, engineer-table variance, and the exportable report.
-            </p>
-            <p className="text-dim" style={{ fontSize: '0.78rem', lineHeight: 1.6, marginBottom: 18 }}>
-              One-time charge. Re-runs, edits, and exports of this same plan set are included —
-              you only pay again for a <em>new</em> plan set. Your account and past takeoffs are always free.
-            </p>
-            <button className="btn btn-primary btn-lg" style={{ width: '100%' }} disabled={buying} onClick={startCheckout}>
-              {buying ? 'Opening checkout…' : 'Buy this takeoff — $97'}
-            </button>
-            <button className="btn btn-ghost" style={{ marginTop: 8, fontSize: '0.78rem' }} onClick={() => setPaywall(null)}>
-              Maybe later
-            </button>
-            <p className="text-muted" style={{ fontSize: '0.68rem', marginTop: 12 }}>
-              Secure checkout by Stripe. Need volume pricing? <a href="mailto:hello@6signal.co" style={{ color: 'var(--titan-red)' }}>Contact us</a>.
+            <div style={{ textAlign: 'center', marginBottom: 4 }}>
+              <div className="titan-label" style={{ color: 'var(--titan-red)' }}>Choose your plan</div>
+              <h3 style={{ margin: '6px 0 2px' }}>A takeoff = one full plan set</h3>
+              <p className="text-dim" style={{ fontSize: '0.8rem' }}>
+                Re-runs, edits, and exports of a plan set are included. {usage && !usage.plan && (
+                  <>You have {Math.max(0, (usage.trial_total ?? 2) - (usage.trial_used || 0))} free takeoff(s) left.</>
+                )}
+              </p>
+            </div>
+            <div className="plans-grid">
+              {/* Solo */}
+              <div className="plan-card">
+                <div className="plan-name">Solo Estimator</div>
+                <div className="plan-price">$197<span>/mo</span></div>
+                <ul className="plan-feats">
+                  <li>1 user seat</li><li><strong>20 takeoffs</strong> / month</li>
+                  <li>All analysis, depths &amp; exports</li>
+                </ul>
+                <button className="btn btn-secondary" style={{ width: '100%' }} disabled={buying === 'solo'} onClick={() => startCheckout('solo')}>
+                  {buying === 'solo' ? 'Opening…' : usage?.plan === 'solo' ? 'Current plan' : 'Choose Solo'}
+                </button>
+              </div>
+              {/* Growth — most popular */}
+              <div className="plan-card plan-card-featured">
+                <div className="plan-badge">Most popular</div>
+                <div className="plan-name">Growth Team</div>
+                <div className="plan-price">$497<span>/mo</span></div>
+                <ul className="plan-feats">
+                  <li>3 user seats</li><li><strong>100 takeoffs</strong> / month</li>
+                  <li>Everything in Solo</li>
+                </ul>
+                <button className="btn btn-primary" style={{ width: '100%' }} disabled={buying === 'growth'} onClick={() => startCheckout('growth')}>
+                  {buying === 'growth' ? 'Opening…' : usage?.plan === 'growth' ? 'Current plan' : 'Choose Growth'}
+                </button>
+              </div>
+              {/* Enterprise */}
+              <div className="plan-card">
+                <div className="plan-name">Enterprise</div>
+                <div className="plan-price" style={{ fontSize: '1.6rem' }}>Custom</div>
+                <ul className="plan-feats">
+                  <li>Unlimited seats</li><li>Custom takeoff volume</li>
+                  <li>Heavy-civil / multi-site</li>
+                </ul>
+                <a className="btn btn-secondary" style={{ width: '100%' }} href="mailto:hello@6signal.co?subject=Takeoff%20Copilot%20Enterprise">Contact us</a>
+              </div>
+            </div>
+            <div className="plans-footer">
+              <span className="text-dim" style={{ fontSize: '0.78rem' }}>Just need one? </span>
+              <button className="btn btn-ghost" style={{ fontSize: '0.78rem' }} disabled={buying === 'single'} onClick={() => startCheckout('single')}>
+                {buying === 'single' ? 'Opening…' : 'Buy a single takeoff — $25'}
+              </button>
+            </div>
+            <p className="text-muted" style={{ fontSize: '0.68rem', marginTop: 10, textAlign: 'center' }}>
+              Secure checkout &amp; billing by Stripe. Cancel anytime.
             </p>
           </div>
         </div>
@@ -2225,19 +2275,19 @@ INSTRUCTIONS:
           >
             QA Mode
           </button>
-          {billingOn && (
+          {BILLING && usage && (
             <button
               className="btn btn-ghost"
               style={{ marginLeft: 'auto', fontSize: '0.75rem' }}
-              onClick={() => setPaywall({ projectId: null, imgIdx: null })}
-              title="Takeoff credits — click to buy more"
+              onClick={() => setPaywall(true)}
+              title="Your plan & takeoffs — click to view plans"
             >
-              {credits ?? 0} takeoff{(credits ?? 0) === 1 ? '' : 's'} left
+              {takeoffsLeftLabel()}
             </button>
           )}
           <button
             className="btn btn-ghost"
-            style={{ marginLeft: billingOn ? 8 : 'auto', fontSize: '0.75rem' }}
+            style={{ marginLeft: (BILLING && usage) ? 8 : 'auto', fontSize: '0.75rem' }}
             onClick={() => setReferenceOpen(true)}
             title="Reference Bank — how everything works"
           >
