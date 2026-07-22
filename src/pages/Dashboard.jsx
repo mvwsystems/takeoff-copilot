@@ -1910,7 +1910,7 @@ INSTRUCTIONS:
                   <li>Unlimited seats</li><li>Custom takeoff volume</li>
                   <li>Heavy-civil / multi-site</li>
                 </ul>
-                <a className="btn btn-secondary" style={{ width: '100%' }} href="mailto:hello@6signal.co?subject=Takeoff%20Copilot%20Enterprise">Contact us</a>
+                <a className="btn btn-secondary" style={{ width: '100%' }} href="mailto:hello@takeoffcopilot.com?subject=Takeoff%20Copilot%20Enterprise">Contact us</a>
               </div>
             </div>
             <div className="plans-footer">

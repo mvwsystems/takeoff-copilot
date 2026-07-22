@@ -942,7 +942,7 @@ export default function LandingPage() {
                 ))}
               </ul>
               <div className="pricing-tier-cta">
-                <a href="mailto:hello@6signal.co" className="btn btn-secondary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
+                <a href="mailto:hello@takeoffcopilot.com" className="btn btn-secondary btn-lg" style={{ width: '100%', justifyContent: 'center' }}>
                   <Mail size={16} />
                   Contact Us
                 </a>
