@@ -1,4 +1,4 @@
-# Takeoff Copilot // Titan AI
+# Takeoff Copilot // 6 SIGNAL
 
 AI-powered plan analysis for wet-utility contractors. Upload construction plan sets, get a structured, depth-aware takeoff with an audit trail.
 
@@ -57,4 +57,6 @@ supabase/migrations/      # 001 core, 002 schema sync, 003 hardening, 004 locks+
 
 ## Design system
 
-**Titan AI** — construction-tech aesthetic. Black `#0A0A0A`, off-white `#F5F5F0`, Titan Red `#E8372C`. Bebas Neue (display), Outfit (body), JetBrains Mono (data). "//" separators.
+**6 SIGNAL** — construction-tech aesthetic. Black `#0A0A0A`, off-white `#F5F5F0`, accent blue `#0057FF`. Bebas Neue (display), Outfit (body), JetBrains Mono (data). "//" separators. Red is reserved for semantic status only (warnings, misses, Grade C).
+
+> Note: CSS tokens/classes are still named `--titan-*` / `.titan-*` for historical reasons — `--titan-red` now holds the blue `#0057FF`. Functional, just legacy naming.
