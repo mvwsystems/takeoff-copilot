@@ -1780,7 +1780,7 @@
 
 @media (max-width: 900px) {
   .pricing-tiers { grid-template-columns: 1fr; max-width: 440px; margin-left: auto; margin-right: auto; }
-  .pricing-tier-featured { order: -1; }
+  /* Stack in natural order: Solo → Growth → Enterprise (no reorder). */
 }
 
 .pricing-col-left {

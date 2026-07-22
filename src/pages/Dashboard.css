@@ -619,7 +619,6 @@
 }
 @media (max-width: 620px) {
   .plans-grid { grid-template-columns: 1fr; }
-  .plan-card-featured { order: -1; }
 }
 
 /* —— CLICK-TO-VERIFY (locate overlay) —— */
