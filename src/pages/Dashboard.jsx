@@ -2990,12 +2990,22 @@ INSTRUCTIONS:
                     )
                   })()}
 
-                  {/* ── MEASURED GEOMETRY (beta): scale-aware vector cross-check ── */}
+                  {/* ── MEASURED PIPE GEOMETRY: isolated-linework cross-check ── */}
                   {result.measurement?.sheets?.length > 0 && (
                     <div className="depth-section">
                       <div className="risk-flags-header">
-                        <span className="risk-flags-title">Measured Geometry <span style={{ fontSize: '0.6rem', color: 'var(--titan-red)', letterSpacing: '1px' }}>BETA</span></span>
-                        <span className="risk-flags-subtitle">Runs measured straight from the drawing's vector geometry at its detected scale — cross-check your mains, especially where callouts are missing</span>
+                        <span className="risk-flags-title">Measured Pipe Geometry</span>
+                        <span className="risk-flags-subtitle">Pipe runs isolated from the drawing by linetype and measured at its detected scale — measured footage vs what the takeoff extracted</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 24, marginBottom: 12, flexWrap: 'wrap' }}>
+                        <div>
+                          <div className="text-dim" style={{ fontSize: '0.66rem', letterSpacing: '1px', textTransform: 'uppercase' }}>Measured pipe</div>
+                          <div className="text-mono" style={{ fontSize: '1.1rem', fontWeight: 600 }}>{result.measurement.measured_pipe_lf?.toLocaleString()} LF</div>
+                        </div>
+                        <div>
+                          <div className="text-dim" style={{ fontSize: '0.66rem', letterSpacing: '1px', textTransform: 'uppercase' }}>Extracted pipe</div>
+                          <div className="text-mono" style={{ fontSize: '1.1rem', fontWeight: 600 }}>{result.measurement.extracted_pipe_lf?.toLocaleString()} LF</div>
+                        </div>
                       </div>
                       {result.measurement.possible_missed_runs && (
                         <div style={{
@@ -3005,20 +3015,20 @@ INSTRUCTIONS:
                         }}>
                           <ShieldAlert size={16} style={{ color: 'var(--flag-medium)', flexShrink: 0, marginTop: 1 }} />
                           <div>
-                            <strong>Possible missed runs:</strong> the takeoff captured ~{result.measurement.extracted_pipe_lf.toLocaleString()} LF of pipe, but the drawn geometry measures ~{result.measurement.measured_candidate_lf.toLocaleString()} LF of linework. On a poorly-labeled sheet that gap can mean unlabeled runs — review the longest measured runs below against your mains.
+                            <strong>Possible missed run:</strong> the takeoff extracted ~{result.measurement.extracted_pipe_lf.toLocaleString()} LF of pipe, but the isolated pipe linework measures ~{result.measurement.measured_pipe_lf.toLocaleString()} LF — a ~{(result.measurement.measured_pipe_lf - result.measurement.extracted_pipe_lf).toLocaleString()} LF gap. Review the longest measured runs below against your mains and laterals.
                           </div>
                         </div>
                       )}
                       <div className="table-wrap">
                         <table className="titan-table">
-                          <thead><tr>{['Sheet', 'Scale', 'Longest measured runs (LF)', 'Candidate runs'].map(h => <th key={h}>{h}</th>)}</tr></thead>
+                          <thead><tr>{['Sheet', 'Scale', 'Measured pipe (LF)', 'Longest runs (LF)'].map(h => <th key={h}>{h}</th>)}</tr></thead>
                           <tbody>
                             {result.measurement.sheets.map((s, i) => (
                               <tr key={i}>
                                 <td className="text-mono">{s.sheet}</td>
                                 <td className="text-mono text-dim">{s.scale}</td>
-                                <td className="text-mono">{s.longest_runs_lf?.length ? s.longest_runs_lf.map(v => v.toLocaleString()).join(' · ') : '—'}</td>
-                                <td className="text-mono text-dim">{s.candidate_runs}</td>
+                                <td className="text-mono">{s.isolated_pipe_lf?.toLocaleString() ?? '—'}</td>
+                                <td className="text-mono text-dim">{s.longest_runs_lf?.length ? s.longest_runs_lf.map(v => v.toLocaleString()).join(' · ') : '—'}</td>
                               </tr>
                             ))}
                           </tbody>

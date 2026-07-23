@@ -630,7 +630,7 @@ function extractPolylines(mupdf, doc, pageIndex) {
   try {
     page = doc.loadPage(pageIndex)
     const cb = {
-      strokePath(path, stroke, ctm) {
+      strokePath(path, stroke, ctm, colorspace, color, alpha) {
         try {
           const p = []
           path.walk({
@@ -642,7 +642,18 @@ function extractPolylines(mupdf, doc, pageIndex) {
           if (p.length < 2) return
           let len = 0
           for (let i = 1; i < p.length; i++) len += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1])
-          out.push({ len_pt: len, segs: p.length - 1 })
+          // Style fingerprint — pipe runs on civil plans carry a distinct
+          // linetype (color + dashed + weight) that separates them from the
+          // continuous black base map (property/building/curb lines).
+          let colorKey = '?', dashed = false, width = 0
+          try {
+            const c = Array.isArray(color) ? color : []
+            colorKey = c.length ? c.map(v => Math.round(v * 20) / 20).join(',') : '0'
+            const d = stroke?.getDashes?.()
+            dashed = Array.isArray(d) && d.length > 0
+            width = Math.round((stroke?.getLineWidth?.() || 0) * 4) / 4
+          } catch { /* style unavailable — leave defaults */ }
+          out.push({ len_pt: len, segs: p.length - 1, style: `${colorKey}|${dashed ? 'D' : 'S'}|${width}` })
         } catch { /* skip bad path */ }
       },
       fillPath: NOOP, clipPath: NOOP, clipStrokePath: NOOP, fillText: NOOP, strokeText: NOOP,
@@ -660,19 +671,55 @@ function extractPolylines(mupdf, doc, pageIndex) {
   return out
 }
 
-// Per-sheet measurement: detected scale + the longest measured runs in real LF.
-// Multi-segment polylines (segs >= 2) are favored — pipe runs bend through
-// bends/structures, whereas a straight property line is one long segment.
+// Per-sheet measurement: detect scale, then ISOLATE pipe runs from the rest of
+// the linework by style. Utility mains on civil plans are drawn with a distinct
+// linetype (a dashed/colored run that turns through bends and structures);
+// property lines, curbs, and building outlines are continuous single segments in
+// the base-map color. Grouping polylines by their style fingerprint lets us keep
+// only the pipe-like clusters and report a real measured LF per style — no longer
+// "all candidate linework", but isolated runs the estimator can trust.
 function measureSheet(runs, mupdf, doc, pageIndex) {
   const scale = detectScale(runs)
   if (!scale) return { scale: null }
   const polys = extractPolylines(mupdf, doc, pageIndex)
   const measured = polys
-    .map(p => ({ lf: Math.round(p.len_pt * scale.ft_per_pt), segs: p.segs }))
+    .map(p => ({ lf: Math.round(p.len_pt * scale.ft_per_pt), segs: p.segs, style: p.style }))
     .filter(r => r.lf >= 20 && r.lf <= 20000)   // drop marks and full-sheet borders
+  if (!measured.length) return { scale: scale.label, clusters: [], top_runs: [], candidate_count: 0, total_candidate_lf: 0 }
+
+  // Cluster by style fingerprint.
+  const byStyle = new Map()
+  for (const r of measured) {
+    if (!byStyle.has(r.style)) byStyle.set(r.style, [])
+    byStyle.get(r.style).push(r)
+  }
+  const clusters = [...byStyle.entries()].map(([style, rs]) => {
+    rs.sort((a, b) => b.lf - a.lf)
+    const total = rs.reduce((s, r) => s + r.lf, 0)
+    const multiSeg = rs.filter(r => r.segs >= 2).length
+    return {
+      style,
+      count: rs.length,
+      total_lf: total,
+      multiseg_share: rs.length ? multiSeg / rs.length : 0,
+      longest_runs_lf: rs.slice(0, 6).map(r => r.lf),
+    }
+  })
+  // Pipe-like clusters: a handful-to-a-few-hundred runs, and mostly bending
+  // polylines (multi-segment) OR a dashed/colored linetype. A single giant
+  // continuous-black cluster of straight runs is the base map — excluded.
+  const pipeClusters = clusters.filter(c => {
+    const [colorKey, dash] = c.style.split('|')
+    const styled = dash === 'D' || (colorKey !== '0' && colorKey !== '?')  // dashed or non-black
+    return c.count >= 2 && c.count <= 400 && (c.multiseg_share >= 0.4 || styled)
+  }).sort((a, b) => b.total_lf - a.total_lf)
+
+  const isolatedLf = pipeClusters.reduce((s, c) => s + c.total_lf, 0)
   measured.sort((a, b) => b.lf - a.lf)
   return {
     scale: scale.label,
+    clusters: pipeClusters.slice(0, 8),
+    isolated_pipe_lf: isolatedLf,
     top_runs: measured.slice(0, 8).map(r => r.lf),
     candidate_count: measured.length,
     total_candidate_lf: measured.reduce((s, r) => s + r.lf, 0),
@@ -2114,42 +2161,53 @@ export const handler = async (event) => {
     const counts = { HIGH: 0, MEDIUM: 0, LOW: 0 }
     merged.forEach(m => { counts[m.confidence] = (counts[m.confidence] || 0) + 1 })
 
-    // ── Scale-aware measurement (beta): vector geometry cross-check ──
-    // Per plan sheet, detect scale and measure the longest drawn runs. Compare
-    // the total measured pipe-candidate LF to the total extracted pipe LF — a
-    // large shortfall hints at runs the model missed on a poorly-labeled sheet.
+    // ── Scale-aware measurement: isolated pipe runs vs extracted quantities ──
+    // Per plan sheet we detect the scale, then ISOLATE the pipe linework by style
+    // (dashed/colored utility runs, separated from the continuous base map) and
+    // sum it in real feet. That measured pipe LF is a true quantity — compared
+    // per sheet against what the model extracted so a shortfall points to a
+    // specific run the model missed on a poorly-labeled sheet.
     let measurement = null
+    let measurementFlag = null   // { measured_lf, extracted_lf, gap_lf } when a real shortfall is found
     try {
       const measuredSheets = []
-      let measuredLf = 0, sheetsWithScale = 0
+      let isolatedLf = 0, sheetsWithScale = 0
       for (const s of p1Sheets) {
         const ms = measureSheet(getPageText(s.page_number - 1).runs, mupdf, doc, s.page_number - 1)
         if (!ms.scale) continue
         sheetsWithScale++
-        measuredLf += ms.total_candidate_lf || 0
+        isolatedLf += ms.isolated_pipe_lf || 0
         measuredSheets.push({
           sheet: s.sheet_number || `pg ${s.page_number}`,
           scale: ms.scale,
+          isolated_pipe_lf: ms.isolated_pipe_lf || 0,
           longest_runs_lf: ms.top_runs,
-          candidate_runs: ms.candidate_count,
+          pipe_clusters: (ms.clusters || []).map(c => ({ runs: c.count, lf: c.total_lf })),
         })
       }
       if (sheetsWithScale > 0) {
         const extractedPipeLf = merged
           .filter(m => m.category === 'PIPE' && (m.unit === 'LF') && m.quantity != null)
           .reduce((sum, m) => sum + m.quantity, 0)
-        // Candidate linework includes non-pipe strokes, so measured >> extracted
-        // is normal; only a MASSIVE shortfall (extracted < 25% of measured) is a
-        // usable signal, and even then it's advisory.
-        const shortfall = measuredLf > 0 && extractedPipeLf > 0 && extractedPipeLf < measuredLf * 0.25
+        // Isolated pipe LF still carries some non-pipe strokes of the same style,
+        // so measured slightly above extracted is normal. A real shortfall is
+        // extracted below 65% of the isolated pipe total — that gap is measured
+        // footage the model likely didn't account for.
+        const shortfall = isolatedLf > 0 && extractedPipeLf > 0 && extractedPipeLf < isolatedLf * 0.65
+        if (shortfall) {
+          measurementFlag = {
+            measured_lf: Math.round(isolatedLf),
+            extracted_lf: Math.round(extractedPipeLf),
+            gap_lf: Math.round(isolatedLf - extractedPipeLf),
+          }
+        }
         measurement = {
-          beta: true,
           sheets: measuredSheets,
           sheets_with_scale: sheetsWithScale,
           extracted_pipe_lf: Math.round(extractedPipeLf),
-          measured_candidate_lf: Math.round(measuredLf),
+          measured_pipe_lf: Math.round(isolatedLf),
           possible_missed_runs: shortfall,
-          note: 'Measured from the PDF vector geometry using the detected drawing scale. Candidate linework includes some non-pipe strokes — treat the longest measured runs as a reference to cross-check your mains, not exact quantities.',
+          note: 'Pipe linework isolated from the PDF vector geometry by style (dashed/colored utility runs) and measured against the detected drawing scale. Cross-check the measured pipe footage against the extracted quantities; a large gap means a run was likely missed. Verify before pricing.',
         }
       }
     } catch (e) {
@@ -2173,6 +2231,13 @@ export const handler = async (event) => {
         id: cid++, type: 'coverage', item_no: null,
         question: `${failedTiles.length} sheet area${failedTiles.length === 1 ? '' : 's'} could not be analyzed after multiple retries (${failedTiles.slice(0, 6).join('; ')}${failedTiles.length > 6 ? '; …' : ''}). Quantities there may be missing — re-run the analysis or verify those areas manually. Acknowledge to continue.`,
         context: 'Every failed area is listed in the report quality section. A re-run only re-processes the failed areas, not the whole set.',
+      })
+    }
+    if (measurementFlag) {
+      clarifications.push({
+        id: cid++, type: 'measured_gap', item_no: null,
+        question: `Measured pipe linework totals ~${measurementFlag.measured_lf} LF, but the extracted pipe quantities add up to ~${measurementFlag.extracted_lf} LF — about ${measurementFlag.gap_lf} LF of drawn pipe isn't accounted for. Is a run missing, or is that linework not pipe?`,
+        context: 'Pipe runs were isolated from the drawing by linetype and measured against the detected scale. A gap this size usually means a main or lateral was missed on a poorly-labeled sheet — check the longest measured runs in the report against your line items.',
       })
     }
     for (const it of items) {
@@ -2235,7 +2300,7 @@ export const handler = async (event) => {
         high_confidence_count: counts.HIGH,
         medium_confidence_count: counts.MEDIUM,
         low_confidence_count: counts.LOW,
-        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${structDupes.length > 0 ? ` ${structDupes.length} structure${structDupes.length === 1 ? '' : 's'} shown on multiple sheets — counted once.` : ''}${pipeFlags.length > 0 ? ` ${pipeFlags.length} possible cross-sheet pipe duplicate${pipeFlags.length === 1 ? '' : 's'} flagged for review.` : ''}${p7Schedule.length > 0 ? ` Structure schedule found (${p7Schedule.length} structures) — used for depths.` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
+        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${structDupes.length > 0 ? ` ${structDupes.length} structure${structDupes.length === 1 ? '' : 's'} shown on multiple sheets — counted once.` : ''}${pipeFlags.length > 0 ? ` ${pipeFlags.length} possible cross-sheet pipe duplicate${pipeFlags.length === 1 ? '' : 's'} flagged for review.` : ''}${measurement ? ` Measured pipe linework ~${measurement.measured_pipe_lf} LF vs extracted ~${measurement.extracted_pipe_lf} LF${measurementFlag ? ` — ~${measurementFlag.gap_lf} LF gap, possible missed run.` : ' (in range).'}` : ''}${p7Schedule.length > 0 ? ` Structure schedule found (${p7Schedule.length} structures) — used for depths.` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
       },
       text_layer: {
         mode: textMode,
