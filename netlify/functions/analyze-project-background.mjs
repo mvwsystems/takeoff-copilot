@@ -1147,6 +1147,59 @@ function tokenize(s) {
   return out
 }
 
+// Structured signals for accuracy matching. Diameter, utility, and item
+// category are HARD GATES — a mismatch disqualifies the pair — so an 8" sanitary
+// can never match a 12" storm just because the word "pipe" overlaps. This is
+// what makes the accuracy numbers (engineer variance + ground-truth score)
+// trustworthy rather than an artifact of a loose token matcher.
+function extractSig(desc) {
+  const d = (desc || '').toLowerCase()
+  const diaM = d.match(/(\d+(?:\.\d+)?)\s*(?:"|in\b|inch|-in\b|in\.)/)
+  const dia = diaM ? Number(diaM[1]) : null
+  let utility = null
+  if (/storm|\bstm\b|\bsd\b|catch ?basin|\bdrain/.test(d)) utility = 'stm'
+  else if (/sanit|\bss\b|\bsan\b|sewer/.test(d)) utility = 'san'
+  else if (/potable|\bwater\b|\bwl\b|\bwtr\b|water ?main|water ?line/.test(d)) utility = 'wtr'
+  else if (/\bfire\b|\bfl\b|fdc/.test(d)) utility = 'fire'
+  else if (/irrig/.test(d)) utility = 'irr'
+  else if (/force ?main|\bfm\b/.test(d)) utility = 'fm'
+  let cat = null
+  if (/manhole|\bmh\b|ssmh|stmh|sanmh/.test(d)) cat = 'mh'
+  else if (/\binlet\b|catch ?basin|\bcb\b|grate|\bdi\b|junction ?box|\bjb\b|\bvault\b/.test(d)) cat = 'inlet'
+  else if (/hydrant|\bfh\b/.test(d)) cat = 'hyd'
+  else if (/cleanout|\bco\b/.test(d)) cat = 'co'
+  else if (/\bvalve\b|\bgv\b|\bbv\b|tapping ?sleeve/.test(d)) cat = 'valve'
+  else if (/\bbend\b|\btee\b|\bwye\b|elbow|reducer|coupling|\bcross\b|\bcap\b|\bplug\b/.test(d)) cat = 'fitting'
+  else if (/trench|excav|\bbore\b|casing|bedding|backfill|shoring|pavement|sawcut/.test(d)) cat = 'excav'
+  else if (dia != null || /\bpipe\b|\bpvc\b|\brcp\b|\bdip\b|hdpe|c900|c905|sdr|\bdr-|\bmain\b|lateral|service|conduit/.test(d)) cat = 'pipe'
+  return { dia, utility, cat }
+}
+
+// Best item index matching a target row, or -1. Hard gates on unit/diameter/
+// utility/category; then a symmetric Dice token score with bonuses for exact
+// diameter/utility. Threshold is modest because the gates do the discriminating.
+function matchRow(desc, unit, items, used) {
+  const tt = tokenize(desc), sig = extractSig(desc)
+  let best = -1, bestScore = 0
+  for (let i = 0; i < items.length; i++) {
+    if (used.has(i)) continue
+    const it = items[i]
+    if (unit && it.unit && String(unit).toUpperCase() !== String(it.unit).toUpperCase()) continue
+    const isig = extractSig(it.description)
+    if (sig.dia != null && isig.dia != null && Math.abs(sig.dia - isig.dia) > 0.01) continue
+    if (sig.utility && isig.utility && sig.utility !== isig.utility) continue
+    if (sig.cat && isig.cat && sig.cat !== isig.cat) continue
+    const iTok = tokenize(it.description)
+    let overlap = 0
+    tt.forEach(t => { if (iTok.has(t)) overlap++ })
+    let score = (2 * overlap) / ((tt.size + iTok.size) || 1)
+    if (sig.dia != null && isig.dia === sig.dia) score += 0.15
+    if (sig.utility && isig.utility === sig.utility) score += 0.1
+    if (score > bestScore) { bestScore = score; best = i }
+  }
+  return bestScore >= 0.34 ? best : -1
+}
+
 function buildVariance(engineerRows, items) {
   // consolidate engineer rows seen in multiple tiles (same desc+unit → keep once)
   const seen = new Map()
@@ -1157,18 +1210,8 @@ function buildVariance(engineerRows, items) {
   const usedItems = new Set()
   const variance = []
   for (const eng of seen.values()) {
-    const engTokens = tokenize(eng.description)
-    let best = null, bestScore = 0
-    items.forEach((it, i) => {
-      if (usedItems.has(i)) return
-      if (eng.unit && it.unit && eng.unit !== it.unit) return
-      const itTokens = tokenize(it.description)
-      let overlap = 0
-      engTokens.forEach(t => { if (itTokens.has(t)) overlap++ })
-      const score = overlap / Math.max(engTokens.size, 1)
-      if (score > bestScore) { bestScore = score; best = i }
-    })
-    if (best != null && bestScore >= 0.4) {
+    const best = matchRow(eng.description, eng.unit, items, usedItems)
+    if (best !== -1) {
       usedItems.add(best)
       const ours = items[best]
       // Only compute a % when we actually have a quantity — treating a null
@@ -1218,18 +1261,8 @@ function scoreAgainstTruth(gtRows, items) {
   for (const gt of gtRows) {
     const gtQty = Number(gt.quantity)
     if (!gt.description || !isFinite(gtQty)) continue
-    const gtTokens = tokenize(gt.description)
-    let best = null, bestScore = 0
-    items.forEach((it, i) => {
-      if (usedItems.has(i)) return
-      if (gt.unit && it.unit && String(gt.unit).toUpperCase() !== it.unit) return
-      const itTokens = tokenize(it.description)
-      let overlap = 0
-      gtTokens.forEach(t => { if (itTokens.has(t)) overlap++ })
-      const score = overlap / Math.max(gtTokens.size, 1)
-      if (score > bestScore) { bestScore = score; best = i }
-    })
-    if (best != null && bestScore >= 0.4) {
+    const best = matchRow(gt.description, gt.unit, items, usedItems)
+    if (best !== -1) {
       usedItems.add(best)
       matched++
       if (gtQty) {
@@ -1244,13 +1277,18 @@ function scoreAgainstTruth(gtRows, items) {
   }
   const total = matched + missing
   if (!total) return null
+  // Only count material line items as "extra" — derived/labor items (trench
+  // safety, rock excavation) legitimately aren't in a materials-only ground truth.
+  const materialItems = items.filter(it => !it.isDerived && it.category !== 'EXCAVATION' && it.category !== 'TESTING').length
   return {
     truth_rows: total,
     matched,
     within_5: w5,
     within_15: w15,
     mean_abs_pct: pctN ? Math.round(pctSum / pctN * 10) / 10 : null,
-    missing_from_ours: missing,
+    missing_from_ours: missing,                       // in the actual takeoff, not ours
+    extra_in_ours: Math.max(0, materialItems - matched), // in ours, not the actual takeoff
+    recall_pct: Math.round((matched / total) * 100),  // share of the real takeoff we caught
   }
 }
 

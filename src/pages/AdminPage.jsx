@@ -41,9 +41,15 @@ const varianceMetricsClient = (variance) => {
 
 const ScoreCell = ({ s }) => {
   if (!s) return <span className="text-muted">—</span>
+  // recall = share of the real takeoff we caught; the headline accuracy number.
+  const recall = s.recall_pct != null ? s.recall_pct
+    : (s.truth_rows ? Math.round((s.matched / s.truth_rows) * 100) : null)
   return (
     <span className="cal-score">
-      <strong>{s.within_5}/{s.matched}</strong> ±5% · μΔ {s.mean_abs_pct != null ? `${s.mean_abs_pct}%` : '—'} · {s.missing_from_ours} missed
+      {recall != null && <strong style={{ color: 'var(--titan-red)' }}>{recall}% caught</strong>}
+      {recall != null && ' · '}
+      <strong>{s.within_5}/{s.matched}</strong> ±5% · μΔ {s.mean_abs_pct != null ? `${s.mean_abs_pct}%` : '—'}
+      {' · '}{s.missing_from_ours} missed{s.extra_in_ours != null ? ` · ${s.extra_in_ours} extra` : ''}
     </span>
   )
 }
