@@ -1394,6 +1394,109 @@ function scoreAgainstTruth(gtRows, items) {
   }
 }
 
+// ── Plan completeness / bid-readiness (ported from PlanIQ) ────────
+// Before you can trust a takeoff, you have to know how complete the SOURCE
+// plans are. This scores the extracted set against the data a wet-utility bid
+// actually needs — a 14-factor weighted rubric (weights sum to 100, graded
+// A–F) plus a gap list ranked by severity. Per-item factors read the line
+// items; project-level specs (bedding, testing, benchmark, trench detail,
+// connection, crossings) are keyword-detected in the analyzed sheets' text
+// corpus. This is diagnostic: it never changes a quantity, it tells the
+// estimator where the plans are thin so they can price risk deliberately.
+const GRAVITY_UTIL = new Set(['san', 'stm', 'fm'])
+const has = (corpus, ...kws) => kws.some(k => corpus.includes(k))
+// class/spec, slope, and material tokens read straight from a description
+const RE_CLASS = /\b(sdr\s?\d+|dr\s?\d+|c900|c905|c-?900|class\s?[ivx\d]+|ps\s?\d+|schedule\s?\d+|astm|awwa)\b/i
+const RE_SLOPE = /(\d+(?:\.\d+)?\s?%|s\s?=\s?\d|slope|@\s?\d+(?:\.\d+)?%)/i
+const RE_MATERIAL = /\b(pvc|rcp|hdpe|dip|ductile|di\b|pipe\s?class|c900|cmp|vcp|ptfe|cipp|pccp)\b/i
+
+function planCompleteness(items, corpusLower) {
+  const pipes = items.filter(m => !m.isDerived && m.category === 'PIPE')
+  const structs = items.filter(m => !m.isDerived && m.category === 'STRUCTURE')
+  const gravity = pipes.filter(m => GRAVITY_UTIL.has(extractSig(m.description).utility))
+  const manholes = structs.filter(m => /manhole|\bmh\b|ssmh|stmh|sanmh/.test((m.description || '').toLowerCase()))
+  const systemsUsed = [...new Set(pipes.map(m => extractSig(m.description).utility).filter(Boolean))]
+  const frac = (arr, pred) => (arr.length === 0 ? { earned: 1, na: true } : { earned: arr.filter(pred).length / arr.length })
+
+  // sev drives both gap severity and how a low factor is surfaced
+  const FACTORS = [
+    { id: 'pipe_diameter', label: 'Pipe size', weight: 15, sev: 'critical',
+      eval: () => frac(pipes, m => extractSig(m.description).dia != null) },
+    { id: 'pipe_material', label: 'Pipe material', weight: 12, sev: 'critical',
+      eval: () => frac(pipes, m => !!m.material_slug || RE_MATERIAL.test(m.description || '')) },
+    { id: 'invert_depth', label: 'Invert / depth', weight: 15, sev: 'critical',
+      eval: () => frac(gravity, m => !!m.depth) },
+    { id: 'structure_rim', label: 'Structure rim/depth', weight: 10, sev: 'major',
+      eval: () => frac(structs, m => !!m.depth) },
+    { id: 'connection_details', label: 'Connection / tie-in', weight: 10, sev: 'critical',
+      eval: () => ({ earned: systemsUsed.length === 0 ? 1 : (has(corpusLower, 'connect to existing', 'tie-in', 'tie in', 'connect to ex', 'existing main', 'wet tap', 'tapping sleeve') ? 1 : 0) }) },
+    { id: 'benchmark', label: 'Benchmark / datum', weight: 8, sev: 'major',
+      eval: () => ({ earned: has(corpusLower, 'benchmark', 'bench mark', ' bm ', 'datum', 'navd', 'ngvd', 'tbm') ? 1 : 0 }) },
+    { id: 'pipe_class', label: 'Pipe class / rating', weight: 5, sev: 'minor',
+      eval: () => frac(pipes, m => RE_CLASS.test(m.description || '')) },
+    { id: 'slope_grade', label: 'Slope / grade', weight: 5, sev: 'major',
+      eval: () => frac(gravity, m => !!m.depth || RE_SLOPE.test(m.description || '')) },
+    { id: 'bedding_backfill', label: 'Bedding / backfill', weight: 4, sev: 'minor',
+      eval: () => ({ earned: has(corpusLower, 'bedding', 'backfill', '#57', 'no. 57', 'class b', 'embedment', 'select fill') ? 1 : 0 }) },
+    { id: 'manhole_details', label: 'Manhole details', weight: 4, sev: 'minor',
+      eval: () => (manholes.length === 0 ? { earned: 1, na: true }
+        : { earned: has(corpusLower, 'manhole detail', 'mh detail', 'std. manhole', 'standard manhole', 'frame & cover', 'frame and cover') ? 1 : 0 }) },
+    { id: 'trench_detail', label: 'Trench detail', weight: 4, sev: 'minor',
+      eval: () => ({ earned: has(corpusLower, 'trench detail', 'trench section', 'typical trench', 'bedding detail') ? 1 : 0 }) },
+    { id: 'testing_requirements', label: 'Testing requirements', weight: 3, sev: 'minor',
+      eval: () => ({ earned: has(corpusLower, 'pressure test', 'mandrel', 'cctv', 'leakage test', 'hydrostatic', 'air test', 'deflection test') ? 1 : 0 }) },
+    { id: 'construction_notes', label: 'Construction notes', weight: 3, sev: 'minor',
+      eval: () => {
+        const n = (corpusLower.match(/\bnote[s]?\s*[:#\d]/g) || []).length
+        return { earned: n >= 5 ? 1 : n / 5 }
+      } },
+    { id: 'utility_crossings', label: 'Utility crossings', weight: 2, sev: 'major',
+      eval: () => ({ earned: has(corpusLower, 'crossing', 'clearance', 'min. separation', 'minimum separation', '18" separation') ? 1 : 0.5 }) },
+  ]
+
+  let total = 0
+  const by_factor = FACTORS.map(f => {
+    const { earned, na } = f.eval()
+    const points = Math.round(earned * f.weight * 10) / 10
+    total += points
+    return { id: f.id, label: f.label, weight: f.weight, earned: points, na: !!na }
+  })
+  const rounded = Math.round(total)
+  const grade = rounded >= 90 ? 'A' : rounded >= 80 ? 'B' : rounded >= 70 ? 'C' : rounded >= 60 ? 'D' : 'F'
+
+  // Gaps: any factor whose completeness fell below 70% becomes a ranked gap.
+  const SEV_RANK = { critical: 0, major: 1, minor: 2 }
+  const gaps = []
+  for (const f of FACTORS) {
+    const bf = by_factor.find(b => b.id === f.id)
+    if (bf.na) continue
+    const ratio = f.weight ? bf.earned / f.weight : 1
+    if (ratio >= 0.7) continue
+    let description
+    if (f.id === 'pipe_diameter') { const n = pipes.filter(m => extractSig(m.description).dia == null).length; description = `${n} pipe run${n === 1 ? '' : 's'} missing a stated diameter.` }
+    else if (f.id === 'pipe_material') { const n = pipes.filter(m => !m.material_slug && !RE_MATERIAL.test(m.description || '')).length; description = `${n} pipe run${n === 1 ? '' : 's'} with no material called out.` }
+    else if (f.id === 'invert_depth') { const n = gravity.filter(m => !m.depth).length; description = `${n} gravity run${n === 1 ? '' : 's'} missing invert/depth — excavation & trench safety can't be priced.` }
+    else if (f.id === 'structure_rim') { const n = structs.filter(m => !m.depth).length; description = `${n} structure${n === 1 ? '' : 's'} missing rim/depth.` }
+    else if (f.id === 'connection_details') description = `No tie-in to existing infrastructure found for ${systemsUsed.join('/') || 'the utilities'} — scope of the connection is undefined.`
+    else if (f.id === 'benchmark') description = 'No benchmark / datum reference found — elevations are not tied to site control.'
+    else if (f.id === 'pipe_class') { const n = pipes.filter(m => !RE_CLASS.test(m.description || '')).length; description = `${n} pipe run${n === 1 ? '' : 's'} with no class/spec (SDR, C900, Class, etc.).` }
+    else if (f.id === 'slope_grade') { const n = gravity.filter(m => !m.depth && !RE_SLOPE.test(m.description || '')).length; description = `${n} gravity run${n === 1 ? '' : 's'} with no slope stated and none inferable.` }
+    else if (f.id === 'bedding_backfill') description = 'No bedding/backfill spec found on the analyzed sheets.'
+    else if (f.id === 'manhole_details') description = 'Manholes present but no manhole detail referenced.'
+    else if (f.id === 'trench_detail') description = 'No trench detail / section found.'
+    else if (f.id === 'testing_requirements') description = 'No testing requirements (pressure, mandrel, CCTV) called out.'
+    else if (f.id === 'construction_notes') description = 'Few or no construction notes found — spec may be incomplete on these sheets.'
+    else if (f.id === 'utility_crossings') description = 'Utility crossings without a stated vertical clearance.'
+    else description = `${f.label} incomplete.`
+    gaps.push({ id: f.id, severity: f.sev, description })
+  }
+  gaps.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity])
+
+  const counts = { critical: 0, major: 0, minor: 0 }
+  gaps.forEach(g => { counts[g.severity]++ })
+  return { total: rounded, grade, by_factor, gaps, gap_counts: counts }
+}
+
 // ── Material matching ────────────────────────────────────────────
 // Maps each line item to a material slug: alias/regex first (cheap, exact),
 // then one Haiku call for whatever's left ambiguous.
@@ -1499,7 +1602,7 @@ function codeMerge(items) {
 
 // ── Handler ────────────────────────────────────────────────────
 // Scoring primitives exported for offline rescoring / diagnostics.
-export { buildVariance, varianceMetrics, scoreAgainstTruth, tokenize }
+export { buildVariance, varianceMetrics, scoreAgainstTruth, tokenize, planCompleteness }
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405 }
@@ -2214,6 +2317,23 @@ export const handler = async (event) => {
       console.error('measurement failed:', e.message)   // never breaks the run
     }
 
+    // ── Plan completeness / bid-readiness (PlanIQ-style) ──
+    // Score how complete the SOURCE plans are for a wet-utility bid, and list
+    // the gaps by severity. Text corpus = every analyzed sheet's text layer,
+    // so project-level specs (bedding, testing, benchmark, trench detail,
+    // connection, crossings) can be keyword-detected. Diagnostic only.
+    let completeness = null
+    try {
+      const analyzedSheets = [...p1Sheets, ...p2Sheets]
+      const corpus = analyzedSheets
+        .map(s => getPageText(s.page_number - 1).runs.map(r => r.text).join(' '))
+        .join(' \n ')
+        .toLowerCase()
+      completeness = planCompleteness(merged, corpus)
+    } catch (e) {
+      console.error('completeness scoring failed:', e.message)  // never breaks the run
+    }
+
     // Coverage gaps: tiles that failed all retries. These are the report's
     // loudest caveat — quantities in those sheet areas may simply be missing.
     const failedTiles = [...new Set(Object.values(state.failedTiles || {}).flat())]
@@ -2238,6 +2358,16 @@ export const handler = async (event) => {
         id: cid++, type: 'measured_gap', item_no: null,
         question: `Measured pipe linework totals ~${measurementFlag.measured_lf} LF, but the extracted pipe quantities add up to ~${measurementFlag.extracted_lf} LF — about ${measurementFlag.gap_lf} LF of drawn pipe isn't accounted for. Is a run missing, or is that linework not pipe?`,
         context: 'Pipe runs were isolated from the drawing by linetype and measured against the detected scale. A gap this size usually means a main or lateral was missed on a poorly-labeled sheet — check the longest measured runs in the report against your line items.',
+      })
+    }
+    // Critical plan-completeness gaps — data a bid literally can't proceed
+    // without (diameter, material, invert/depth, tie-in). One rolled-up prompt.
+    if (completeness && completeness.gap_counts.critical > 0 && clarifications.length < 12) {
+      const crit = completeness.gaps.filter(g => g.severity === 'critical').slice(0, 4)
+      clarifications.push({
+        id: cid++, type: 'completeness', item_no: null,
+        question: `The source plans are missing bid-critical data (completeness ${completeness.total}/100, Grade ${completeness.grade}): ${crit.map(g => g.description).join(' ')} Can you provide these, or should we bid with assumptions?`,
+        context: 'These gaps come from the plans themselves, not the extraction. Pricing over them without an answer means carrying scope risk — note your assumption so it is on record.',
       })
     }
     for (const it of items) {
@@ -2300,7 +2430,7 @@ export const handler = async (event) => {
         high_confidence_count: counts.HIGH,
         medium_confidence_count: counts.MEDIUM,
         low_confidence_count: counts.LOW,
-        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${structDupes.length > 0 ? ` ${structDupes.length} structure${structDupes.length === 1 ? '' : 's'} shown on multiple sheets — counted once.` : ''}${pipeFlags.length > 0 ? ` ${pipeFlags.length} possible cross-sheet pipe duplicate${pipeFlags.length === 1 ? '' : 's'} flagged for review.` : ''}${measurement ? ` Measured pipe linework ~${measurement.measured_pipe_lf} LF vs extracted ~${measurement.extracted_pipe_lf} LF${measurementFlag ? ` — ~${measurementFlag.gap_lf} LF gap, possible missed run.` : ' (in range).'}` : ''}${p7Schedule.length > 0 ? ` Structure schedule found (${p7Schedule.length} structures) — used for depths.` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
+        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${structDupes.length > 0 ? ` ${structDupes.length} structure${structDupes.length === 1 ? '' : 's'} shown on multiple sheets — counted once.` : ''}${pipeFlags.length > 0 ? ` ${pipeFlags.length} possible cross-sheet pipe duplicate${pipeFlags.length === 1 ? '' : 's'} flagged for review.` : ''}${measurement ? ` Measured pipe linework ~${measurement.measured_pipe_lf} LF vs extracted ~${measurement.extracted_pipe_lf} LF${measurementFlag ? ` — ~${measurementFlag.gap_lf} LF gap, possible missed run.` : ' (in range).'}` : ''}${p7Schedule.length > 0 ? ` Structure schedule found (${p7Schedule.length} structures) — used for depths.` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}${completeness ? ` Plan completeness ${completeness.total}/100 (Grade ${completeness.grade})${completeness.gap_counts.critical > 0 ? `, ${completeness.gap_counts.critical} critical gap${completeness.gap_counts.critical === 1 ? '' : 's'}` : ''}.` : ''}`,
       },
       text_layer: {
         mode: textMode,
@@ -2322,6 +2452,7 @@ export const handler = async (event) => {
         cross_sheet_pipe_flags: pipeFlags.length,
       },
       measurement,
+      plan_completeness: completeness,
       clarifications,
       depth_summary: depthSummary,
       variance_table: variance,

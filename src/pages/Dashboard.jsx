@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ShieldAlert, MessageCircle, Send, ChevronUp, BookOpen, Pencil, Check, HelpCircle, Crosshair, Package, Rows3 } from 'lucide-react'
+import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ShieldAlert, MessageCircle, Send, ChevronUp, BookOpen, Pencil, Check, HelpCircle, Crosshair, Package, Rows3, ClipboardCheck } from 'lucide-react'
 import { SYSTEM_PROMPT, QA_SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import { parseTakeoffFile } from '../utils/parseTakeoff'
 import { supabase } from '../utils/supabase'
@@ -2986,6 +2986,70 @@ INSTRUCTIONS:
                             <strong>Depth unavailable</strong> for {ds.unavailable_runs.length} run{ds.unavailable_runs.length > 1 ? 's' : ''} (profile missing/illegible — verify): {ds.unavailable_runs.map(r => r.run_id).join(', ')}.
                           </div>
                         )}
+                      </div>
+                    )
+                  })()}
+
+                  {/* ── PLAN COMPLETENESS: bid-readiness of the source plans ── */}
+                  {result.plan_completeness && (() => {
+                    const pc = result.plan_completeness
+                    const gradeColor = pc.grade === 'A' || pc.grade === 'B' ? 'var(--flag-high, #16a34a)'
+                      : pc.grade === 'C' || pc.grade === 'D' ? 'var(--flag-medium)' : 'var(--flag-critical, #dc2626)'
+                    const sevColor = { critical: 'var(--flag-critical, #dc2626)', major: 'var(--flag-medium)', minor: 'var(--titan-dim, #888)' }
+                    return (
+                      <div className="depth-section">
+                        <div className="risk-flags-header">
+                          <span className="risk-flags-title"><ClipboardCheck size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />Plan Completeness</span>
+                          <span className="risk-flags-subtitle">How biddable the source plans are — the data a wet-utility bid needs, scored and gap-listed. Diagnostic; it never changes a quantity.</span>
+                        </div>
+                        <div style={{ display: 'flex', gap: 20, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
+                          <div style={{
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                            width: 84, height: 84, borderRadius: 8, border: `2px solid ${gradeColor}`, flexShrink: 0,
+                          }}>
+                            <div style={{ fontSize: '1.8rem', fontWeight: 700, lineHeight: 1, color: gradeColor }}>{pc.grade}</div>
+                            <div className="text-mono" style={{ fontSize: '0.72rem', marginTop: 2 }}>{pc.total}/100</div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            {['critical', 'major', 'minor'].map(sev => (
+                              <div key={sev} style={{
+                                padding: '4px 10px', borderRadius: 3, fontSize: '0.72rem', fontWeight: 600,
+                                border: `1px solid ${sevColor[sev]}`, color: sevColor[sev], textTransform: 'capitalize',
+                                opacity: pc.gap_counts[sev] ? 1 : 0.4,
+                              }}>{pc.gap_counts[sev]} {sev}</div>
+                            ))}
+                          </div>
+                        </div>
+                        {pc.gaps?.length > 0 && (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+                            {pc.gaps.map((g, i) => (
+                              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: '0.8rem', lineHeight: 1.45 }}>
+                                <span style={{
+                                  flexShrink: 0, marginTop: 3, width: 7, height: 7, borderRadius: '50%',
+                                  background: sevColor[g.severity],
+                                }} />
+                                <span><strong style={{ color: sevColor[g.severity], textTransform: 'capitalize' }}>{g.severity}:</strong> {g.description}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <details>
+                          <summary className="text-dim" style={{ fontSize: '0.72rem', cursor: 'pointer' }}>Factor breakdown (14 factors, weighted to 100)</summary>
+                          <div className="table-wrap" style={{ marginTop: 8 }}>
+                            <table className="titan-table">
+                              <thead><tr>{['Factor', 'Earned', 'Weight'].map(h => <th key={h}>{h}</th>)}</tr></thead>
+                              <tbody>
+                                {pc.by_factor.map((f, i) => (
+                                  <tr key={i}>
+                                    <td>{f.label}{f.na ? <span className="text-dim"> (n/a)</span> : ''}</td>
+                                    <td className="text-mono">{f.earned}</td>
+                                    <td className="text-mono text-dim">{f.weight}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </details>
                       </div>
                     )
                   })()}
