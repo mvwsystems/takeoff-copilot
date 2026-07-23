@@ -1092,6 +1092,61 @@ function buildDepthEngine(runs, merged, geotech, gradeMap, scheduleMap) {
   return { depthSummary, derivedItems }
 }
 
+// ── Cross-sheet reconciliation (matchlines) ──────────────────────
+// The same structure or run drawn on multiple sheets (matchlines, or
+// plan + profile + grading of the same run) would otherwise double-count.
+//  • Structures: deduped by structure id across sheets — ids are unique on a
+//    plan set, so two sheets showing "SSMH-5" is one manhole. Safe to collapse.
+//  • Pipes: only FLAGGED for the estimator, never auto-dropped — adjacent
+//    segments look alike and a wrong drop would under-count.
+const STRUCT_ID_RE = /\b([A-Za-z]{1,6}[-\s]?\d{1,4}[A-Za-z]?)\b/
+function crossSheetReconcile(merged, sheetLabelById) {
+  const structDupes = [], pipeFlags = []
+
+  // 1. Structures — collapse the same id seen on different sheets.
+  const seen = new Map()
+  for (let i = 0; i < merged.length; i++) {
+    const m = merged[i]
+    if (m._dropped || m.isDerived || m.category !== 'STRUCTURE') continue
+    const idm = `${m.description || ''} ${m.location || ''}`.match(STRUCT_ID_RE)
+    if (!idm) continue
+    const key = normKey(idm[1])
+    if (!seen.has(key)) { seen.set(key, i); continue }
+    const kIdx = seen.get(key)
+    const keep = merged[kIdx]
+    if (!keep.sheet_id || !m.sheet_id || keep.sheet_id === m.sheet_id) continue
+    // Keep whichever carries a depth; drop the other.
+    const winnerIdx = (m.depth && !keep.depth) ? i : kIdx
+    const loserIdx = winnerIdx === i ? kIdx : i
+    merged[loserIdx]._dropped = true
+    seen.set(key, winnerIdx)
+    const sh = [sheetLabelById.get(keep.sheet_id), sheetLabelById.get(m.sheet_id)].filter(Boolean)
+    merged[winnerIdx].note = `${idm[1]} appears on multiple sheets (${sh.join(', ')}) — counted once. ${merged[winnerIdx].note || ''}`.slice(0, 1000)
+    structDupes.push({ id: idm[1], sheets: sh })
+  }
+
+  // 2. Pipes — flag identical size+utility+location seen on different sheets.
+  const pipeSeen = new Map()
+  for (let i = 0; i < merged.length; i++) {
+    const m = merged[i]
+    if (m._dropped || m.isDerived || m.category !== 'PIPE') continue
+    const sig = extractSig(m.description)
+    const loc = (m.location || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+    if (!loc || sig.dia == null) continue
+    const key = `${sig.dia}|${sig.utility || ''}|${m.unit}|${loc}`
+    if (!pipeSeen.has(key)) { pipeSeen.set(key, i); continue }
+    const j = pipeSeen.get(key)
+    if (merged[j].sheet_id && m.sheet_id && merged[j].sheet_id !== m.sheet_id) {
+      pipeFlags.push({
+        desc: m.description,
+        sheets: [sheetLabelById.get(merged[j].sheet_id), sheetLabelById.get(m.sheet_id)].filter(Boolean),
+      })
+    }
+  }
+
+  return { structDupes, pipeFlags }
+}
+
 // Match a profile run to a merged plan item. The threshold requires real
 // evidence: a structure-ID hit in the item's location, or diameter AND utility
 // together. Diameter alone (the old bar) bound 8" storm profiles to 8"
@@ -1982,6 +2037,11 @@ export const handler = async (event) => {
     }
     derivedItems.forEach(d => merged.push(d))
 
+    // ── Cross-sheet reconciliation (matchlines / double-sheet) ──
+    const sheetLabelById = new Map(sheets.map(s => [s.id, s.sheet_number || `pg ${s.page_number}`]))
+    const { structDupes, pipeFlags } = crossSheetReconcile(merged, sheetLabelById)
+    merged = merged.filter(m => !m._dropped)   // drop cross-sheet structure duplicates
+
     // ── Material matching: every line item → a catalog material slug ──
     await updateJob(job_id, { progress: 95, stage_detail: 'Matching materials' })
     const { data: materials } = await supabase.from('materials').select('slug, name, aliases_json')
@@ -2146,6 +2206,15 @@ export const handler = async (event) => {
         context: 'Profile lengths are engineer-dimensioned and usually govern, but confirm before pricing. The profile value is currently used.',
       })
     }
+    // Cross-sheet duplicate suspicions (matchlines) — the double-sheet popup.
+    for (const f of pipeFlags) {
+      if (clarifications.length >= 12) break
+      clarifications.push({
+        id: cid++, type: 'cross_sheet', item_no: null,
+        question: `"${f.desc}" appears on ${f.sheets.join(' and ')} at the same size and location. Same run shown across a matchline (count once), or two separate runs?`,
+        context: 'Both are currently in the takeoff. If it is one run across a matchline, remove the duplicate; if they are two runs, keep both.',
+      })
+    }
     for (const it of items) {
       if (clarifications.length >= 12) break
       if (it.confidence === 'LOW' && ['PIPE', 'STRUCTURE'].includes(it.category) &&
@@ -2166,7 +2235,7 @@ export const handler = async (event) => {
         high_confidence_count: counts.HIGH,
         medium_confidence_count: counts.MEDIUM,
         low_confidence_count: counts.LOW,
-        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${p7Schedule.length > 0 ? ` Structure schedule found (${p7Schedule.length} structures) — used for depths.` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
+        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${structDupes.length > 0 ? ` ${structDupes.length} structure${structDupes.length === 1 ? '' : 's'} shown on multiple sheets — counted once.` : ''}${pipeFlags.length > 0 ? ` ${pipeFlags.length} possible cross-sheet pipe duplicate${pipeFlags.length === 1 ? '' : 's'} flagged for review.` : ''}${p7Schedule.length > 0 ? ` Structure schedule found (${p7Schedule.length} structures) — used for depths.` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}`,
       },
       text_layer: {
         mode: textMode,
@@ -2184,6 +2253,8 @@ export const handler = async (event) => {
         blank_tiles_skipped: state.blankSkipped || 0,
         merge_degraded: mergeDegraded,
         small_diameter_dedupe_degraded: p4Degraded,
+        cross_sheet_structures_deduped: structDupes.length,
+        cross_sheet_pipe_flags: pipeFlags.length,
       },
       measurement,
       clarifications,
