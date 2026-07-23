@@ -1666,25 +1666,43 @@ export const handler = async (event) => {
     let merged = []
     let mergeDegraded = false
     if (p1Items.length > 0) {
-      // Chunked: one giant merge call over hundreds of items overflows even a
-      // 16K output budget, and a truncated reply used to silently keep every
-      // overlap duplicate. Chunks are sheet-contiguous, so overlap-zone
-      // duplicates (which live on the same or adjacent tiles) stay together.
+      // One giant merge call over hundreds of items overflows even a 16K output
+      // budget. So we chunk — but tiles load in arbitrary order, so a naive
+      // slice would scatter a run's overlap-zone duplicates across different
+      // chunks where the merge can't see them together (silent double-count).
+      // Fix: order items so same-(sheet, location) sightings are adjacent, and
+      // NEVER split a (sheet, location) group across a chunk boundary.
       const MERGE_CHUNK = 120
-      for (let start = 0; start < p1Items.length; start += MERGE_CHUNK) {
-        const slice = p1Items.slice(start, start + MERGE_CHUNK)
-        const numbered = slice.map((it, i) => ({ id: start + i, sheet: it.sheet_label, tile: it.tile, ...it, sheet_id: undefined }))
+      const groupKey = (it) => `${it.sheet_id || ''}|${(it.location || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 50)}`
+      const order = p1Items.map((_, i) => i).sort((a, b) => {
+        const ka = groupKey(p1Items[a]), kb = groupKey(p1Items[b])
+        return ka < kb ? -1 : ka > kb ? 1 : a - b
+      })
+      const chunks = []
+      let cur = []
+      for (let k = 0; k < order.length; k++) {
+        // Break only when we're past the target size AND at a group change.
+        if (cur.length >= MERGE_CHUNK && groupKey(p1Items[order[k]]) !== groupKey(p1Items[order[k - 1]])) {
+          chunks.push(cur); cur = []
+        }
+        cur.push(order[k])
+      }
+      if (cur.length) chunks.push(cur)
+
+      for (const idxs of chunks) {
+        // id = ORIGINAL p1Items index, so merged source_ids still resolve correctly.
+        const numbered = idxs.map((idx) => ({ id: idx, sheet: p1Items[idx].sheet_label, tile: p1Items[idx].tile, ...p1Items[idx], sheet_id: undefined }))
         const { text, stop_reason } = await callClaude({
           model: HAIKU, maxTokens: 16384, withMeta: true,
           content: [{ type: 'text', text: `${MERGE_TASK}\n\nITEMS:\n${JSON.stringify(numbered)}` }],
         })
         const chunkMerged = stop_reason === 'max_tokens' ? [] : validateItems(parseJson(text)?.items, 'Pass 3/5 merge')
-        if (chunkMerged.length === 0 && slice.length > 0) {
+        if (chunkMerged.length === 0 && idxs.length > 0) {
           // Model merge failed for this chunk → conservative code merge, and
           // the degradation is surfaced in the report instead of hidden.
-          console.warn(`Merge chunk ${start}: degraded to code merge (stop_reason=${stop_reason})`)
+          console.warn(`Merge chunk (${idxs.length} items): degraded to code merge (stop_reason=${stop_reason})`)
           mergeDegraded = true
-          merged.push(...codeMerge(slice))
+          merged.push(...codeMerge(idxs.map((i) => p1Items[i])))
         } else {
           merged.push(...chunkMerged)
         }
