@@ -8,6 +8,7 @@ import { exportTakeoffCSV, exportQACSV, exportXLSX, buildTakeoffReportHTML, buil
 import OnboardingFlow from '../components/OnboardingFlow'
 import ReferenceBank from '../components/ReferenceBank'
 import VendorRFQ from '../components/VendorRFQ'
+import BidBuilder from '../components/BidBuilder'
 import './Dashboard.css'
 
 // localStorage throws in Safari private mode / blocked-storage contexts — a
@@ -40,6 +41,7 @@ export default function Dashboard() {
   const [vendorRFQOpen, setVendorRFQOpen] = useState(false) // send-RFQ-to-vendors modal
   const [market, setMarket] = useState(null)               // { prices: { key: {low, median, high, n, sources} } }
   const [marketBusy, setMarketBusy] = useState(false)
+  const [bidBuilderOpen, setBidBuilderOpen] = useState(false)
   const [editingItem, setEditingItem] = useState(null)     // item_no being edited inline
   const [editDraft, setEditDraft] = useState({})           // { description, quantity, unit }
   const [usage, setUsage] = useState(null)                 // { plan, status, quota, used, credits, trial_used, ... }
@@ -2874,6 +2876,9 @@ INSTRUCTIONS:
                             </button>
                           </>
                         )}
+                        <button className="btn btn-primary" title="Full bid build-up: labor, earthwork, indirects, margin — with a review gate" onClick={() => setBidBuilderOpen(true)}>
+                          <FileText size={14} /> Build Bid →
+                        </button>
                       </div>
                     </div>
                   )}
@@ -3909,6 +3914,21 @@ INSTRUCTIONS:
           )
         })()}
       </main>
+
+      {/* BID BUILDER MODAL */}
+      <BidBuilder
+        open={bidBuilderOpen}
+        onClose={() => setBidBuilderOpen(false)}
+        result={result}
+        unitCostOf={unitCostOf}
+        meta={{
+          projectName: images[activeImage]?.name || 'Takeoff',
+          company: onboardCompany,
+          contactName: onboardName,
+          phone: onboardPhone,
+          email: user?.email,
+        }}
+      />
 
       {/* SEND-RFQ-TO-VENDORS MODAL */}
       <VendorRFQ

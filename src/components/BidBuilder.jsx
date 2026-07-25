@@ -1,0 +1,167 @@
+import { useState, useMemo } from 'react'
+import { X, Download, FileText, AlertTriangle } from 'lucide-react'
+import { buildBid, DEFAULT_BID_SETTINGS } from '../utils/bidMath'
+import { bidCSV, buildBidHTML } from '../utils/bidExport'
+import { printReport } from '../utils/exporters'
+
+/**
+ * Bid build-up modal: priced takeoff → full bid number, with every
+ * assumption editable and a HUMAN GATE before anything can be downloaded.
+ * Settings persist per device (localStorage) so a contractor tunes their
+ * crew rates once.
+ */
+const LS_KEY = 'tc_bid_settings'
+
+const GROUPS = [
+  { title: 'Labor & Equipment', fields: [
+    ['crew_day_cost', 'Crew + equipment $/day'],
+    ['prod_shallow_lf', 'Production LF/day (<6 ft)'],
+    ['prod_medium_lf', 'Production LF/day (6–10 ft)'],
+    ['prod_deep_lf', 'Production LF/day (>10 ft)'],
+    ['structure_days', 'Crew-days per structure'],
+  ]},
+  { title: 'Earthwork', fields: [
+    ['trench_width_ft', 'Trench width (ft)'],
+    ['excavation_per_cy', 'Excavation $/CY'],
+    ['bedding_per_cy', 'Bedding $/CY'],
+    ['bedding_depth_ft', 'Bedding depth (ft)'],
+    ['trench_safety_per_lf', 'Trench safety $/LF'],
+    ['rock_per_lf', 'Rock $/LF'],
+  ]},
+  { title: 'Adders & Margin', fields: [
+    ['waste_pct', 'Material waste %'],
+    ['tax_pct', 'Sales tax %'],
+    ['mobilization', 'Mobilization $'],
+    ['bond_pct', 'Bond %'],
+    ['overhead_pct', 'Overhead %'],
+    ['profit_pct', 'Profit %'],
+  ]},
+]
+
+export default function BidBuilder({ open, onClose, result, unitCostOf, meta }) {
+  const [settings, setSettings] = useState(() => {
+    try { return { ...DEFAULT_BID_SETTINGS, ...(JSON.parse(localStorage.getItem(LS_KEY)) || {}) } }
+    catch { return { ...DEFAULT_BID_SETTINGS } }
+  })
+  const [approved, setApproved] = useState(false)
+
+  const bid = useMemo(
+    () => (open && result ? buildBid(result, unitCostOf, settings) : null),
+    [open, result, unitCostOf, settings],
+  )
+
+  if (!open || !bid) return null
+
+  const usd = (v) => `$${Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+  const setField = (key, raw) => {
+    const val = raw === '' ? DEFAULT_BID_SETTINGS[key] : Number(raw)
+    if (!Number.isFinite(val) || val < 0) return
+    const next = { ...settings, [key]: val }
+    setSettings(next)
+    setApproved(false)   // any assumption change re-arms the human gate
+    try { localStorage.setItem(LS_KEY, JSON.stringify(next)) } catch { /* private mode */ }
+  }
+
+  const downloadCSV = () => {
+    const blob = new Blob([bidCSV(bid, meta)], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `bid-${(meta.projectName || 'takeoff').replace(/[^a-z0-9]+/gi, '-')}.csv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  const SECTIONS = [
+    ['Materials', `${bid.materials.priced}/${bid.materials.lines} lines · waste ${settings.waste_pct}% · tax ${settings.tax_pct}%`, bid.materials.total],
+    ['Labor & equipment', `${bid.labor.pipe_lf.toLocaleString()} LF (${bid.labor.crew_days} crew-days) + ${bid.labor.structures} structures`, bid.labor.total],
+    ['Earthwork', `${bid.earthwork.trench_cy.toLocaleString()} CY trench · ${bid.earthwork.safety_lf.toLocaleString()} LF safety${bid.earthwork.rock_lf ? ` · ${bid.earthwork.rock_lf} LF rock` : ''}`, bid.earthwork.total],
+    ['Indirects', `mobilization + bond ${settings.bond_pct}%`, bid.indirects.total],
+    ['Overhead', `${settings.overhead_pct}%`, bid.overhead],
+    ['Profit', `${settings.profit_pct}%`, bid.profit],
+  ]
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal card" style={{ maxWidth: 760, maxHeight: '88vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+          <h3 style={{ margin: 0 }}>Build Bid — {meta.projectName || 'Takeoff'}</h3>
+          <button className="btn btn-ghost" style={{ padding: '4px 8px' }} onClick={onClose}><X size={16} /></button>
+        </div>
+        <p className="text-dim" style={{ fontSize: '0.76rem', margin: '0 0 14px', lineHeight: 1.5 }}>
+          Materials from your pricing, labor from your crew rates, earthwork from the measured depths.
+          Every assumption below is yours to edit — nothing downloads until you approve it.
+        </p>
+
+        {/* Bid summary */}
+        <div className="table-wrap" style={{ marginBottom: 14 }}>
+          <table className="titan-table">
+            <tbody>
+              {SECTIONS.map(([label, detail, amount]) => (
+                <tr key={label}>
+                  <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{label}</td>
+                  <td className="text-dim" style={{ fontSize: '0.72rem' }}>{detail}</td>
+                  <td className="text-mono" style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>{usd(amount)}</td>
+                </tr>
+              ))}
+              <tr>
+                <td style={{ fontWeight: 800, fontSize: '0.95rem' }}>BID TOTAL</td>
+                <td />
+                <td className="text-mono" style={{ textAlign: 'right', fontWeight: 800, fontSize: '1.05rem', color: 'var(--titan-red)' }}>{usd(bid.bid_total)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* Warnings — the risk the human is signing off on */}
+        {bid.warnings.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, border: '1px solid var(--flag-medium)', borderRadius: 4, padding: '9px 12px', marginBottom: 14, fontSize: '0.76rem', lineHeight: 1.6 }}>
+            <AlertTriangle size={14} style={{ color: 'var(--flag-medium)', flexShrink: 0, marginTop: 2 }} />
+            <ul style={{ margin: 0, paddingLeft: 16 }}>
+              {bid.warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          </div>
+        )}
+
+        {/* Assumptions */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 16 }}>
+          {GROUPS.map(g => (
+            <div key={g.title}>
+              <div style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', marginBottom: 6 }}>{g.title}</div>
+              {g.fields.map(([key, label]) => (
+                <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                  <label className="text-dim" style={{ fontSize: '0.72rem' }}>{label}</label>
+                  <input
+                    className="input text-mono"
+                    type="number" min="0" step="any"
+                    style={{ width: 78, fontSize: '0.78rem' }}
+                    value={settings[key]}
+                    onChange={e => setField(key, e.target.value)}
+                  />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        {/* Human gate */}
+        <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 12px', border: `1px solid ${approved ? '#1e9e5a' : 'var(--border, #2a2f3a)'}`, borderRadius: 4, marginBottom: 12, cursor: 'pointer', fontSize: '0.8rem', lineHeight: 1.5 }}>
+          <input type="checkbox" checked={approved} onChange={e => setApproved(e.target.checked)} style={{ marginTop: 2 }} />
+          <span>
+            I've reviewed the quantities, pricing, assumptions, and warnings above. This is an estimate built from
+            an AI takeoff — I'm responsible for verifying it before submitting.
+          </span>
+        </label>
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="btn btn-ghost" onClick={onClose}>Close</button>
+          <button className="btn btn-secondary" disabled={!approved} onClick={downloadCSV}>
+            <Download size={14} /> Bid CSV
+          </button>
+          <button className="btn btn-primary" disabled={!approved} onClick={() => printReport(buildBidHTML(bid, meta))}>
+            <FileText size={14} /> Bid PDF
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
