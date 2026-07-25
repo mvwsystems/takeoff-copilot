@@ -1,8 +1,9 @@
 import { useState, useMemo } from 'react'
-import { X, Download, FileText, AlertTriangle } from 'lucide-react'
+import { X, Download, FileText, AlertTriangle, Mail } from 'lucide-react'
 import { buildBid, DEFAULT_BID_SETTINGS } from '../utils/bidMath'
 import { bidCSV, buildBidHTML } from '../utils/bidExport'
 import { printReport } from '../utils/exporters'
+import { supabase } from '../utils/supabase'
 
 /**
  * Bid build-up modal: priced takeoff → full bid number, with every
@@ -44,6 +45,9 @@ export default function BidBuilder({ open, onClose, result, unitCostOf, meta }) 
     catch { return { ...DEFAULT_BID_SETTINGS } }
   })
   const [approved, setApproved] = useState(false)
+  const [sendTo, setSendTo] = useState('')
+  const [sendBusy, setSendBusy] = useState(false)
+  const [sendNotice, setSendNotice] = useState(null)   // { kind: 'ok'|'err', text }
 
   const bid = useMemo(
     () => (open && result ? buildBid(result, unitCostOf, settings) : null),
@@ -151,6 +155,50 @@ export default function BidBuilder({ open, onClose, result, unitCostOf, meta }) 
             an AI takeoff — I'm responsible for verifying it before submitting.
           </span>
         </label>
+
+        {/* Submit by email — same gate as downloads */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10, opacity: approved ? 1 : 0.5 }}>
+          <input
+            className="chat-input"
+            style={{ flex: 1 }}
+            type="email"
+            placeholder="Submit to (owner / GC email — up to 3, comma-separated)"
+            value={sendTo}
+            onChange={e => setSendTo(e.target.value)}
+            disabled={!approved || sendBusy}
+          />
+          <button
+            className="btn btn-secondary"
+            disabled={!approved || sendBusy || !sendTo.trim()}
+            onClick={async () => {
+              setSendBusy(true); setSendNotice(null)
+              try {
+                const { data: { session } } = await supabase.auth.getSession()
+                const res = await fetch('/api/send-bid', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+                  body: JSON.stringify({ to: sendTo, bid, meta }),
+                })
+                const out = await res.json().catch(() => ({}))
+                if (!res.ok) throw new Error(out.error || `Send failed (${res.status})`)
+                setSendNotice({ kind: 'ok', text: `Bid sent to ${out.sent_to.join(', ')} — replies come to ${meta.email}, and a copy is in your inbox.` })
+              } catch (e) {
+                setSendNotice({ kind: 'err', text: e.message })
+              } finally {
+                setSendBusy(false)
+              }
+            }}
+          >
+            <Mail size={14} /> {sendBusy ? 'Sending…' : 'Submit Bid'}
+          </button>
+        </div>
+        {sendNotice && (
+          <div style={{
+            padding: '8px 12px', borderRadius: 4, marginBottom: 10, fontSize: '0.78rem', lineHeight: 1.5,
+            border: `1px solid ${sendNotice.kind === 'ok' ? '#1e9e5a' : 'var(--flag-critical, #dc2626)'}`,
+            color: sendNotice.kind === 'ok' ? '#1e9e5a' : 'var(--flag-critical, #dc2626)',
+          }}>{sendNotice.text}</div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button className="btn btn-ghost" onClick={onClose}>Close</button>
