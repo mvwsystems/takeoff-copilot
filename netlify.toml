@@ -43,6 +43,14 @@
   path = "/api/create-checkout"
   function = "create-checkout"
 
+[[edge_functions]]
+  path = "/api/send-rfq"
+  function = "send-rfq"
+
+[[edge_functions]]
+  path = "/api/quote-rfq"
+  function = "quote-rfq"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"

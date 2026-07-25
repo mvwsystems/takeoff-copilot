@@ -7,6 +7,7 @@ import { useAuth } from '../utils/AuthContext'
 import { exportTakeoffCSV, exportQACSV, exportXLSX, buildTakeoffReportHTML, buildQAReportHTML, printReport, buildRFQReportHTML } from '../utils/exporters'
 import OnboardingFlow from '../components/OnboardingFlow'
 import ReferenceBank from '../components/ReferenceBank'
+import VendorRFQ from '../components/VendorRFQ'
 import './Dashboard.css'
 
 // localStorage throws in Safari private mode / blocked-storage contexts — a
@@ -36,6 +37,7 @@ export default function Dashboard() {
   const [showOnboarding, setShowOnboarding] = useState(!ls.get('tc_onboarded'))
   const [referenceOpen, setReferenceOpen] = useState(false)
   const [clarifyPrompt, setClarifyPrompt] = useState(null) // { count } — post-analysis "AI has questions" popup
+  const [vendorRFQOpen, setVendorRFQOpen] = useState(false) // send-RFQ-to-vendors modal
   const [editingItem, setEditingItem] = useState(null)     // item_no being edited inline
   const [editDraft, setEditDraft] = useState({})           // { description, quantity, unit }
   const [usage, setUsage] = useState(null)                 // { plan, status, quota, used, credits, trial_used, ... }
@@ -2399,12 +2401,15 @@ INSTRUCTIONS:
                         <button className="btn btn-ghost" title="Compare this takeoff to a previous version (addendum diff)" onClick={() => setRevisionModal(true)}>
                           <GitCompare size={14} /> Revisions
                         </button>
-                        <button className="btn btn-secondary" title="Supplier Request for Quote (printable)" onClick={() => {
+                        <button className="btn btn-secondary" title="Email this RFQ to your vendors for pricing" onClick={() => setVendorRFQOpen(true)}>
+                          <Send size={14} /> Send RFQ
+                        </button>
+                        <button className="btn btn-ghost" title="Supplier Request for Quote (printable)" onClick={() => {
                           const meta = { filename: images[activeImage]?.name, company: onboardCompany, contactName: onboardName, phone: onboardPhone, email: user?.email }
                           const html = buildRFQReportHTML(result, materialsMap, meta)
                           if (html) printReport(html); else setError('No purchasable materials to quote on this takeoff.')
                         }}>
-                          <Package size={14} /> RFQ
+                          <Package size={14} /> Print
                         </button>
                         <button className="btn btn-secondary" onClick={() => exportCSV(false)}>
                           <Download size={14} /> CSV
@@ -3824,6 +3829,17 @@ INSTRUCTIONS:
           )
         })()}
       </main>
+
+      {/* SEND-RFQ-TO-VENDORS MODAL */}
+      <VendorRFQ
+        open={vendorRFQOpen}
+        onClose={() => setVendorRFQOpen(false)}
+        result={result}
+        materialsMap={materialsMap}
+        projectId={images[activeImage]?.project_id || null}
+        projectName={images[activeImage]?.name || 'Takeoff'}
+        user={user}
+      />
 
       {/* FEEDBACK MODAL */}
       {feedbackModal && (
