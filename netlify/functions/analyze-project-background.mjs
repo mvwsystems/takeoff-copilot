@@ -1617,6 +1617,83 @@ async function learnedCorrectionsBlock(project_id) {
   }
 }
 
+// ── Engineer-firm calibration memory ──────────────────────────────
+// Which firm drew the plans is the single best predictor of how a set reads —
+// calibration showed accuracy is BIMODAL by firm (clean Pape-Dawson sheets vs
+// dense Lindsey sheets). One cheap Haiku call reads the title-block text once
+// per run; the firm's history across ALL users' prior runs is then briefed
+// into the brain so the pipeline knows what it's walking into. The firm rides
+// in result_json.engineer_firm, so history compounds with zero schema changes.
+async function detectEngineerFirm(textRuns) {
+  const text = (textRuns || []).slice(0, 400).map(r => r.text).join(' | ').slice(0, 6000)
+  if (text.length < 80) return null                     // raster/sparse — nothing to read
+  try {
+    const out = await callClaude({
+      model: HAIKU, maxTokens: 200,
+      content: [{ type: 'text', text: `Below is text extracted from a civil construction plan sheet (title block included). Identify the ENGINEERING FIRM that prepared the plans — not the owner, developer, surveyor, architect, or contractor. Respond ONLY with JSON: {"firm": "Firm Name"} or {"firm": null} if no engineering firm is identifiable.\n\nTEXT:\n${text}` }],
+    })
+    const firm = parseJson(out)?.firm
+    if (typeof firm !== 'string') return null
+    // Plan text is third-party content headed for the system prompt — sanitize.
+    const clean = firm.replace(/[#`*_>|[\]{}]/g, '').replace(/\s+/g, ' ').trim().slice(0, 80)
+    return clean.length >= 3 ? clean : null
+  } catch (e) {
+    console.error('firm detection failed:', e.message)  // never blocks a run
+    return null
+  }
+}
+
+// Pure summarizer (unit-testable): prior runs + correction volume → history
+// stats and the brain briefing lines.
+function summarizeFirmHistory(firmName, runs, corrCount) {
+  const agree = runs.map(r => {
+    const v = r.cal?.vs_engineer
+    return v && v.matched > 0 ? (v.within_15 / v.matched) * 100 : null
+  }).filter(x => x != null)
+  const meanAgree = agree.length ? Math.round(agree.reduce((s, x) => s + x, 0) / agree.length) : null
+  const perRun = corrCount != null && runs.length ? Math.round((corrCount / runs.length) * 10) / 10 : null
+  const rough = (meanAgree != null && meanAgree < 70) || (perRun != null && perRun > 5)
+  const clean = !rough && meanAgree != null && meanAgree >= 85 && (perRun == null || perRun <= 2)
+  const lines = [
+    `These plans were prepared by ${firmName}. Prior takeoffs on this firm's plans: ${runs.length}.`,
+    meanAgree != null ? `- Historical agreement with engineer quantity tables: ~${meanAgree}% of matched items within 15%.` : null,
+    perRun != null ? `- Estimators averaged ${perRun} correction(s) per takeoff on this firm's plans.` : null,
+    rough ? `- GUIDANCE: this firm's plans have historically read POORLY. Be conservative — prefer the text layer, schedules, and engineer tables over vision reads; grade ambiguous items MEDIUM/LOW; flag rather than guess.`
+      : clean ? `- GUIDANCE: this firm's plans have historically read cleanly. Standard confidence discipline applies.` : null,
+  ].filter(Boolean)
+  return {
+    history: { firm: firmName, runs: runs.length, mean_agreement_pct: meanAgree, corrections_per_run: perRun, reads: rough ? 'rough' : clean ? 'clean' : 'unknown' },
+    lines,
+  }
+}
+
+async function firmHistoryBlock(firmName, project_id) {
+  if (!firmName) return { block: '', history: null }
+  try {
+    const key = normKey(firmName).slice(0, 40)
+    const { data: rows } = await supabase
+      .from('analysis_results')
+      .select('project_id, created_at, firm:result_json->>engineer_firm, cal:result_json->calibration_score')
+      .not('result_json->>engineer_firm', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(200)
+    const prior = (rows || []).filter(r => r.project_id !== project_id && normKey(r.firm || '').slice(0, 40) === key)
+    if (!prior.length) return { block: '', history: { firm: firmName, runs: 0 } }
+    // Latest run per project — re-runs of one project must not stack the history.
+    const byProject = new Map()
+    for (const r of prior) if (!byProject.has(r.project_id)) byProject.set(r.project_id, r)
+    const runs = [...byProject.values()]
+    const { count: corrCount } = await supabase
+      .from('corrections').select('id', { count: 'exact', head: true })
+      .in('project_id', runs.map(r => r.project_id))
+    const { history, lines } = summarizeFirmHistory(firmName, runs, corrCount)
+    return { block: `\n\n## ENGINEER FIRM HISTORY\n${lines.join('\n')}\n`, history }
+  } catch (e) {
+    console.error('firm history failed:', e.message)    // never blocks a run
+    return { block: '', history: null }
+  }
+}
+
 // ── Material matching ────────────────────────────────────────────
 // Maps each line item to a material slug: alias/regex first (cheap, exact),
 // then one Haiku call for whatever's left ambiguous.
@@ -1722,7 +1799,7 @@ function codeMerge(items) {
 
 // ── Handler ────────────────────────────────────────────────────
 // Scoring primitives exported for offline rescoring / diagnostics.
-export { buildVariance, varianceMetrics, scoreAgainstTruth, tokenize, planCompleteness, buildCorrectionRules, needsSmallDiaSweep }
+export { buildVariance, varianceMetrics, scoreAgainstTruth, tokenize, planCompleteness, buildCorrectionRules, needsSmallDiaSweep, summarizeFirmHistory }
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405 }
@@ -1791,11 +1868,10 @@ export const handler = async (event) => {
 
     const chainDeadline = Date.now() + CHAIN_AFTER_MS
 
-    // Static brain + learned corrections distilled from every user's past
-    // estimator fixes — the feedback loop that makes each run smarter than
-    // the last. Empty block (no recurring patterns yet) is a no-op.
+    // Learned corrections distilled from every user's past estimator fixes —
+    // the feedback loop that makes each run smarter than the last. Assembled
+    // into the brain below, after firm detection adds its history block.
     const { block: learnedBlock, count: learnedRules } = await learnedCorrectionsBlock(project_id)
-    const brain = loadBrain() + learnedBlock
     if (learnedRules) console.log(`Learned corrections: ${learnedRules} rule(s) injected into the brain`)
 
     // ── Embedded text layer ──────────────────────────────────
@@ -1835,14 +1911,6 @@ export const handler = async (event) => {
     const tiers = { pass1: 'opus', pass2: 'opus', pass4: 'opus', pass5: 'haiku', pass6: 'sonnet', pass7: 'haiku', ...(cfg.models || {}) }
     const M = (k) => MODEL_TIERS[tiers[k]] || OPUS
 
-    const TILE_PASSES = [
-      { key: 'pass1', name: 'Pass 1 plan quantities', stage: 'analysis_pass_1', sheets: p1Sheets, task: PASS1_TASK, system: brain, model: M('pass1'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
-      { key: 'pass2', name: 'Pass 2 profiles', stage: 'analysis_pass_2', sheets: p2Sheets, task: PASS2_TASK, system: brain, model: M('pass2'), validator: validateRuns, resultKey: 'runs', maxTokens: 8192 },
-      { key: 'pass4', name: 'Pass 4 small-dia sweep', stage: 'analysis_pass_4', sheets: p1Sheets, task: PASS4_TASK, system: brain, model: M('pass4'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
-      { key: 'pass5', name: 'Pass 5 engineer tables', stage: 'analysis_pass_5', sheets, task: PASS5_TASK, system: null, model: M('pass5'), validator: validateEngineerTile, resultKey: null, maxTokens: 4096 },
-      { key: 'pass6', name: 'Pass 6 grading grades', stage: 'analysis_pass_2', sheets: p6Sheets, task: PASS6_TASK, system: brain, model: M('pass6'), validator: validateGrades, resultKey: 'grades', maxTokens: 4096 },
-      { key: 'pass7', name: 'Pass 7 structure schedule', stage: 'analysis_pass_5', sheets, task: PASS7_TASK, system: null, model: M('pass7'), validator: validateSchedule, resultKey: 'structures', maxTokens: 4096 },
-    ]
     const sheetsById = new Map(sheets.map(s => [s.id, s]))
 
     // Batch state persists across chained invocations.
@@ -1868,7 +1936,34 @@ export const handler = async (event) => {
         .eq('id', job_id)
       if (error) throw new Error(`batch_state persist failed: ${error.message}`)
     }
+
+    // ── Engineer-firm calibration memory ─────────────────────
+    // Detect once per run (memoized in batch_state so chained invocations
+    // don't re-pay the Haiku call — null means "tried, none found"), then
+    // brief the brain with this firm's cross-user history.
+    if (state.firm === undefined) {
+      let firmRuns = null
+      for (const s of sheets.slice(0, 3)) {
+        const runs = getPageText(s.page_number - 1).runs
+        if (runs.length >= 20) { firmRuns = runs; break }
+      }
+      state.firm = firmRuns ? await detectEngineerFirm(firmRuns) : null
+      if (state.firm) console.log(`Engineer firm detected: ${state.firm}`)
+    }
+    const { block: firmBlock, history: firmHistory } = await firmHistoryBlock(state.firm, project_id)
     await persistState()
+
+    // Final brain: static playbook + learned corrections + firm history.
+    const brain = loadBrain() + learnedBlock + firmBlock
+
+    const TILE_PASSES = [
+      { key: 'pass1', name: 'Pass 1 plan quantities', stage: 'analysis_pass_1', sheets: p1Sheets, task: PASS1_TASK, system: brain, model: M('pass1'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
+      { key: 'pass2', name: 'Pass 2 profiles', stage: 'analysis_pass_2', sheets: p2Sheets, task: PASS2_TASK, system: brain, model: M('pass2'), validator: validateRuns, resultKey: 'runs', maxTokens: 8192 },
+      { key: 'pass4', name: 'Pass 4 small-dia sweep', stage: 'analysis_pass_4', sheets: p1Sheets, task: PASS4_TASK, system: brain, model: M('pass4'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
+      { key: 'pass5', name: 'Pass 5 engineer tables', stage: 'analysis_pass_5', sheets, task: PASS5_TASK, system: null, model: M('pass5'), validator: validateEngineerTile, resultKey: null, maxTokens: 4096 },
+      { key: 'pass6', name: 'Pass 6 grading grades', stage: 'analysis_pass_2', sheets: p6Sheets, task: PASS6_TASK, system: brain, model: M('pass6'), validator: validateGrades, resultKey: 'grades', maxTokens: 4096 },
+      { key: 'pass7', name: 'Pass 7 structure schedule', stage: 'analysis_pass_5', sheets, task: PASS7_TASK, system: null, model: M('pass7'), validator: validateSchedule, resultKey: 'structures', maxTokens: 4096 },
+    ]
 
     // Chain hand-off: persist state, release the lease, re-invoke. If the
     // re-invocation cannot be confirmed, the job is marked errored (resumable
@@ -2575,12 +2670,17 @@ export const handler = async (event) => {
 
     const resultJson = {
       items,
+      // Firm identity + history ride in the result so every completed run
+      // deepens the next run's ENGINEER FIRM HISTORY briefing (looked up via
+      // result_json->>engineer_firm — no schema change needed).
+      engineer_firm: state.firm || null,
+      firm_history: firmHistory,
       summary: {
         total_items: items.length,
         high_confidence_count: counts.HIGH,
         medium_confidence_count: counts.MEDIUM,
         low_confidence_count: counts.LOW,
-        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${structDupes.length > 0 ? ` ${structDupes.length} structure${structDupes.length === 1 ? '' : 's'} shown on multiple sheets — counted once.` : ''}${pipeFlags.length > 0 ? ` ${pipeFlags.length} possible cross-sheet pipe duplicate${pipeFlags.length === 1 ? '' : 's'} flagged for review.` : ''}${measurement ? ` Measured pipe linework ~${measurement.measured_pipe_lf} LF vs extracted ~${measurement.extracted_pipe_lf} LF${measurementFlag ? ` — ~${measurementFlag.gap_lf} LF gap, possible missed run.` : ' (in range).'}` : ''}${p7Schedule.length > 0 ? ` Structure schedule found (${p7Schedule.length} structures) — used for depths.` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}${completeness ? ` Plan completeness ${completeness.total}/100 (Grade ${completeness.grade})${completeness.gap_counts.critical > 0 ? `, ${completeness.gap_counts.critical} critical gap${completeness.gap_counts.critical === 1 ? '' : 's'}` : ''}.` : ''}`,
+        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${state.firm ? `Plans by ${state.firm}${firmHistory?.runs ? ` (${firmHistory.runs} prior takeoff${firmHistory.runs === 1 ? '' : 's'} on this firm — historical read: ${firmHistory.reads || 'unknown'})` : ' (first takeoff on this firm)'}. ` : ''}${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${structDupes.length > 0 ? ` ${structDupes.length} structure${structDupes.length === 1 ? '' : 's'} shown on multiple sheets — counted once.` : ''}${pipeFlags.length > 0 ? ` ${pipeFlags.length} possible cross-sheet pipe duplicate${pipeFlags.length === 1 ? '' : 's'} flagged for review.` : ''}${measurement ? ` Measured pipe linework ~${measurement.measured_pipe_lf} LF vs extracted ~${measurement.extracted_pipe_lf} LF${measurementFlag ? ` — ~${measurementFlag.gap_lf} LF gap, possible missed run.` : ' (in range).'}` : ''}${p7Schedule.length > 0 ? ` Structure schedule found (${p7Schedule.length} structures) — used for depths.` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}${completeness ? ` Plan completeness ${completeness.total}/100 (Grade ${completeness.grade})${completeness.gap_counts.critical > 0 ? `, ${completeness.gap_counts.critical} critical gap${completeness.gap_counts.critical === 1 ? '' : 's'}` : ''}.` : ''}`,
       },
       text_layer: {
         mode: textMode,
