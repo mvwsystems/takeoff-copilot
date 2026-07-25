@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, Star, Plus, Send, Trash2, CheckCircle2, Clock, ChevronDown, ChevronUp } from 'lucide-react'
+import { X, Star, Plus, Send, Trash2, CheckCircle2, Clock, ChevronDown, ChevronUp, Scale } from 'lucide-react'
 import { supabase } from '../utils/supabase'
 import { buildRFQItems } from '../utils/exporters'
+import QuoteCompare from './QuoteCompare'
 
 /**
  * Send-RFQ modal: the contractor's vendor book + send flow + quote status.
@@ -23,6 +24,7 @@ export default function VendorRFQ({ open, onClose, result, materialsMap, project
   const [expandedRfq, setExpandedRfq] = useState(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState(null)   // { kind: 'ok'|'err', text }
+  const [view, setView] = useState('send')     // 'send' | 'compare'
 
   const items = open ? buildRFQItems(result, materialsMap) : []
 
@@ -40,7 +42,7 @@ export default function VendorRFQ({ open, onClose, result, materialsMap, project
   }, [projectId])
 
   useEffect(() => {
-    if (open) { setNotice(null); setMessage(''); setExpandedRfq(null); load() }
+    if (open) { setNotice(null); setMessage(''); setExpandedRfq(null); setView('send'); load() }
   }, [open, load])
 
   if (!open) return null
@@ -135,6 +137,10 @@ export default function VendorRFQ({ open, onClose, result, materialsMap, project
           Vendor replies go straight to <span className="text-mono">{user?.email}</span>.
         </p>
 
+        {view === 'compare' ? (
+          <QuoteCompare rfqs={rfqs} projectName={projectName} onBack={() => setView('send')} />
+        ) : (<>
+
         {/* ── Vendor book ── */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <span style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>Your Vendors</span>
@@ -215,8 +221,13 @@ export default function VendorRFQ({ open, onClose, result, materialsMap, project
         {/* ── RFQ history for this project ── */}
         {rfqs.length > 0 && (
           <>
-            <div style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase', margin: '4px 0 8px' }}>
-              RFQs sent for this job
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '4px 0 8px' }}>
+              <span style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>RFQs sent for this job</span>
+              {rfqs.some(r => r.status === 'quoted') && (
+                <button className="btn btn-secondary" style={{ fontSize: '0.75rem' }} onClick={() => setView('compare')}>
+                  <Scale size={13} /> Compare Quotes ({rfqs.filter(r => r.status === 'quoted').length})
+                </button>
+              )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {rfqs.map(r => {
@@ -283,6 +294,7 @@ export default function VendorRFQ({ open, onClose, result, materialsMap, project
             </div>
           </>
         )}
+        </>)}
       </div>
     </div>
   )
