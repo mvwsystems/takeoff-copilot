@@ -38,6 +38,8 @@ export default function Dashboard() {
   const [referenceOpen, setReferenceOpen] = useState(false)
   const [clarifyPrompt, setClarifyPrompt] = useState(null) // { count } — post-analysis "AI has questions" popup
   const [vendorRFQOpen, setVendorRFQOpen] = useState(false) // send-RFQ-to-vendors modal
+  const [market, setMarket] = useState(null)               // { prices: { key: {low, median, high, n, sources} } }
+  const [marketBusy, setMarketBusy] = useState(false)
   const [editingItem, setEditingItem] = useState(null)     // item_no being edited inline
   const [editDraft, setEditDraft] = useState({})           // { description, quantity, unit }
   const [usage, setUsage] = useState(null)                 // { plan, status, quota, used, credits, trial_used, ... }
@@ -811,6 +813,57 @@ INSTRUCTIONS:
   const extendedOf = (item) => {
     const c = unitCostOf(item)
     return c != null && item.quantity != null ? c * item.quantity : null
+  }
+
+  // ── Market pricing (cross-user benchmark bands) ──────────────
+  // Anonymized low/median/high per material, aggregated server-side from all
+  // users' price books + returned vendor quotes. Used two ways: sanity-check
+  // your own/vendor pricing, and one-click "quick price" when a bid is due
+  // today and there's no time to wait on vendors.
+  const marketFor = (item) => {
+    if (!market?.prices) return null
+    return market.prices[priceKeyOf(item)]
+      ?? market.prices[`desc:${(item.description || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().slice(0, 80)}`]
+      ?? null
+  }
+
+  const loadMarket = async () => {
+    setMarketBusy(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch('/api/market-prices', { headers: { Authorization: `Bearer ${session.access_token}` } })
+      if (!res.ok) throw new Error(`market prices ${res.status}`)
+      setMarket(await res.json())
+    } catch {
+      setError('Could not load market pricing — try again.')
+    } finally {
+      setMarketBusy(false)
+    }
+  }
+
+  // Fill every UNPRICED line that has a market median, saving to the price
+  // book labeled "(market est.)" so provenance is visible and each one can be
+  // overridden or cleared like any other book entry.
+  const quickPriceAtMarket = async (items) => {
+    const fills = []
+    for (const it of items || []) {
+      if (unitCostOf(it) != null) continue          // never overwrite real costs
+      const m = marketFor(it)
+      if (m?.median == null) continue
+      fills.push({
+        user_id: user.id,
+        key: priceKeyOf(it),
+        label: `(market est.) ${it.description || ''}`.slice(0, 200),
+        unit: it.unit || null,
+        unit_cost: m.median,
+      })
+    }
+    if (!fills.length) { setError('No unpriced lines have market data yet — market bands grow as quotes come back.'); return }
+    if (!window.confirm(`Fill ${fills.length} unpriced line${fills.length === 1 ? '' : 's'} at the market median? They save to your price book labeled "(market est.)" — override or clear any of them anytime.`)) return
+    const dedup = [...new Map(fills.map(f => [f.key, f])).values()]
+    const { error } = await supabase.from('price_book').upsert(dedup, { onConflict: 'user_id,key' })
+    if (error) { setError('Could not save market prices — check your connection.'); return }
+    setPriceBook(prev => ({ ...prev, ...Object.fromEntries(dedup.map(f => [f.key, f])) }))
   }
 
   const saveUnitCost = async (item, raw) => {
@@ -2757,7 +2810,19 @@ INSTRUCTIONS:
                                   <td className="text-mono" style={{ fontWeight: 700, color: ext != null ? 'var(--titan-red)' : 'var(--titan-text-muted)' }}>
                                     {ext != null ? fmtUSD(ext) : '—'}
                                   </td>
-                                  <td className="text-dim" style={{ fontSize: '0.7rem' }}>{cost != null ? 'from price book' : ''}</td>
+                                  <td className="text-dim" style={{ fontSize: '0.7rem' }}>{(() => {
+                                    const m = marketFor(item)
+                                    if (cost != null) {
+                                      const aboveMkt = m?.high != null && cost > m.high
+                                      return <>
+                                        from price book
+                                        {m?.median != null && <> · mkt ~${m.median.toLocaleString()}{aboveMkt && <span style={{ color: 'var(--flag-medium)' }}> — above market</span>}</>}
+                                      </>
+                                    }
+                                    return m?.median != null
+                                      ? <span title={`Market band $${m.low}–$${m.high} from ${m.n} price${m.n === 1 ? '' : 's'} (${m.sources} sources)`}>mkt ~${m.median.toLocaleString()}</span>
+                                      : ''
+                                  })()}</td>
                                 </tr>
                               )
                             })}
@@ -2787,13 +2852,28 @@ INSTRUCTIONS:
                           </tfoot>
                         </table>
                       </div>
-                      <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                         <button className="btn btn-secondary" onClick={() => exportTakeoffCSV(result, { ...exportMeta(), priceBook, priced: true })}>
                           <Download size={14} /> Priced CSV
                         </button>
                         <button className="btn btn-primary" onClick={() => exportXLSX(result, { ...exportMeta(), priceBook, priced: true })}>
                           <Download size={14} /> Priced Excel
                         </button>
+                        <span style={{ flex: 1 }} />
+                        {!market ? (
+                          <button className="btn btn-ghost" disabled={marketBusy} title="Load anonymized market price bands (all users' price books + returned vendor quotes)" onClick={loadMarket}>
+                            <BarChart3 size={14} /> {marketBusy ? 'Loading…' : 'Market Pricing'}
+                          </button>
+                        ) : (
+                          <>
+                            <span className="text-dim" style={{ fontSize: '0.7rem' }}>
+                              market data: {market.keys || 0} material{(market.keys || 0) === 1 ? '' : 's'}
+                            </span>
+                            <button className="btn btn-secondary" title="Fill every unpriced line at the market median — for when the bid is due today" onClick={() => quickPriceAtMarket(result.items)}>
+                              <BarChart3 size={14} /> Quick-Price @ Market
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}

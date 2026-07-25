@@ -51,6 +51,10 @@
   path = "/api/quote-rfq"
   function = "quote-rfq"
 
+[[edge_functions]]
+  path = "/api/market-prices"
+  function = "market-prices"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
