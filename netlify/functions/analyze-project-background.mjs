@@ -726,6 +726,21 @@ function measureSheet(runs, mupdf, doc, pageIndex) {
   }
 }
 
+// ── Pass-4 triage skip ────────────────────────────────────────────
+// The small-diameter sweep re-reads every plan tile at the pass-4 tier to
+// catch ≤2" services. On a sheet whose text layer is substantial AND mentions
+// no small diameter and no service hardware, that second look can't produce a
+// reportable hit (the sweep only reports labeled ≤2" lines) — so it's pure
+// spend. Skip is deliberately conservative: raster/sparse sheets ALWAYS get
+// the sweep, and any small-dia token or service keyword keeps it.
+const SMALL_DIA_RE = /(?:^|[^0-9./-])(\d\/\d|1[-\s]?1\/2|0?\.\d+|[12](?:\.\d+)?)\s*-?\s*(?:"|”|in\b|inch|in\.)/i
+const SERVICE_KW_RE = /service|meter|irrig|copper|tubing|\bcorp\b|curb stop|saddle|setter|\bpoly\b|domestic|air release|blow[- ]?off|\bpe\b/i
+function needsSmallDiaSweep(runs) {
+  if (!runs || runs.length < 50) return true          // sparse/raster text — a skip can't be trusted
+  const text = runs.map(r => r.text).join(' ')
+  return SMALL_DIA_RE.test(text) || SERVICE_KW_RE.test(text)
+}
+
 // ── Message Batches machinery ─────────────────────────────────────
 // Tile passes run through the Batches API at 50% of standard token pricing.
 // All four passes are independent, so every missing tile across all passes is
@@ -797,9 +812,13 @@ async function ingestBatchResults(batch, passes, sheetsById, jobId, usage) {
       const msg = entry.result.message
       const u = msg.usage || {}
       const tier = tierOf(pass.model)
-      usage[tier] = usage[tier] || { in: 0, out: 0 }
+      usage[tier] = usage[tier] || { in: 0, out: 0, cw: 0, cr: 0 }
       usage[tier].in += u.input_tokens || 0
       usage[tier].out += u.output_tokens || 0
+      // Prompt-cache traffic (the shared brain prefix): writes bill at 1.25×
+      // input, reads at 0.1× — tracked separately so run_cost stays honest.
+      usage[tier].cw = (usage[tier].cw || 0) + (u.cache_creation_input_tokens || 0)
+      usage[tier].cr = (usage[tier].cr || 0) + (u.cache_read_input_tokens || 0)
 
       const textOut = (msg.content || []).map(b => (b.type === 'text' ? b.text : '')).join('')
       const parsed = parseJson(textOut)
@@ -1703,7 +1722,7 @@ function codeMerge(items) {
 
 // ── Handler ────────────────────────────────────────────────────
 // Scoring primitives exported for offline rescoring / diagnostics.
-export { buildVariance, varianceMetrics, scoreAgainstTruth, tokenize, planCompleteness, buildCorrectionRules }
+export { buildVariance, varianceMetrics, scoreAgainstTruth, tokenize, planCompleteness, buildCorrectionRules, needsSmallDiaSweep }
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405 }
@@ -1831,10 +1850,14 @@ export const handler = async (event) => {
     state.batches = state.batches || {}
     state.resubmits = state.resubmits || {}
     state.usage = state.usage || {}
-    for (const tier of ['opus', 'sonnet', 'haiku']) state.usage[tier] = state.usage[tier] || { in: 0, out: 0 }
+    for (const tier of ['opus', 'sonnet', 'haiku']) {
+      state.usage[tier] = state.usage[tier] || {}
+      for (const k of ['in', 'out', 'cw', 'cr']) state.usage[tier][k] = state.usage[tier][k] || 0
+    }
     state.pollFails = state.pollFails || {}
     state.failedTiles = state.failedTiles || {}
     state.blankSkipped = state.blankSkipped || 0
+    state.p4SheetsSkipped = state.p4SheetsSkipped || 0
     state.chains = (state.chains || 0) + 1
     if (state.chains > MAX_CHAINS) throw new Error('Batch processing exceeded the maximum invocation chain — contact support.')
     // batch_state is the resume ledger — a silent write failure here means the
@@ -1993,11 +2016,28 @@ export const handler = async (event) => {
         if (Date.now() > chainDeadline) return await chainToFreshInvocation()
 
         const requests = []
+        const p4Skip = new Map()   // sheet_id -> boolean, decided once per sheet
         for (const w of missing[pass.key]) {
+          const tile_key = `${w.sheet.id}_${w.idx}`
+          // Pass-4 triage: a sheet whose substantial text layer rules out small
+          // lines gets empty sweep results instead of a second Opus read.
+          if (pass.key === 'pass4') {
+            let skip = p4Skip.get(w.sheet.id)
+            if (skip === undefined) {
+              skip = !needsSmallDiaSweep(getPageText(w.sheet.page_number - 1).runs)
+              p4Skip.set(w.sheet.id, skip)
+              if (skip) state.p4SheetsSkipped = (state.p4SheetsSkipped || 0) + 1
+            }
+            if (skip) {
+              const { error } = await supabase.from('analysis_tiles')
+                .upsert({ job_id, pass: 'pass4', tile_key, result_json: [] }, { onConflict: 'job_id,pass,tile_key' })
+              if (error) throw new Error(`pass4-skip upsert failed: ${error.message}`)
+              continue
+            }
+          }
           const tiles = sheetTiles(w.sheet)
           const tile = tiles[w.idx]
           if (!tile) continue
-          const tile_key = `${w.sheet.id}_${w.idx}`
           // Blank-tile skip: an essentially-empty tile compresses to almost
           // nothing — record an empty result instead of paying for an API call.
           if (tile.pngBytes < BLANK_PNG_BYTES) {
@@ -2015,7 +2055,10 @@ export const handler = async (event) => {
               model: pass.model,
               max_tokens: pass.maxTokens,
               // No `temperature` — Opus 4.8 / Sonnet 5 deprecated it and 400 if present.
-              ...(pass.system ? { system: pass.system } : {}),
+              // The brain (~3K tokens) is identical across every tile of a run, so
+              // it's marked as a prompt-cache prefix: first tile per model tier
+              // writes the cache, the rest read it at 10% of input price.
+              ...(pass.system ? { system: [{ type: 'text', text: pass.system, cache_control: { type: 'ephemeral' } }] } : {}),
               messages: [{ role: 'user', content: buildTileContent(w.sheet, tile, embeddedText, pass.task) }],
             },
           })
@@ -2578,15 +2621,20 @@ export const handler = async (event) => {
         schedule_derived_depths: (depthSummary.schedule_derived_runs || 0) + schedItemDepths,
         trench_safety_lf: depthSummary.trench_safety_lf,
         learned_rules: learnedRules,
+        pass4_sheets_skipped: state.p4SheetsSkipped || 0,   // text layer ruled out ≤2" lines
       },
       // Real spend for this run (Message Batches pricing). Excludes the few
       // synchronous assembly Haiku calls (~cents).
       run_cost: {
         usage: state.usage,
+        // Cache writes bill at 1.25× input, cache reads at 0.1× (stacked on the
+        // 50% batch discount already baked into PRICES).
         est_usd: Math.round(
           ['opus', 'sonnet', 'haiku'].reduce((sum, tier) =>
             sum +
             ((state.usage[tier]?.in || 0) / 1e6) * PRICES[tier].in +
+            ((state.usage[tier]?.cw || 0) / 1e6) * PRICES[tier].in * 1.25 +
+            ((state.usage[tier]?.cr || 0) / 1e6) * PRICES[tier].in * 0.1 +
             ((state.usage[tier]?.out || 0) / 1e6) * PRICES[tier].out, 0) * 100) / 100,
       },
       // Which model tier ran each pass, and how this run scored.
