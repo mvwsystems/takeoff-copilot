@@ -1256,7 +1256,8 @@ function tokenize(s) {
 // trustworthy rather than an artifact of a loose token matcher.
 function extractSig(desc) {
   const d = (desc || '').toLowerCase()
-  const diaM = d.match(/(\d+(?:\.\d+)?)\s*(?:"|in\b|inch|-in\b|in\.)/)
+  // '-?' before the unit: engineers write 8", 8 IN, 8-IN, and 8-INCH interchangeably
+  const diaM = d.match(/(\d+(?:\.\d+)?)\s*-?\s*(?:"|in\b|inch|in\.)/)
   const dia = diaM ? Number(diaM[1]) : null
   let utility = null
   if (/storm|\bstm\b|\bsd\b|catch ?basin|\bdrain/.test(d)) utility = 'stm'
@@ -1497,6 +1498,106 @@ function planCompleteness(items, corpusLower) {
   return { total: rounded, grade, by_factor, gaps, gap_counts: counts }
 }
 
+// ── Learned corrections: the feedback loop ────────────────────────
+// Every estimator edit (inline edit, clarification answer, chat action) lands
+// in the `corrections` table. This distills the RECURRING ones — across ALL
+// users' takeoffs (service role reads the whole table) — into short standing
+// instructions appended to the brain on every new run, so a mistake corrected
+// twice becomes a mistake the pipeline stops making. Deterministic and
+// code-side: signature-clustered, recurrence-thresholded, capped. One-off
+// fixes are project noise and never become rules. Never breaks a run.
+
+// Strip anything that could read as markdown structure inside the prompt —
+// correction values are estimator-typed free text.
+const ruleText = (s) => String(s || '').replace(/\s+/g, ' ').replace(/[#`*_>|[\]{}]/g, '').trim().slice(0, 90)
+
+// Cluster key: structured signature (category|utility|diameter) so
+// '8" PVC SAN SWR' and '8-inch sanitary sewer' land in the same bucket.
+function sigClusterKey(desc) {
+  const sig = extractSig(desc)
+  if (sig.dia == null && !sig.utility && !sig.cat) return `~${normKey(desc).slice(0, 24)}`
+  return `${sig.cat || '?'}|${sig.utility || '?'}|${sig.dia ?? '?'}`
+}
+
+function buildCorrectionRules(rows, ownerId) {
+  const clusters = new Map()
+  for (const r of rows || []) {
+    if (!r || !r.field || r.field === 'note') continue
+    const desc = r.description || r.corrected_value || r.original_value || ''
+    if (!desc) continue
+    let key
+    if (r.field === 'description') key = `desc|${sigClusterKey(r.original_value || desc)}>${sigClusterKey(r.corrected_value || '')}`
+    else if (r.field === 'unit') key = `unit|${sigClusterKey(desc)}>${String(r.corrected_value || '').toUpperCase().slice(0, 8)}`
+    else key = `${r.field}|${sigClusterKey(desc)}`
+    if (!clusters.has(key)) clusters.set(key, { field: r.field, rows: [], projects: new Set(), ownerHits: 0 })
+    const c = clusters.get(key)
+    c.rows.push(r)  // rows arrive newest-first, so c.rows[0] stays the latest
+    if (r.project_id) c.projects.add(r.project_id)
+    if (ownerId && r.user_id === ownerId) c.ownerHits++
+  }
+
+  const rules = []
+  for (const c of clusters.values()) {
+    const n = c.rows.length
+    const p = c.projects.size
+    // Recurrence bar: seen on ≥2 different projects, or ≥3 times on one, or
+    // ≥2 times by THIS run's owner (their own habits are signal for their runs).
+    if (!(p >= 2 || n >= 3 || c.ownerHits >= 2)) continue
+    const latest = c.rows[0]
+    const desc = ruleText(latest.description || latest.corrected_value || latest.original_value)
+    let text = null
+    if (c.field === 'added') {
+      text = `Estimators had to ADD "${desc}" after the AI missed it (${n}x) — actively look for this item type before finalizing.`
+    } else if (c.field === 'removed') {
+      text = `Estimators REMOVED "${desc}" (${n}x) — this item type tends to be over-counted or duplicated; count only clearly distinct instances.`
+    } else if (c.field === 'quantity') {
+      // Only a consistent DIRECTION generalizes — a lone quantity fix is
+      // project-specific and must not become a standing rule.
+      const deltas = c.rows.map(r => {
+        const a = Number(r.original_value), b = Number(r.corrected_value)
+        return isFinite(a) && isFinite(b) && a > 0 ? (b - a) / a : null
+      }).filter(d => d != null)
+      if (deltas.length >= 3) {
+        const down = deltas.filter(d => d < -0.05).length
+        const up = deltas.filter(d => d > 0.05).length
+        if (down >= deltas.length * 0.75) text = `Quantities for "${desc}" ran HIGH (corrected down ${down}/${deltas.length} times) — recount carefully; don't double-count shared or cross-sheet runs.`
+        else if (up >= deltas.length * 0.75) text = `Quantities for "${desc}" ran LOW (corrected up ${up}/${deltas.length} times) — check for missed runs or laterals of this type.`
+      }
+    } else if (c.field === 'depth') {
+      text = `Depths on "${desc}" were corrected by estimators (${n}x) — re-verify rim/invert reads for this item type and lower confidence when the profile is unclear.`
+    } else if (c.field === 'unit') {
+      const u = ruleText(latest.corrected_value).toUpperCase().slice(0, 8)
+      if (u) text = `"${desc}" should be reported in ${u} (unit corrected ${n}x).`
+    } else if (c.field === 'description') {
+      const from = ruleText(latest.original_value), to = ruleText(latest.corrected_value)
+      if (from && to) text = `Items read as "${from}" were re-labeled "${to}" by estimators (${n}x) — verify this classification before finalizing.`
+    }
+    if (text) rules.push({ text, n, p, owner: c.ownerHits > 0 })
+  }
+  // Owner's own patterns first, then breadth (projects), then volume.
+  rules.sort((a, b) => (b.owner - a.owner) || (b.p - a.p) || (b.n - a.n))
+  return rules.slice(0, 12).map(r => r.text)
+}
+
+async function learnedCorrectionsBlock(project_id) {
+  try {
+    const { data: proj } = await supabase.from('projects').select('user_id').eq('id', project_id).single()
+    const { data: rows, error } = await supabase
+      .from('corrections')
+      .select('user_id, project_id, field, description, original_value, corrected_value')
+      .order('created_at', { ascending: false })
+      .limit(500)
+    if (error || !rows?.length) return { block: '', count: 0 }
+    const rules = buildCorrectionRules(rows, proj?.user_id || null)
+    if (!rules.length) return { block: '', count: 0 }
+    const block = `\n\n## LEARNED CORRECTIONS (recurring estimator fixes from real takeoffs)\nHuman estimators corrected past AI takeoffs in these recurring ways. Treat each as a prior, not an override — what is actually on the plans always wins, but when a read is ambiguous, lean this way:\n${rules.map(r => `- ${r}`).join('\n')}\n`
+    return { block: block.slice(0, 2400), count: rules.length }
+  } catch (e) {
+    console.error('learned corrections failed:', e.message)  // never blocks a run
+    return { block: '', count: 0 }
+  }
+}
+
 // ── Material matching ────────────────────────────────────────────
 // Maps each line item to a material slug: alias/regex first (cheap, exact),
 // then one Haiku call for whatever's left ambiguous.
@@ -1602,7 +1703,7 @@ function codeMerge(items) {
 
 // ── Handler ────────────────────────────────────────────────────
 // Scoring primitives exported for offline rescoring / diagnostics.
-export { buildVariance, varianceMetrics, scoreAgainstTruth, tokenize, planCompleteness }
+export { buildVariance, varianceMetrics, scoreAgainstTruth, tokenize, planCompleteness, buildCorrectionRules }
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return { statusCode: 405 }
@@ -1670,7 +1771,13 @@ export const handler = async (event) => {
     const p6Sheets = sheets.filter(s => GRADE_TYPES.has(s.classification))
 
     const chainDeadline = Date.now() + CHAIN_AFTER_MS
-    const brain = loadBrain()
+
+    // Static brain + learned corrections distilled from every user's past
+    // estimator fixes — the feedback loop that makes each run smarter than
+    // the last. Empty block (no recurring patterns yet) is a no-op.
+    const { block: learnedBlock, count: learnedRules } = await learnedCorrectionsBlock(project_id)
+    const brain = loadBrain() + learnedBlock
+    if (learnedRules) console.log(`Learned corrections: ${learnedRules} rule(s) injected into the brain`)
 
     // ── Embedded text layer ──────────────────────────────────
     // Extract each analyzed page's text layer once per invocation, keyed by page
@@ -2470,6 +2577,7 @@ export const handler = async (event) => {
         schedule_rows: p7Schedule.length,
         schedule_derived_depths: (depthSummary.schedule_derived_runs || 0) + schedItemDepths,
         trench_safety_lf: depthSummary.trench_safety_lf,
+        learned_rules: learnedRules,
       },
       // Real spend for this run (Message Batches pricing). Excludes the few
       // synchronous assembly Haiku calls (~cents).
