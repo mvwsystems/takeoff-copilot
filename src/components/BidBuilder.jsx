@@ -48,6 +48,33 @@ export default function BidBuilder({ open, onClose, result, unitCostOf, meta }) 
   const [sendTo, setSendTo] = useState('')
   const [sendBusy, setSendBusy] = useState(false)
   const [sendNotice, setSendNotice] = useState(null)   // { kind: 'ok'|'err', text }
+  const [txCounty, setTxCounty] = useState(() => { try { return localStorage.getItem('tc_bid_county') || '' } catch { return '' } })
+  const [txBusy, setTxBusy] = useState(false)
+  const [txData, setTxData] = useState(null)           // /api/txdot-prices response
+  const [txErr, setTxErr] = useState(null)
+
+  const loadTxdot = async () => {
+    setTxBusy(true); setTxErr(null)
+    try {
+      try { localStorage.setItem('tc_bid_county', txCounty) } catch { /* private mode */ }
+      const { data: { session } } = await supabase.auth.getSession()
+      const items = (result?.items || [])
+        .filter(it => ['PIPE', 'STRUCTURE', 'EXCAVATION'].includes(String(it.category || '').toUpperCase()))
+        .map((it, i) => ({ i, description: it.description, unit: it.unit }))
+      const res = await fetch('/api/txdot-prices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ county: txCounty, items }),
+      })
+      const out = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(out.error || `TxDOT lookup failed (${res.status})`)
+      setTxData(out)
+    } catch (e) {
+      setTxErr(e.message)
+    } finally {
+      setTxBusy(false)
+    }
+  }
 
   const bid = useMemo(
     () => (open && result ? buildBid(result, unitCostOf, settings) : null),
@@ -125,6 +152,63 @@ export default function BidBuilder({ open, onClose, result, unitCostOf, meta }) 
             </ul>
           </div>
         )}
+
+        {/* TxDOT installed-price benchmark */}
+        <div style={{ border: '1px solid var(--border, #2a2f3a)', borderRadius: 4, padding: '10px 12px', marginBottom: 14 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '1px', textTransform: 'uppercase' }}>TxDOT Benchmark</span>
+            <span className="text-dim" style={{ fontSize: '0.68rem' }}>installed $/unit from winning Texas letting bids, last 24 months</span>
+            <span style={{ flex: 1 }} />
+            <input
+              className="chat-input"
+              style={{ width: 130, fontSize: '0.76rem' }}
+              placeholder="County (optional)"
+              value={txCounty}
+              onChange={e => setTxCounty(e.target.value)}
+            />
+            <button className="btn btn-ghost" disabled={txBusy} onClick={loadTxdot} style={{ fontSize: '0.75rem' }}>
+              {txBusy ? 'Loading…' : txData ? 'Reload' : 'Load'}
+            </button>
+          </div>
+          {txErr && <div style={{ color: 'var(--flag-critical, #dc2626)', fontSize: '0.74rem', marginTop: 6 }}>{txErr}</div>}
+          {txData && (
+            <div style={{ marginTop: 8 }}>
+              {txData.trench_safety && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: '0.76rem', marginBottom: 6 }}>
+                  <span>Trench protection: TxDOT median <span className="text-mono">${txData.trench_safety.median}</span>/LF ({txData.trench_safety.n.toLocaleString()} bids)</span>
+                  <button className="btn btn-ghost" style={{ fontSize: '0.7rem', padding: '2px 8px' }}
+                    onClick={() => setField('trench_safety_per_lf', String(txData.trench_safety.median))}>
+                    Apply to settings
+                  </button>
+                </div>
+              )}
+              {txData.matches?.length ? (
+                <div className="table-wrap" style={{ maxHeight: 180, overflowY: 'auto' }}>
+                  <table className="titan-table">
+                    <thead><tr>{['Takeoff line', 'TxDOT installed (won bids)', 'n'].map(h => <th key={h}>{h}</th>)}</tr></thead>
+                    <tbody>
+                      {txData.matches.map((m, i) => (
+                        <tr key={i}>
+                          <td style={{ fontSize: '0.76rem' }}>{m.label}</td>
+                          <td className="text-mono" style={{ whiteSpace: 'nowrap' }}>
+                            ~${m.median.toLocaleString()}/{m.unit}
+                            <span className="text-dim" style={{ fontSize: '0.66rem' }}> (${m.low.toLocaleString()}–${m.high.toLocaleString()})</span>
+                          </td>
+                          <td className="text-mono text-dim">{m.n.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="text-dim" style={{ fontSize: '0.74rem' }}>No TxDOT items matched this takeoff's lines ({txData.county_used}).</div>
+              )}
+              <div className="text-dim" style={{ fontSize: '0.66rem', marginTop: 6, lineHeight: 1.5 }}>
+                {txData.county_used} · {txData.note}
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Assumptions */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14, marginBottom: 16 }}>

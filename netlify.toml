@@ -59,6 +59,10 @@
   path = "/api/send-bid"
   function = "send-bid"
 
+[[edge_functions]]
+  path = "/api/txdot-prices"
+  function = "txdot-prices"
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
