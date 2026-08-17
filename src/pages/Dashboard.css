@@ -1823,6 +1823,55 @@
   position: relative;
 }
 
+/* Hover close-up of a triage thumbnail. pointer-events: none keeps it from
+   stealing the hover/click from the grid underneath. */
+.sheet-hover-preview {
+  position: fixed;
+  top: 72px;
+  right: 24px;
+  z-index: 300;
+  width: min(46vw, 880px);
+  max-height: calc(100vh - 110px);
+  display: flex;
+  flex-direction: column;
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border-light);
+  border-radius: 4px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.sheet-hover-preview img {
+  width: 100%;
+  min-height: 0;
+  object-fit: contain;
+  background: #fff;
+}
+
+.shp-caption {
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--titan-text-dim);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--titan-border);
+}
+
+.shp-cls {
+  margin-left: auto;
+  padding: 1px 8px;
+  border: 1px solid var(--titan-border-light);
+  border-radius: 2px;
+  font-size: 0.62rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  white-space: nowrap;
+}
+
 .smi-thumb {
   width: 100%;
   aspect-ratio: 3/2;
@@ -2364,4 +2413,20 @@
   background: var(--titan-green, #2ECC71);
   border-radius: 2px;
   transition: width 0.4s ease;
+}
+.resolve-defer-row {
+  padding: 4px 12px 8px;
+  text-align: center;
+}
+.resolve-defer-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.68rem;
+  color: var(--titan-text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.resolve-defer-btn:hover {
+  color: var(--titan-text-dim);
 }

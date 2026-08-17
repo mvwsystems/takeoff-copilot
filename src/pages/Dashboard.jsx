@@ -89,6 +89,7 @@ export default function Dashboard() {
   const pendingRef = useRef({})
   const chatScrollRef = useRef(null)
   const [sheetMaps, setSheetMaps] = useState({})    // { project_id: { sheets, loaded } }
+  const [sheetHover, setSheetHover] = useState(null) // triage-grid hover: the sheet row being previewed
   const [proceedingAnalysis, setProceedingAnalysis] = useState(false)
   const [materialsMap, setMaterialsMap] = useState({})   // slug -> material row
   const [materialCard, setMaterialCard] = useState(null) // open material slug
@@ -1386,15 +1387,20 @@ INSTRUCTIONS:
     setGeotechResult(null)
     try {
       const file_id = await uploadDocToFiles(file)
+      // 8192 = the analyze proxy's ceiling. The geotech JSON (per-boring soil
+      // layers + lab data + flags) regularly blew past the old 2048 cap, which
+      // surfaced as a confusing "sheet too dense" truncation error.
       const result = await callApi(
         { file_id, name: file.name, mediaType: 'application/pdf' },
         GEOTECH_PROMPT + '\n\nExtract all geotechnical data from this report. Respond ONLY with the JSON object, no other text.',
-        2048
+        8192
       )
       setGeotechResult(result)
     } catch (err) {
       console.error('Geotech error:', err)
-      setGeotechError(err.message)
+      setGeotechError(/cut off before completing/i.test(err.message)
+        ? 'This geotech report has more boring data than one extraction pass can return. Try uploading just the boring logs and summary/recommendations sections.'
+        : err.message)
     } finally {
       setGeotechLoading(false)
     }
@@ -2553,6 +2559,8 @@ INSTRUCTIONS:
                             key={sheet.id}
                             className={`smi ${sheet.included_in_analysis ? 'smi-on' : 'smi-off'}`}
                             onClick={() => toggleSheetAnalysis(projectId, sheet.id, sheet.included_in_analysis)}
+                            onMouseEnter={() => setSheetHover(sheet)}
+                            onMouseLeave={() => setSheetHover(null)}
                             title={`Page ${sheet.page_number}${sheet.sheet_number ? ` — ${sheet.sheet_number}` : ''}${sheet.sheet_title ? `: ${sheet.sheet_title}` : ''}\nClick to ${sheet.included_in_analysis ? 'exclude' : 'include'}`}
                           >
                             <div className="smi-thumb-wrap">
@@ -2576,6 +2584,21 @@ INSTRUCTIONS:
                         )
                       })}
                     </div>
+
+                    {/* Hover close-up — the thumbnails are full 108 DPI page
+                        renders, so the enlarged view is readable enough to
+                        confirm which sheet the triage actually picked. */}
+                    {sheetHover?.preview_url && (
+                      <div className="sheet-hover-preview">
+                        <img src={sheetHover.preview_url} alt="" />
+                        <div className="shp-caption">
+                          Page {sheetHover.page_number}
+                          {sheetHover.sheet_number ? ` — ${sheetHover.sheet_number}` : ''}
+                          {sheetHover.sheet_title ? `: ${sheetHover.sheet_title}` : ''}
+                          <span className="shp-cls">{formatClassification(sheetHover.classification)}</span>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="proceed-bar">
                       <div className="proceed-info">
@@ -3908,6 +3931,13 @@ INSTRUCTIONS:
                       <Send size={14} />
                     </button>
                   </div>
+                  {done < total && (
+                    <div className="resolve-defer-row">
+                      <button className="resolve-defer-btn" onClick={() => setResolveOpen(false)}>
+                        Finish later — answers save as you go, open questions stay here
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

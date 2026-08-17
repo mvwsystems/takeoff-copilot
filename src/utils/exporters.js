@@ -352,11 +352,11 @@ const REPORT_CSS = `
   .page { max-width: 1060px; margin: 0 auto; padding: 0 0 40px; }
   .band {
     background: #0A0A0A; color: #F5F5F0; padding: 28px 40px 22px;
-    border-bottom: 4px solid #E8372C;
+    border-bottom: 4px solid #0057FF;
     display: flex; justify-content: space-between; align-items: flex-end; gap: 24px;
   }
   .brand { font-size: 19pt; font-weight: 800; letter-spacing: 2.5px; text-transform: uppercase; line-height: 1.1; }
-  .brand .accent { color: #E8372C; }
+  .brand .accent { color: #0057FF; }
   .brand-sub {
     font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 7pt;
     letter-spacing: 2px; text-transform: uppercase; color: #999; margin-top: 4px;
@@ -364,8 +364,8 @@ const REPORT_CSS = `
   .band-meta { text-align: right; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 8pt; color: #AAA; }
   .band-meta strong { color: #F5F5F0; }
   .grade-badge {
-    display: inline-block; margin-top: 6px; padding: 2px 10px; border: 1px solid #E8372C;
-    color: #E8372C; font-size: 7.5pt; letter-spacing: 1px; text-transform: uppercase; font-weight: 700;
+    display: inline-block; margin-top: 6px; padding: 2px 10px; border: 1px solid #0057FF;
+    color: #0057FF; font-size: 7.5pt; letter-spacing: 1px; text-transform: uppercase; font-weight: 700;
   }
   .body-pad { padding: 24px 40px 0; }
   .warn-banner {
@@ -377,14 +377,14 @@ const REPORT_CSS = `
   .stats-row { display: flex; gap: 12px; margin-bottom: 22px; flex-wrap: wrap; }
   .stat {
     flex: 1; min-width: 110px; background: #FFFFFF; border: 1px solid #DDD;
-    border-top: 3px solid #E8372C; padding: 10px 14px; text-align: center;
+    border-top: 3px solid #0057FF; padding: 10px 14px; text-align: center;
   }
   .stat-val { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 16pt; font-weight: 700; color: #0A0A0A; }
   .stat-lbl { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 6.5pt; letter-spacing: 1.5px; text-transform: uppercase; color: #888; margin-top: 2px; }
   .section { margin-bottom: 26px; }
   .section-head {
     font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 7.5pt; font-weight: 700;
-    letter-spacing: 2px; text-transform: uppercase; color: #E8372C;
+    letter-spacing: 2px; text-transform: uppercase; color: #0057FF;
     padding-bottom: 5px; border-bottom: 2px solid #0A0A0A; margin-bottom: 10px;
   }
   table { width: 100%; border-collapse: collapse; font-size: 8.5pt; background: #FFFFFF; }
@@ -409,13 +409,13 @@ const REPORT_CSS = `
   .item-row:last-child { border-bottom: none; }
   .item-title { font-size: 9pt; font-weight: 600; margin-bottom: 2px; }
   .item-note { font-size: 8pt; color: #666; line-height: 1.45; }
-  .prose { font-size: 9pt; color: #333; line-height: 1.6; background: #FFFFFF; border: 1px solid #DDD; border-left: 4px solid #E8372C; padding: 12px 16px; }
+  .prose { font-size: 9pt; color: #333; line-height: 1.6; background: #FFFFFF; border: 1px solid #DDD; border-left: 4px solid #0057FF; padding: 12px 16px; }
   .footer {
     margin-top: 34px; padding: 12px 0 0; border-top: 2px solid #0A0A0A;
     display: flex; justify-content: space-between; gap: 16px;
     font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 7.5pt; color: #888;
   }
-  .disclaimer { color: #E8372C; font-weight: 700; }
+  .disclaimer { color: #0057FF; font-weight: 700; }
   @media print {
     body { background: #FFFFFF; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .page { max-width: none; padding-bottom: 16px; }
