@@ -41,9 +41,10 @@ async function parsePdf(file) {
 async function parseSpreadsheet(file) {
   const buf = await file.arrayBuffer()
   const wb = XLSX.read(buf, { type: 'array' })
-  const raw = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+  const sheet = wb.Sheets[wb.SheetNames[0]]
+  const raw = XLSX.utils.sheet_to_json(sheet, { defval: '' })
   let dropped = 0
-  const rows = raw.map(r => {
+  let rows = raw.map(r => {
     const keys = Object.keys(r)
     const dk = keys.find(k => /desc|item|scope|material/i.test(k))
     const qk = keys.find(k => /qty|quant|amount/i.test(k))
@@ -58,9 +59,60 @@ async function parseSpreadsheet(file) {
       ? { description: String(r[dk]), quantity: qty, unit: uk ? String(r[uk]).trim().toUpperCase() : '' }
       : null
   }).filter(Boolean)
-  if (!rows.length) throw new Error('Could not find description + quantity columns in that file.')
+
+  // Contractor worksheets rarely have labeled columns — row 1 is often the
+  // project name, with section bands (WATER / SEWER / STORM), supplier price
+  // rows, and JIC/production columns mixed in. When the header-keyed parse
+  // finds nothing, fall back to row shape: description text followed by a
+  // quantity + recognized unit pair. Requiring the unit is what keeps section
+  // headers ("WATER | 650'") and supplier totals ("FORTILINE | 39980.98")
+  // out of the takeoff.
+  if (!rows.length) {
+    dropped = 0
+    rows = parseByRowShape(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }))
+  }
+
+  if (!rows.length) throw new Error('Could not read a takeoff from that file — no rows with a description, quantity, and unit (LF/EA/SF...) were found.')
   // Never report a partial parse as a full one — the QA comparison would run
   // against an incomplete takeoff without anyone knowing.
   rows.dropped = dropped
+  return rows
+}
+
+const UNIT_RE = /^(?:LF|L\.?F\.?|FT|EA|E\.?A\.?|SF|S\.?F\.?|SY|CY|C\.?Y\.?|LS|L\.?S\.?|SQ\.?\s*FT|SQ\.?\s*YD|TON|TONS|GAL|RL|HR|HRS|DAY|DAYS|LB|LBS|LOAD|LOADS)$/i
+
+function parseByRowShape(aoa) {
+  const rows = []
+  for (const cells of aoa) {
+    // Description: first cell holding text that isn't just a number.
+    const di = cells.findIndex(c => {
+      const s = String(c).trim()
+      return s !== '' && !isFinite(Number(s.replace(/[$,]/g, '')))
+    })
+    if (di === -1) continue
+    const description = String(cells[di]).trim()
+
+    // Quantity: the first number after the description that is immediately
+    // followed by a unit cell — or a combined "220 FT" cell.
+    let quantity = null, unit = ''
+    for (let i = di + 1; i < cells.length; i++) {
+      const val = String(cells[i]).replace(/[$,]/g, '').trim()
+      if (val === '') continue
+      const next = String(cells[i + 1] ?? '').trim()
+      if (isFinite(Number(val)) && UNIT_RE.test(next)) {
+        quantity = Number(val)
+        unit = next.toUpperCase()
+        break
+      }
+      const combined = val.match(/^(-?\d+(?:\.\d+)?)\s*([A-Za-z][A-Za-z.\s]{0,6})$/)
+      if (combined && UNIT_RE.test(combined[2].trim())) {
+        quantity = Number(combined[1])
+        unit = combined[2].trim().toUpperCase()
+        break
+      }
+    }
+    if (quantity == null) continue
+    rows.push({ description, quantity, unit })
+  }
   return rows
 }

@@ -1431,8 +1431,12 @@ const RE_SLOPE = /(\d+(?:\.\d+)?\s?%|s\s?=\s?\d|slope|@\s?\d+(?:\.\d+)?%)/i
 const RE_MATERIAL = /\b(pvc|rcp|hdpe|dip|ductile|di\b|pipe\s?class|c900|cmp|vcp|ptfe|cipp|pccp)\b/i
 
 function planCompleteness(items, corpusLower) {
-  const pipes = items.filter(m => !m.isDerived && m.category === 'PIPE')
-  const structs = items.filter(m => !m.isDerived && m.category === 'STRUCTURE')
+  // Score only the PROPOSED scope. "Existing 10\" sewer — 0 LF, verify
+  // tie-in" items are scope flags, not plan content; counting their missing
+  // depths/materials against the plans punished complete plan sets.
+  const isProposed = (m) => m.quantity !== 0 && !/\bexist(?:ing)?\b/i.test(m.description || '')
+  const pipes = items.filter(m => !m.isDerived && m.category === 'PIPE' && isProposed(m))
+  const structs = items.filter(m => !m.isDerived && m.category === 'STRUCTURE' && isProposed(m))
   const gravity = pipes.filter(m => GRAVITY_UTIL.has(extractSig(m.description).utility))
   const manholes = structs.filter(m => /manhole|\bmh\b|ssmh|stmh|sanmh/.test((m.description || '').toLowerCase()))
   const systemsUsed = [...new Set(pipes.map(m => extractSig(m.description).utility).filter(Boolean))]
@@ -2569,9 +2573,15 @@ export const handler = async (event) => {
     // connection, crossings) can be keyword-detected. Diagnostic only.
     let completeness = null
     try {
-      const analyzedSheets = [...p1Sheets, ...p2Sheets]
-      const corpus = analyzedSheets
-        .map(s => getPageText(s.page_number - 1).runs.map(r => r.text).join(' '))
+      // Corpus = the WHOLE plan set's text layer, not just the analyzed
+      // sheets. The spec keywords this rubric looks for (bedding, testing,
+      // benchmark, trench/manhole details) live on the general-notes, cover,
+      // and detail sheets that triage rightly excludes from AI analysis —
+      // scoring only the analyzed sheets failed clean plan sets (Golden
+      // Corral CDs graded 26/100 F). Text extraction is free, so read every
+      // page of the original PDF.
+      const corpus = Array.from({ length: doc.countPages() }, (_, i) =>
+        getPageText(i).runs.map(r => r.text).join(' '))
         .join(' \n ')
         .toLowerCase()
       completeness = planCompleteness(merged, corpus)
