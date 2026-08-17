@@ -1255,6 +1255,22 @@ const TOKEN_SYN = {
   hydrant: 'hyd', hydrants: 'hyd',
   cleanout: 'co', cleanouts: 'co',
   linear: 'lf', ft: 'lf', feet: 'lf', foot: 'lf',
+  hpde: 'hdpe',  // recurring contractor-worksheet typo
+}
+
+// Unit synonym table for the accuracy matcher's hard gate. Estimators write
+// FT where we write LF (and SQ FT / SF, EACH / EA) — comparing raw strings
+// disqualified every pipe row of a real takeoff before scoring even started.
+const UNIT_ALIAS = {
+  FT: 'LF', FEET: 'LF', 'L.F.': 'LF', LNFT: 'LF',
+  'SQ FT': 'SF', 'SQ. FT': 'SF', 'SQ.FT': 'SF', SQFT: 'SF', 'S.F.': 'SF',
+  'SQ YD': 'SY', 'SQ. YD': 'SY', SQYD: 'SY', 'S.Y.': 'SY',
+  'CU YD': 'CY', 'CU. YD': 'CY', CUYD: 'CY', 'C.Y.': 'CY',
+  EACH: 'EA', 'E.A.': 'EA', 'L.S.': 'LS', TONS: 'TON',
+}
+function normUnit(u) {
+  const k = String(u || '').toUpperCase().replace(/\s+/g, ' ').trim()
+  return UNIT_ALIAS[k] || k.replace(/[.\s]/g, '')
 }
 function tokenize(s) {
   const raw = (s || '').toLowerCase().replace(/["']/g, ' in ').split(/[^a-z0-9.]+/)
@@ -1306,7 +1322,7 @@ function matchRow(desc, unit, items, used) {
   for (let i = 0; i < items.length; i++) {
     if (used.has(i)) continue
     const it = items[i]
-    if (unit && it.unit && String(unit).toUpperCase() !== String(it.unit).toUpperCase()) continue
+    if (unit && it.unit && normUnit(unit) !== normUnit(it.unit)) continue
     const isig = extractSig(it.description)
     if (sig.dia != null && isig.dia != null && Math.abs(sig.dia - isig.dia) > 0.01) continue
     if (sig.utility && isig.utility && sig.utility !== isig.utility) continue
