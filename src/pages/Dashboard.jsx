@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ShieldAlert, MessageCircle, Send, ChevronUp, BookOpen, Pencil, Check, HelpCircle, Crosshair, Package, Rows3, ClipboardCheck } from 'lucide-react'
+import { Upload, FileText, Download, RotateCcw, X, ChevronRight, BarChart3, Eye, GitCompare, Layers, ShieldAlert, MessageCircle, Send, ChevronUp, BookOpen, Pencil, Check, HelpCircle, Crosshair, Package, Rows3, ClipboardCheck, ZoomIn } from 'lucide-react'
 import { SYSTEM_PROMPT, QA_SYSTEM_PROMPT, SCREENING_PROMPT, GEOTECH_PROMPT } from '../utils/prompts'
 import { parseTakeoffFile } from '../utils/parseTakeoff'
 import { supabase } from '../utils/supabase'
@@ -89,7 +89,15 @@ export default function Dashboard() {
   const pendingRef = useRef({})
   const chatScrollRef = useRef(null)
   const [sheetMaps, setSheetMaps] = useState({})    // { project_id: { sheets, loaded } }
-  const [sheetHover, setSheetHover] = useState(null) // triage-grid hover: the sheet row being previewed
+  const [sheetZoomId, setSheetZoomId] = useState(null) // triage-grid lightbox: id of the sheet being inspected
+
+  // Esc closes the sheet lightbox — matches how users bail out of modals.
+  useEffect(() => {
+    if (!sheetZoomId) return
+    const onKey = (e) => { if (e.key === 'Escape') setSheetZoomId(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [sheetZoomId])
   const [proceedingAnalysis, setProceedingAnalysis] = useState(false)
   const [materialsMap, setMaterialsMap] = useState({})   // slug -> material row
   const [materialCard, setMaterialCard] = useState(null) // open material slug
@@ -2559,8 +2567,6 @@ INSTRUCTIONS:
                             key={sheet.id}
                             className={`smi ${sheet.included_in_analysis ? 'smi-on' : 'smi-off'}`}
                             onClick={() => toggleSheetAnalysis(projectId, sheet.id, sheet.included_in_analysis)}
-                            onMouseEnter={() => setSheetHover(sheet)}
-                            onMouseLeave={() => setSheetHover(null)}
                             title={`Page ${sheet.page_number}${sheet.sheet_number ? ` — ${sheet.sheet_number}` : ''}${sheet.sheet_title ? `: ${sheet.sheet_title}` : ''}\nClick to ${sheet.included_in_analysis ? 'exclude' : 'include'}`}
                           >
                             <div className="smi-thumb-wrap">
@@ -2571,6 +2577,16 @@ INSTRUCTIONS:
                               <div className={`smi-check ${sheet.included_in_analysis ? 'smi-check-on' : 'smi-check-off'}`}>
                                 {sheet.included_in_analysis ? '✓' : '—'}
                               </div>
+                              {sheet.preview_url && (
+                                <button
+                                  className="smi-zoom-btn"
+                                  onClick={(e) => { e.stopPropagation(); setSheetZoomId(sheet.id) }}
+                                  title="Zoom in on this sheet"
+                                  aria-label={`Zoom in on page ${sheet.page_number}`}
+                                >
+                                  <ZoomIn size={13} />
+                                </button>
+                              )}
                             </div>
                             <div className="smi-info">
                               <span className={`cls-badge cls-${sheet.classification || 'other'} ${isAnalysis ? 'cls-analysis' : ''}`}>
@@ -2585,20 +2601,41 @@ INSTRUCTIONS:
                       })}
                     </div>
 
-                    {/* Hover close-up — the thumbnails are full 108 DPI page
-                        renders, so the enlarged view is readable enough to
-                        confirm which sheet the triage actually picked. */}
-                    {sheetHover?.preview_url && (
-                      <div className="sheet-hover-preview">
-                        <img src={sheetHover.preview_url} alt="" />
-                        <div className="shp-caption">
-                          Page {sheetHover.page_number}
-                          {sheetHover.sheet_number ? ` — ${sheetHover.sheet_number}` : ''}
-                          {sheetHover.sheet_title ? `: ${sheetHover.sheet_title}` : ''}
-                          <span className="shp-cls">{formatClassification(sheetHover.classification)}</span>
+                    {/* Sheet lightbox — opened from the zoom button on a
+                        thumbnail. The images are full 108 DPI page renders,
+                        so the enlarged view is readable enough to confirm
+                        which sheet the triage actually picked. Dismiss via
+                        the close button, Esc, or clicking the backdrop. */}
+                    {(() => {
+                      const zs = sheetZoomId ? map.sheets.find(s => s.id === sheetZoomId) : null
+                      if (!zs?.preview_url) return null
+                      return (
+                        <div className="sheet-zoom-overlay" onClick={() => setSheetZoomId(null)}>
+                          <div className="sheet-zoom-modal" onClick={e => e.stopPropagation()}>
+                            <div className="szm-header">
+                              <span className="szm-title">
+                                Page {zs.page_number}
+                                {zs.sheet_number ? ` — ${zs.sheet_number}` : ''}
+                                {zs.sheet_title ? `: ${zs.sheet_title}` : ''}
+                              </span>
+                              <span className="shp-cls">{formatClassification(zs.classification)}</span>
+                              <button
+                                className={`btn ${zs.included_in_analysis ? 'btn-secondary' : 'btn-primary'} szm-toggle`}
+                                onClick={() => toggleSheetAnalysis(projectId, zs.id, zs.included_in_analysis)}
+                              >
+                                {zs.included_in_analysis ? 'Exclude from analysis' : 'Include in analysis'}
+                              </button>
+                              <button className="szm-close" onClick={() => setSheetZoomId(null)} aria-label="Close preview">
+                                <X size={16} />
+                              </button>
+                            </div>
+                            <div className="szm-body">
+                              <img src={zs.preview_url} alt={`Page ${zs.page_number}`} />
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )
+                    })()}
 
                     <div className="proceed-bar">
                       <div className="proceed-info">

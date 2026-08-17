@@ -1823,41 +1823,107 @@
   position: relative;
 }
 
-/* Hover close-up of a triage thumbnail. pointer-events: none keeps it from
-   stealing the hover/click from the grid underneath. */
-.sheet-hover-preview {
-  position: fixed;
-  top: 72px;
-  right: 24px;
-  z-index: 300;
-  width: min(46vw, 880px);
-  max-height: calc(100vh - 110px);
-  display: flex;
-  flex-direction: column;
-  background: var(--titan-card);
-  border: 1px solid var(--titan-border-light);
-  border-radius: 4px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.sheet-hover-preview img {
-  width: 100%;
-  min-height: 0;
-  object-fit: contain;
-  background: #fff;
-}
-
-.shp-caption {
-  padding: 8px 12px;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  color: var(--titan-text-dim);
+/* Zoom affordance on a triage thumbnail — appears on hover, opens the
+   lightbox. stopPropagation in the handler keeps it from toggling
+   include/exclude underneath. */
+.smi-zoom-btn {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  border-top: 1px solid var(--titan-border);
+  justify-content: center;
+  border: none;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.smi:hover .smi-zoom-btn { opacity: 1; }
+.smi-zoom-btn:hover { background: var(--titan-red); }
+
+/* Sheet lightbox */
+.sheet-zoom-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: fadeIn 0.15s ease;
+}
+
+.sheet-zoom-modal {
+  display: flex;
+  flex-direction: column;
+  max-width: min(1200px, 94vw);
+  max-height: 92vh;
+  width: 100%;
+  background: var(--titan-card);
+  border: 1px solid var(--titan-border-light);
+  border-radius: 6px;
+  box-shadow: 0 16px 60px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+}
+
+.szm-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--titan-border);
+}
+
+.szm-title {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--titan-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.szm-toggle {
+  margin-left: auto;
+  font-size: 0.7rem;
+  padding: 5px 10px;
+  white-space: nowrap;
+}
+
+.szm-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--titan-text-dim);
+  cursor: pointer;
+}
+.szm-close:hover {
+  background: var(--titan-surface);
+  color: var(--titan-text);
+}
+
+/* Scrolls when the sheet is taller than the modal, so callouts stay at
+   readable size instead of being squeezed to fit. */
+.szm-body {
+  overflow: auto;
+  background: #fff;
+  min-height: 0;
+}
+.szm-body img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .shp-cls {
