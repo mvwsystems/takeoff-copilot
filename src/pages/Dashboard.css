@@ -2031,6 +2031,49 @@
   flex-shrink: 0;
 }
 
+/* Rush / Standard speed selector in the triage proceed bar */
+.speed-select {
+  display: flex;
+  border: 1px solid var(--titan-border-light);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-left: auto;
+  margin-right: 12px;
+}
+.speed-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--titan-border-light);
+  color: var(--titan-text-dim);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s, color 0.15s;
+}
+.speed-opt:last-child { border-right: none; }
+.speed-opt:hover { background: var(--titan-surface); }
+.speed-opt-on {
+  background: var(--titan-red-glow);
+  color: var(--titan-text);
+}
+.speed-opt-name {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.speed-opt-on .speed-opt-name { color: var(--titan-red); }
+.speed-opt-desc {
+  font-size: 0.66rem;
+  color: var(--titan-text-muted);
+  white-space: nowrap;
+}
+
 .proceed-info {
   font-size: 0.78rem;
   color: var(--titan-text-dim);

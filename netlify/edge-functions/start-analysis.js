@@ -38,7 +38,7 @@ export default async (request) => {
   } catch {
     return new Response('Invalid JSON', { status: 400 })
   }
-  const { project_id, geotech, config, ground_truth } = body
+  const { project_id, geotech, config, ground_truth, rush } = body
   if (!project_id) {
     return new Response('Missing project_id', { status: 400 })
   }
@@ -73,6 +73,9 @@ export default async (request) => {
       models,
     }
   }
+  // Rush mode: real-time API instead of Batches — minutes instead of tens of
+  // minutes, ~2× token cost. Boolean only; the worker reads config.rush.
+  if (rush === true) jobConfig = { ...(jobConfig || {}), rush: true }
 
   // Ground-truth takeoff rows (estimator-verified) — stored once on the project;
   // every calibration run scores against them. RLS scopes the update to the owner.

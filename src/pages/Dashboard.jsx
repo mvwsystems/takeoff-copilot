@@ -99,6 +99,10 @@ export default function Dashboard() {
     return () => window.removeEventListener('keydown', onKey)
   }, [sheetZoomId])
   const [proceedingAnalysis, setProceedingAnalysis] = useState(false)
+  // Rush = real-time API (minutes, ~2× AI cost); Standard = Batches API
+  // (20–60 min, half the cost). Defaults to rush: a first-run user gets one
+  // shot at a good impression, and a 40-minute wait isn't it.
+  const [rushMode, setRushMode] = useState(true)
   const [materialsMap, setMaterialsMap] = useState({})   // slug -> material row
   const [materialCard, setMaterialCard] = useState(null) // open material slug
   const [compareParsing, setCompareParsing] = useState(false)
@@ -239,6 +243,7 @@ export default function Dashboard() {
           jobProgress: j.progress,
           jobDetail: j.stage_detail,
           jobError: j.error,
+          jobRush: !!(j.config && j.config.rush),
         })
       }
       if (!cancelled && entries.length) {
@@ -1719,7 +1724,7 @@ INSTRUCTIONS:
       const res = await fetch('/api/start-analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
-        body: JSON.stringify({ project_id: projectId, geotech }),
+        body: JSON.stringify({ project_id: projectId, geotech, rush: rushMode }),
       })
       // 402 → out of monthly takeoffs / trial / credits. Open the plans modal.
       if (res.status === 402) {
@@ -1736,7 +1741,7 @@ INSTRUCTIONS:
       loadUsage()   // a takeoff may have been spent — refresh the badge
       setImages(prev => prev.map((img, i) =>
         i === imgIdx
-          ? { ...img, job_id, jobStage: 'analysis_queued', jobProgress: 0, jobDetail: 'Queued for analysis', jobError: null }
+          ? { ...img, job_id, jobStage: 'analysis_queued', jobProgress: 0, jobDetail: 'Queued for analysis', jobError: null, jobRush: rushMode }
           : img
       ))
     } catch (err) {
@@ -2644,6 +2649,28 @@ INSTRUCTIONS:
                           : <><strong>{selectedCount}</strong> sheet{selectedCount !== 1 ? 's' : ''} will be analyzed</>
                         }
                       </div>
+                      <div className="speed-select" role="radiogroup" aria-label="Analysis speed">
+                        <button
+                          type="button"
+                          className={`speed-opt ${rushMode ? 'speed-opt-on' : ''}`}
+                          onClick={() => setRushMode(true)}
+                          aria-checked={rushMode}
+                          role="radio"
+                        >
+                          <span className="speed-opt-name">Rush</span>
+                          <span className="speed-opt-desc">~3–8 min</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`speed-opt ${!rushMode ? 'speed-opt-on' : ''}`}
+                          onClick={() => setRushMode(false)}
+                          aria-checked={!rushMode}
+                          role="radio"
+                        >
+                          <span className="speed-opt-name">Standard</span>
+                          <span className="speed-opt-desc">20–60 min · half the AI cost</span>
+                        </button>
+                      </div>
                       <button
                         className="btn btn-primary"
                         disabled={selectedCount === 0 || proceedingAnalysis}
@@ -2691,6 +2718,10 @@ INSTRUCTIONS:
                       })}
                     </div>
                     <p className="analysis-progress-note">
+                      {img.jobRush
+                        ? <>Rush mode — most plan sets finish in <strong>3–8 minutes</strong>. Progress moves tile by tile. </>
+                        : <>Standard mode — typically <strong>20–60 minutes</strong>. Work runs in cost-saving batches, so the bar advances in jumps with quiet stretches between; that's normal, not a stall. </>
+                      }
                       You can leave this page — results save to your project and will be here when you come back.
                     </p>
                   </div>

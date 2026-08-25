@@ -795,12 +795,76 @@ async function ingestBatchResults(batch, passes, sheetsById, jobId, usage) {
   const res = await fetch(batch.results_url, { headers: BATCH_HEADERS() })
   if (!res.ok) throw new Error(`batch results ${res.status}`)
   const text = await res.text()
-
-  const rows = []
+  const entries = []
   for (const line of text.split('\n')) {
     if (!line.trim()) continue
-    let entry
-    try { entry = JSON.parse(line) } catch { continue }
+    try { entries.push(JSON.parse(line)) } catch { /* skip malformed line */ }
+  }
+  return ingestResultEntries(entries, passes, sheetsById, jobId, usage)
+}
+
+// ── Rush mode: real-time Messages API instead of Batches ─────────
+// Same requests, same validation, same analysis_tiles rows — only the
+// transport differs. Batches halve the token price but sit in Anthropic's
+// queue with no latency guarantee (20–60 min is normal); rush sends each tile
+// synchronously with a small concurrency pool so a 20-sheet set finishes in
+// minutes. Costs ~2× per run. Returns batch-shaped result entries so the
+// ingester doesn't know which path produced them.
+const RUSH_CONCURRENCY = 6
+const RUSH_MAX_ATTEMPTS = 5
+
+async function callTileDirect(request) {
+  const { custom_id, params } = request
+  for (let attempt = 1; attempt <= RUSH_MAX_ATTEMPTS; attempt++) {
+    let res
+    try {
+      res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST', headers: BATCH_HEADERS(), body: JSON.stringify(params),
+      })
+    } catch (e) {
+      // Network blip — retry like a 5xx.
+      if (attempt < RUSH_MAX_ATTEMPTS) { await sleep(Math.min(attempt * attempt * 3000, 30_000)); continue }
+      return { custom_id, result: { type: 'errored', error: e.message } }
+    }
+    if (res.ok) return { custom_id, result: { type: 'succeeded', message: await res.json() } }
+    const body = await res.text()
+    if ((res.status === 429 || res.status >= 500) && attempt < RUSH_MAX_ATTEMPTS) {
+      // Honor retry-after when the API sends one; otherwise quadratic backoff.
+      const ra = Number(res.headers.get('retry-after'))
+      await sleep(ra > 0 ? ra * 1000 : Math.min(attempt * attempt * 3000, 30_000))
+      continue
+    }
+    console.error(`rush tile ${custom_id}: ${res.status} ${body.slice(0, 160)}`)
+    return { custom_id, result: { type: 'errored', error: `${res.status}` } }
+  }
+  return { custom_id, result: { type: 'errored', error: 'exhausted retries' } }
+}
+
+// Runs requests through a concurrency pool. `onEntry` is awaited for each
+// completed tile (ingest + progress). `shouldStop` is consulted before every
+// new start so the chain deadline can drain in-flight work instead of
+// orphaning it when Netlify kills the invocation.
+async function runRushPool(requests, onEntry, shouldStop) {
+  let next = 0
+  let stopped = false
+  const worker = async () => {
+    while (next < requests.length) {
+      if (shouldStop()) { stopped = true; return }
+      const req = requests[next++]
+      const entry = await callTileDirect(req)
+      await onEntry(entry)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(RUSH_CONCURRENCY, requests.length) }, worker))
+  return { stopped }
+}
+
+// Validates batch-shaped result entries and upserts them into analysis_tiles.
+// Shared by the Batches path (JSONL) and rush mode (direct responses).
+async function ingestResultEntries(entries, passes, sheetsById, jobId, usage) {
+  const rows = []
+  for (const entry of entries) {
+    if (!entry?.custom_id) continue
     const [passKey, sheetId, idxStr] = entry.custom_id.split('_')
     const pass = passes.find(p => p.key === passKey)
     const sheet = sheetsById.get(sheetId)
@@ -1928,6 +1992,9 @@ export const handler = async (event) => {
     const { data: jobRow } = await supabase
       .from('processing_jobs').select('batch_state, config').eq('id', job_id).single()
     const cfg = jobRow?.config || {}
+    // Rush mode: real-time API with a concurrency pool instead of Batches.
+    // Minutes instead of tens of minutes, at ~2× token price. See runRushPool.
+    const RUSH = cfg.rush === true
     const tiers = { pass1: 'opus', pass2: 'opus', pass4: 'opus', pass5: 'haiku', pass6: 'sonnet', pass7: 'haiku', ...(cfg.models || {}) }
     const M = (k) => MODEL_TIERS[tiers[k]] || OPUS
 
@@ -2102,6 +2169,9 @@ export const handler = async (event) => {
       if (allDone) { await persistState(); break }
 
       // 2. Submit batches for passes with missing tiles and no pending batch.
+      //    (Rush mode runs the tiles inline here instead of submitting.)
+      let rushDone = 0          // tiles completed inline this iteration (progress)
+      let rushStopped = false   // chain deadline hit mid-pass — drain and chain
       for (const pass of TILE_PASSES) {
         if (missing[pass.key].length === 0 || state.batches[pass.key]?.length) continue
         const resubmits = state.resubmits[pass.key] || 0
@@ -2180,6 +2250,31 @@ export const handler = async (event) => {
         }
         if (!requests.length) continue
 
+        if (RUSH) {
+          // Run this pass's tiles now. Each result is ingested the moment it
+          // lands, so progress moves tile-by-tile and a chain kill loses at
+          // most the tiles in flight — never anything already paid for.
+          let passDone = 0
+          const { stopped } = await runRushPool(requests, async (entry) => {
+            await ingestResultEntries([entry], TILE_PASSES, sheetsById, job_id, state.usage)
+            passDone++; rushDone++
+            if (rushDone % 4 === 0) {
+              const d = Math.min(doneTiles + rushDone, totalTiles)
+              await updateJob(job_id, {
+                stage: pass.stage,
+                progress: 2 + Math.round((d / Math.max(totalTiles, 1)) * 86),
+                stage_detail: `Rush analysis — ${d}/${totalTiles} tiles done (${pass.name}: ${passDone}/${requests.length})`,
+                lease_until: new Date(Date.now() + LEASE_MS).toISOString(),
+              })
+              await persistState()
+            }
+          }, () => Date.now() > chainDeadline)
+          await persistState()
+          if (stopped) { rushStopped = true; break }
+          state.resubmits[pass.key] = resubmits + 1
+          continue
+        }
+
         state.batches[pass.key] = state.batches[pass.key] || []
         for (let i = 0; i < requests.length; i += BATCH_CHUNK) {
           const id = await submitBatch(requests.slice(i, i + BATCH_CHUNK))
@@ -2196,18 +2291,22 @@ export const handler = async (event) => {
 
       // 3. Progress + stage: earliest incomplete pass drives the stage label.
       const currentPass = TILE_PASSES.find(p => missing[p.key].length > 0)
-      const progress = 2 + Math.round((doneTiles / Math.max(totalTiles, 1)) * 86)
+      const shown = Math.min(doneTiles + rushDone, totalTiles)
+      const progress = 2 + Math.round((shown / Math.max(totalTiles, 1)) * 86)
       await updateJob(job_id, {
         stage: currentPass?.stage || 'analysis_pass_5',
         progress,
-        stage_detail: `Batched analysis — ${doneTiles}/${totalTiles} tiles done${processing ? `, ${processing} in flight` : ''}${state.blankSkipped ? `, ${state.blankSkipped} blank skipped` : ''}`,
+        stage_detail: RUSH
+          ? `Rush analysis — ${shown}/${totalTiles} tiles done${state.blankSkipped ? `, ${state.blankSkipped} blank skipped` : ''}`
+          : `Batched analysis — ${doneTiles}/${totalTiles} tiles done${processing ? `, ${processing} in flight` : ''}${state.blankSkipped ? `, ${state.blankSkipped} blank skipped` : ''}`,
         batch_state: state,
         lease_until: new Date(Date.now() + LEASE_MS).toISOString(),
       })
 
-      // 4. Chain or sleep.
-      if (Date.now() > chainDeadline) return await chainToFreshInvocation()
-      await sleep(BATCH_POLL_MS)
+      // 4. Chain or sleep. Rush results are already ingested, so the loop
+      //    re-scans immediately instead of waiting a poll interval.
+      if (rushStopped || Date.now() > chainDeadline) return await chainToFreshInvocation()
+      if (!RUSH) await sleep(BATCH_POLL_MS)
     }
 
     // Assembly (merge passes, depth engine, writes) needs its own clean window —
@@ -2749,22 +2848,23 @@ export const handler = async (event) => {
         learned_rules: learnedRules,
         pass4_sheets_skipped: state.p4SheetsSkipped || 0,   // text layer ruled out ≤2" lines
       },
-      // Real spend for this run (Message Batches pricing). Excludes the few
-      // synchronous assembly Haiku calls (~cents).
+      // Real spend for this run. PRICES are Message Batches rates (50% of
+      // standard); rush mode pays standard, hence the 2× multiplier. Excludes
+      // the few synchronous assembly Haiku calls (~cents).
       run_cost: {
         usage: state.usage,
-        // Cache writes bill at 1.25× input, cache reads at 0.1× (stacked on the
-        // 50% batch discount already baked into PRICES).
+        mode: RUSH ? 'rush' : 'batch',
+        // Cache writes bill at 1.25× input, cache reads at 0.1×.
         est_usd: Math.round(
           ['opus', 'sonnet', 'haiku'].reduce((sum, tier) =>
             sum +
             ((state.usage[tier]?.in || 0) / 1e6) * PRICES[tier].in +
             ((state.usage[tier]?.cw || 0) / 1e6) * PRICES[tier].in * 1.25 +
             ((state.usage[tier]?.cr || 0) / 1e6) * PRICES[tier].in * 0.1 +
-            ((state.usage[tier]?.out || 0) / 1e6) * PRICES[tier].out, 0) * 100) / 100,
+            ((state.usage[tier]?.out || 0) / 1e6) * PRICES[tier].out, 0) * (RUSH ? 2 : 1) * 100) / 100,
       },
       // Which model tier ran each pass, and how this run scored.
-      config: { label: cfg.label || 'Standard (Opus)', models: tiers, calibration: !!cfg.calibration },
+      config: { label: cfg.label || 'Standard (Opus)', models: tiers, calibration: !!cfg.calibration, rush: RUSH },
       calibration_score: {
         vs_engineer: varianceMetrics(variance),
         vs_truth: Array.isArray(projGeo?.calibration_truth) && projGeo.calibration_truth.length
