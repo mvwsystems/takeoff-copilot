@@ -420,12 +420,22 @@ const REPORT_CSS = `
     body { background: #FFFFFF; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .page { max-width: none; padding-bottom: 16px; }
     .band { padding: 20px 24px 16px; }
-    .body-pad { padding: 18px 24px 0; }
+    .body-pad { padding: 18px 24px 30px; }
     .section { break-inside: avoid-page; page-break-inside: avoid; }
     .section-long { break-inside: auto; page-break-inside: auto; }
     tr { break-inside: avoid; page-break-inside: avoid; }
     thead { display: table-header-group; }
-    @page { margin: 12mm; }
+    /* Fixed elements repeat on every printed page — this is what turns the
+       one flowed footer into a real page footer at the same spot on every
+       page, instead of it landing wherever the content happens to end
+       (sometimes alone on a trailing blank page). White background + border
+       keep it legible if a full page's last line runs close. */
+    .footer {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      margin: 0; padding: 5px 0 0;
+      background: #FFFFFF; border-top: 2px solid #0A0A0A;
+    }
+    @page { margin: 12mm 12mm 16mm; }
   }
 `
 
@@ -787,11 +797,18 @@ const RFQ_REPORT_CSS = `
     body { background: #FFFFFF; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .page { max-width: none; padding-bottom: 16px; }
     .band { padding: 20px 24px 16px; }
-    .body-pad { padding: 18px 24px 0; }
+    .body-pad { padding: 18px 24px 30px; }
     .section { break-inside: auto; page-break-inside: auto; }
     tr { break-inside: avoid; page-break-inside: avoid; }
     thead { display: table-header-group; }
-    @page { margin: 12mm; }
+    /* Repeat the footer at the bottom of every printed page (fixed elements
+       repeat per page in print) instead of flowing after the last section. */
+    .footer {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      margin: 0; padding: 5px 0 0;
+      background: #FFFFFF; border-top: 2px solid #0A0A0A;
+    }
+    @page { margin: 12mm 12mm 16mm; }
   }
 `
 
