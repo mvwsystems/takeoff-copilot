@@ -18,6 +18,15 @@ const ls = {
   set(key, val) { try { localStorage.setItem(key, val) } catch { /* unavailable */ } },
 }
 
+// ── Report mode ──────────────────────────────────────────────────
+// SCOPE_FIRST_REPORT leads the results view and the PDF export with the
+// Scope & Risk read (plan grade, completeness gaps, risk flags, RFI list);
+// the quantity takeoff collapses behind a toggle and exports as an appendix.
+// REVERT PATH: set this to false and the classic quantities-first layout
+// comes back everywhere — screen and PDF — with no other change. The
+// extraction pipeline is identical in both modes; this is presentation only.
+const SCOPE_FIRST_REPORT = true
+
 export default function Dashboard() {
   const { user } = useAuth()
   const [images, setImages] = useState([])
@@ -28,6 +37,9 @@ export default function Dashboard() {
   const [error, setError] = useState(null)
   const [comparisonData, setComparisonData] = useState('')
   const [activeTab, setActiveTab] = useState('takeoff')
+  // In scope-first mode the quantity table starts collapsed; classic mode
+  // shows it always (toggle is then a no-op — the wrap condition ORs it in).
+  const [showQuantities, setShowQuantities] = useState(!SCOPE_FIRST_REPORT)
   const [processingAll, setProcessingAll] = useState(false)
   const [screenings, setScreenings] = useState({})
   const [screeningSheet, setScreeningSheet] = useState(null)
@@ -626,11 +638,22 @@ INSTRUCTIONS:
   const applyResolution = (c, verdict, rawAnswer) => {
     const res = results[activeImage]
     const corrections = []
-    const target = c.item_no != null ? (res.items || []).find(i => i.item_no === c.item_no) : null
-    if (target && verdict.depth_ft != null) corrections.push({ item_no: c.item_no, description: target.description, field: 'depth', original: target.depth_max ?? null, corrected: verdict.depth_ft })
-    if (target && verdict.quantity != null) corrections.push({ item_no: c.item_no, description: target.description, field: 'quantity', original: target.quantity ?? null, corrected: verdict.quantity })
+    // Deduped depth questions carry every matching item_no in item_nos — the
+    // answered depth fans out to all of them. Quantities never fan out (two
+    // runs sharing a description can still have different lengths).
+    const targetNos = Array.isArray(c.item_nos) && c.item_nos.length
+      ? c.item_nos
+      : (c.item_no != null ? [c.item_no] : [])
+    const qtyTargetNo = targetNos[0] ?? null
+    for (const no of targetNos) {
+      const t = (res.items || []).find(i => i.item_no === no)
+      if (!t) continue
+      if (verdict.depth_ft != null) corrections.push({ item_no: no, description: t.description, field: 'depth', original: t.depth_max ?? null, corrected: verdict.depth_ft })
+      if (verdict.quantity != null && no === qtyTargetNo) corrections.push({ item_no: no, description: t.description, field: 'quantity', original: t.quantity ?? null, corrected: verdict.quantity })
+    }
     const newItems = (res.items || []).map(it => {
-      if (c.item_no == null || it.item_no !== c.item_no) return it
+      if (!targetNos.includes(it.item_no)) return it
+      if (verdict.quantity != null && verdict.depth_ft == null && it.item_no !== qtyTargetNo) return it
       const upd = { ...it }
       if (verdict.depth_ft != null) {
         upd.depth_avg = verdict.depth_ft
@@ -638,7 +661,7 @@ INSTRUCTIONS:
         upd.depth_unavailable = false
         upd.notes = `Depth ${verdict.depth_ft} ft — estimator provided. ${upd.notes || ''}`.slice(0, 600)
       }
-      if (verdict.quantity != null) {
+      if (verdict.quantity != null && it.item_no === qtyTargetNo) {
         upd.quantity = verdict.quantity
         upd.notes = `Qty ${verdict.quantity} ${upd.unit} — estimator verified. ${upd.notes || ''}`.slice(0, 600)
       }
@@ -1627,6 +1650,7 @@ INSTRUCTIONS:
       filename: images[idx]?.name || 'takeoff',
       gradeLabel: sc ? `${sc.grade}${sc.grade_label ? ` — ${sc.grade_label}` : ''}` : null,
       gradeRationale: sc?.grade_rationale || sc?.rationale || null,
+      scopeFirst: SCOPE_FIRST_REPORT,
     }
   }
 
@@ -2845,6 +2869,73 @@ INSTRUCTIONS:
                       </div>
                     </div>
                   )}
+                  {/* ── SCOPE & RISK LEAD (scope-first mode) — the read an
+                      estimator needs before any quantity: how biddable the
+                      plans are, what's missing, what to ask. Data comes from
+                      sections that already render below; this block only
+                      changes what leads. ── */}
+                  {SCOPE_FIRST_REPORT && (() => {
+                    const rm = result.risk_and_misses || {}
+                    const pc = result.plan_completeness
+                    const openQs = openClarifications(result)
+                    const gaps = (pc?.gaps || []).slice(0, 4)
+                    const scopeGaps = (rm.scope_gaps || []).slice(0, 4)
+                    return (
+                      <div className="scope-lead">
+                        <div className="scope-lead-head">
+                          <span className="risk-flags-title"><ShieldAlert size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />Scope &amp; Risk</span>
+                          {pc && (
+                            <span className={`scope-lead-score ${pc.grade === 'A' || pc.grade === 'B' ? 'scope-score-good' : pc.grade === 'C' ? 'scope-score-mid' : 'scope-score-bad'}`}>
+                              Plan completeness {pc.total}/100 · Grade {pc.grade}
+                            </span>
+                          )}
+                        </div>
+                        {rm.top_risks && <div className="scope-lead-risks">{rm.top_risks}</div>}
+                        {(gaps.length > 0 || scopeGaps.length > 0) && (
+                          <div className="scope-lead-cols">
+                            {gaps.length > 0 && (
+                              <div className="scope-lead-col">
+                                <div className="scope-lead-col-title">Missing from the plans</div>
+                                {gaps.map((g, i) => (
+                                  <div key={i} className="scope-lead-item">
+                                    <span className={`pill-mini ${g.severity === 'critical' ? 'pill-mini-red' : ''}`}>{g.severity}</span>
+                                    <span>{g.description}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {scopeGaps.length > 0 && (
+                              <div className="scope-lead-col">
+                                <div className="scope-lead-col-title">Commonly missed scope</div>
+                                {scopeGaps.map((g, i) => (
+                                  <div key={i} className="scope-lead-item">
+                                    <span className={`pill-mini ${g.status === 'MISSING' ? 'pill-mini-red' : ''}`}>{g.status}</span>
+                                    <span>{g.item}{g.note ? ` — ${g.note}` : ''}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {rm.geotech?.geotech_flags && (
+                          <div className="scope-lead-geotech"><strong>Geotech:</strong> {rm.geotech.geotech_flags}</div>
+                        )}
+                        <div className="scope-lead-actions">
+                          {openQs.length > 0
+                            ? <button className="btn btn-primary" onClick={openResolvePanel}>
+                                <MessageCircle size={14} /> Review {openQs.length} open question{openQs.length === 1 ? '' : 's'} (RFI)
+                              </button>
+                            : <span className="text-dim" style={{ fontSize: '0.78rem' }}>No open questions — every flag is resolved.</span>
+                          }
+                          <button className="btn btn-secondary" onClick={() => setShowQuantities(s => !s)}>
+                            <Rows3 size={14} /> {showQuantities ? 'Hide' : 'Show'} quantity takeoff ({(result.items || []).length} items)
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })()}
+
+                  {(!SCOPE_FIRST_REPORT || showQuantities) && (<>
                   {/* ── BID ESTIMATE summary bar (surface the total before detail) ── */}
                   {(() => {
                     const est = estimateFor(result)
@@ -3080,6 +3171,7 @@ INSTRUCTIONS:
                       </tbody>
                     </table>
                   </div>
+                  </>)}
 
                   {/* ── DEPTH SUMMARY (depth engine) ── */}
                   {result.depth_summary && (() => {

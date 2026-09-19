@@ -2740,15 +2740,24 @@ export const handler = async (event) => {
         context: 'These gaps come from the plans themselves, not the extraction. Pricing over them without an answer means carrying scope risk — note your assumption so it is on record.',
       })
     }
+    // Depth questions dedupe by DESCRIPTION, not just item_no — two runs of
+    // "42\" RCP storm main" used to produce the identical question twice.
+    // One question carries every matching item_no; the resolve flow fans the
+    // answered depth out to all of them.
+    const askedDesc = new Map()   // normKey(description) → clarification
     for (const it of items) {
       if (clarifications.length >= 12) break
       if (it.depth_unavailable && !asked.has(it.item_no)) {
         asked.add(it.item_no)
-        clarifications.push({
-          id: cid++, type: 'depth', item_no: it.item_no,
+        const prior = askedDesc.get(normKey(it.description))
+        if (prior) { prior.item_nos.push(it.item_no); continue }
+        const c = {
+          id: cid++, type: 'depth', item_no: it.item_no, item_nos: [it.item_no],
           question: `Depth for "${it.description}" isn't readable on the plans. What depth (in feet) should we use?`,
           context: 'Not in the structure schedule, no rim on the profile, and no finished grade on the grading plan. Verify in the field — excavation, bedding, and trench safety all price off this number.',
-        })
+        }
+        askedDesc.set(normKey(it.description), c)
+        clarifications.push(c)
       }
     }
     for (const it of items) {
@@ -2756,12 +2765,19 @@ export const handler = async (event) => {
       if (it.category === 'STRUCTURE' && it.depth_avg == null && !asked.has(it.item_no) &&
           /manhole|mh\b|inlet|junction|box|vault/i.test(it.description)) {
         asked.add(it.item_no)
-        clarifications.push({
-          id: cid++, type: 'depth', item_no: it.item_no,
+        const prior = askedDesc.get(normKey(it.description))
+        if (prior) { prior.item_nos.push(it.item_no); continue }
+        const c = {
+          id: cid++, type: 'depth', item_no: it.item_no, item_nos: [it.item_no],
           question: `No depth found for "${it.description}". What's the depth (in feet)?`,
           context: 'We checked the structure schedule, the profile (rim − invert), and the grading plan and still couldn\'t pin it down. Grab it from the field.',
-        })
+        }
+        askedDesc.set(normKey(it.description), c)
+        clarifications.push(c)
       }
+    }
+    for (const c of askedDesc.values()) {
+      if (c.item_nos.length > 1) c.context += ` Your answer applies to all ${c.item_nos.length} items with this description.`
     }
     for (const r of reconciliations) {
       if (clarifications.length >= 12) break

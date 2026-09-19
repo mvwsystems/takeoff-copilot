@@ -586,7 +586,32 @@ export const buildTakeoffReportHTML = (result, meta = {}) => {
     rm.geotech?.geotech_flags ? `<div class="section"><div class="section-head">Geotech Flags</div><div class="prose">${esc(rm.geotech.geotech_flags)}</div></div>` : '',
   ].join('')
 
-  const body = [
+  // Plan completeness — used by the scope-first layout, where "how biddable
+  // are these plans" is the headline rather than a footnote.
+  const pc = result?.plan_completeness
+  const completenessSection = pc ? `<div class="section">
+    <div class="section-head">Plan Completeness — ${esc(pc.total)}/100 (Grade ${esc(pc.grade)})</div>
+    ${arr(pc.gaps).map((g) => `<div class="item-row">
+      <div class="item-title"><span class="pill ${g?.severity === 'critical' ? 'pill-red' : ''}">${esc(g?.severity ?? '')}</span> ${esc(g?.description ?? '')}</div>
+    </div>`).join('') || '<div class="item-row"><div class="item-note">No gaps — the plans carry the data a wet-utility bid needs.</div></div>'}
+  </div>` : ''
+
+  // Scope-first: grade, gaps, risks, and the RFI list lead; the quantity
+  // table exports as an appendix. Classic order below is untouched — the
+  // SCOPE_FIRST_REPORT flag in Dashboard.jsx picks between them.
+  const body = (meta.scopeFirst ? [
+    qualityBannerHTML(result),
+    completenessSection,
+    summary.key_observations ? `<div class="section"><div class="section-head">Key Observations</div><div class="prose">${esc(summary.key_observations)}</div></div>` : '',
+    riskSections,
+    listSection('RFI — Open Items // Clarifications', clarificationsHTML(result?.clarifications)),
+    stats,
+    tableSection(`Appendix: Quantity Takeoff — ${items.length} Items`,
+      ['#', 'Category', 'Description', 'Qty', 'Unit', 'Depth Avg (ft)', 'Depth Max (ft)', 'Conf', 'Notes'], itemRows, true),
+    tableSection('Depth Summary',
+      ['Run', 'Utility', 'LF', 'Avg (ft)', 'Max (ft)', 'Buckets', 'LF >= 5 ft'], depthRows),
+    varianceSection,
+  ] : [
     qualityBannerHTML(result),
     stats,
     summary.key_observations ? `<div class="section"><div class="section-head">Key Observations</div><div class="prose">${esc(summary.key_observations)}</div></div>` : '',
@@ -597,9 +622,11 @@ export const buildTakeoffReportHTML = (result, meta = {}) => {
     varianceSection,
     listSection('Open Items // Clarifications', clarificationsHTML(result?.clarifications)),
     riskSections,
-  ].join('')
+  ]).join('')
 
-  return reportShell('Takeoff Copilot — Quantity Report', 'Quantity Takeoff Report', meta, body)
+  return meta.scopeFirst
+    ? reportShell('Takeoff Copilot — Scope & Risk Report', 'Scope & Risk Report', meta, body)
+    : reportShell('Takeoff Copilot — Quantity Report', 'Quantity Takeoff Report', meta, body)
 }
 
 export const buildQAReportHTML = (result, meta = {}) => {
