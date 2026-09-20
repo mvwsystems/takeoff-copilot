@@ -2626,3 +2626,26 @@
 .resolve-defer-btn:hover {
   color: var(--titan-text-dim);
 }
+
+/* Collapsible Job Context (simple mode default: collapsed) */
+.job-context-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--titan-text-dim);
+}
+.job-context-toggle:hover { color: var(--titan-text); }
+.job-context-optional {
+  font-size: 0.58rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--titan-text-muted);
+  border: 1px solid var(--titan-border-light);
+  border-radius: 2px;
+  padding: 0 5px;
+  margin-left: 6px;
+}

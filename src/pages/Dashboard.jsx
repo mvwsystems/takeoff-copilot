@@ -27,6 +27,13 @@ const ls = {
 // extraction pipeline is identical in both modes; this is presentation only.
 const SCOPE_FIRST_REPORT = true
 
+// PRO_TOOLS gates the power surface — QA mode, Compare/Summary tabs, vendor
+// RFQ, bid builder, revisions, by-sheet grouping — so a first-run user sees
+// exactly the pitch: drop a PDF → read the Scope & Risk report → send RFIs.
+// REVERT PATH: set to true and every hidden tool returns exactly as it was;
+// nothing is removed, no data or flows change underneath.
+const PRO_TOOLS = false
+
 export default function Dashboard() {
   const { user } = useAuth()
   const [images, setImages] = useState([])
@@ -40,6 +47,7 @@ export default function Dashboard() {
   // In scope-first mode the quantity table starts collapsed; classic mode
   // shows it always (toggle is then a no-op — the wrap condition ORs it in).
   const [showQuantities, setShowQuantities] = useState(!SCOPE_FIRST_REPORT)
+  const [jobCtxOpen, setJobCtxOpen] = useState(PRO_TOOLS) // collapsed in simple mode
   const [processingAll, setProcessingAll] = useState(false)
   const [screenings, setScreenings] = useState({})
   const [screeningSheet, setScreeningSheet] = useState(null)
@@ -79,7 +87,10 @@ export default function Dashboard() {
   const [feedbackCorrections, setFeedbackCorrections] = useState('')
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false)
   const [feedbackDone, setFeedbackDone] = useState({})
-  const [qaMode, setQaMode] = useState(() => ls.get('tc_qa_mode') !== '0')
+  // Raw preference persists; the effective mode is forced to Takeoff when
+  // pro tools are off (new users otherwise landed in QA mode by default).
+  const [qaModeRaw, setQaMode] = useState(() => ls.get('tc_qa_mode') !== '0')
+  const qaMode = PRO_TOOLS && qaModeRaw
   const [uploadedTakeoffName, setUploadedTakeoffName] = useState(null)
   const [uploadedTakeoffData, setUploadedTakeoffData] = useState(null)
   const [chatOpen, setChatOpen] = useState(false)
@@ -801,7 +812,7 @@ INSTRUCTIONS:
   }
 
   useEffect(() => { ls.set('tc_job_type', jobType) }, [jobType])
-  useEffect(() => { ls.set('tc_qa_mode', qaMode ? '1' : '0') }, [qaMode])
+  useEffect(() => { if (PRO_TOOLS) ls.set('tc_qa_mode', qaModeRaw ? '1' : '0') }, [qaModeRaw])
 
   // Materials catalog (reference data) — fetched once, keyed by slug for thumbnails.
   useEffect(() => {
@@ -2280,11 +2291,19 @@ INSTRUCTIONS:
           </div>
         )}
 
-        {/* JOB CONTEXT */}
+        {/* JOB CONTEXT — collapsed by default in simple mode; the defaults
+            (private job, bore method unconfirmed) are safe and the analysis
+            asks rather than assumes when they're left untouched. */}
         <div className="sidebar-job-context">
-          <div className="sidebar-geotech-header">
-            <span className="sidebar-geotech-title">Job Context</span>
-          </div>
+          <button
+            className="sidebar-geotech-header job-context-toggle"
+            onClick={() => setJobCtxOpen(o => !o)}
+            aria-expanded={jobCtxOpen}
+          >
+            <span className="sidebar-geotech-title">Job Context <span className="job-context-optional">optional</span></span>
+            {jobCtxOpen ? <ChevronUp size={12} /> : <ChevronRight size={12} />}
+          </button>
+          {jobCtxOpen && (
           <div className="job-context-body">
             <div className="job-context-row">
               <span className="job-context-label">Job Type</span>
@@ -2324,6 +2343,7 @@ INSTRUCTIONS:
               />
             </div>
           </div>
+          )}
         </div>
 
         {/* JOB HISTORY */}
@@ -2363,18 +2383,22 @@ INSTRUCTIONS:
       <main className="main-content">
         {/* MODE TOGGLE */}
         <div className="mode-toggle-bar">
-          <button
-            className={`mode-toggle-btn ${!qaMode ? 'active' : ''}`}
-            onClick={() => setQaMode(false)}
-          >
-            Takeoff Mode
-          </button>
-          <button
-            className={`mode-toggle-btn ${qaMode ? 'active' : ''}`}
-            onClick={() => setQaMode(true)}
-          >
-            QA Mode
-          </button>
+          {PRO_TOOLS && (
+            <>
+              <button
+                className={`mode-toggle-btn ${!qaMode ? 'active' : ''}`}
+                onClick={() => setQaMode(false)}
+              >
+                Takeoff Mode
+              </button>
+              <button
+                className={`mode-toggle-btn ${qaMode ? 'active' : ''}`}
+                onClick={() => setQaMode(true)}
+              >
+                QA Mode
+              </button>
+            </>
+          )}
           {BILLING && usage && (
             <button
               className="btn btn-ghost"
@@ -2414,10 +2438,11 @@ INSTRUCTIONS:
               <div className="empty-icon">
                 <Upload size={34} strokeWidth={1.5} />
               </div>
-              <h2>Drop your plan set to start</h2>
+              <h2>Know what's in the plans before you draw a single line</h2>
               <p className="dropzone-sub">
                 Drag a PDF plan set here, or <span className="dropzone-link">browse your files</span>.
-                Storm, sanitary &amp; water — plan and profile.
+                In minutes: plan grade, missing bid data, risk flags, and the RFI list —
+                storm, sanitary &amp; water.
               </p>
               <div className="dropzone-formats">PDF up to 100 MB · or PNG / JPG single sheets</div>
             </div>
@@ -2493,22 +2518,26 @@ INSTRUCTIONS:
                     </button>
                     {!isQAResult && (
                       <>
-                        <button className={`btn btn-ghost ${groupBySheet ? 'btn-active' : ''}`} title="Group the takeoff by sheet / area" onClick={() => setGroupBySheet(g => !g)}>
-                          <Rows3 size={14} /> By Sheet
-                        </button>
-                        <button className="btn btn-ghost" title="Compare this takeoff to a previous version (addendum diff)" onClick={() => setRevisionModal(true)}>
-                          <GitCompare size={14} /> Revisions
-                        </button>
-                        <button className="btn btn-secondary" title="Email this RFQ to your vendors for pricing" onClick={() => setVendorRFQOpen(true)}>
-                          <Send size={14} /> Send RFQ
-                        </button>
-                        <button className="btn btn-ghost" title="Supplier Request for Quote (printable)" onClick={() => {
-                          const meta = { filename: images[activeImage]?.name, company: onboardCompany, contactName: onboardName, phone: onboardPhone, email: user?.email }
-                          const html = buildRFQReportHTML(result, materialsMap, meta)
-                          if (html) printReport(html); else setError('No purchasable materials to quote on this takeoff.')
-                        }}>
-                          <Package size={14} /> Print
-                        </button>
+                        {PRO_TOOLS && (
+                          <>
+                            <button className={`btn btn-ghost ${groupBySheet ? 'btn-active' : ''}`} title="Group the takeoff by sheet / area" onClick={() => setGroupBySheet(g => !g)}>
+                              <Rows3 size={14} /> By Sheet
+                            </button>
+                            <button className="btn btn-ghost" title="Compare this takeoff to a previous version (addendum diff)" onClick={() => setRevisionModal(true)}>
+                              <GitCompare size={14} /> Revisions
+                            </button>
+                            <button className="btn btn-secondary" title="Email this RFQ to your vendors for pricing" onClick={() => setVendorRFQOpen(true)}>
+                              <Send size={14} /> Send RFQ
+                            </button>
+                            <button className="btn btn-ghost" title="Supplier Request for Quote (printable)" onClick={() => {
+                              const meta = { filename: images[activeImage]?.name, company: onboardCompany, contactName: onboardName, phone: onboardPhone, email: user?.email }
+                              const html = buildRFQReportHTML(result, materialsMap, meta)
+                              if (html) printReport(html); else setError('No purchasable materials to quote on this takeoff.')
+                            }}>
+                              <Package size={14} /> Print
+                            </button>
+                          </>
+                        )}
                         <button className="btn btn-secondary" onClick={() => exportCSV(false)}>
                           <Download size={14} /> CSV
                         </button>
@@ -2546,7 +2575,8 @@ INSTRUCTIONS:
             <div className="tab-bar">
               {(isQAResult || (!result && qaMode)
                 ? [['report', 'Bid Risk Report', ShieldAlert], ['plan', 'Plan View', Eye]]
-                : [['takeoff', 'Takeoff', Layers], ['plan', 'Plan View', Eye], ['compare', 'Compare', GitCompare], ['summary', 'Summary', BarChart3]]
+                : [['takeoff', PRO_TOOLS ? 'Takeoff' : 'Report', Layers], ['plan', 'Plan View', Eye],
+                   ...(PRO_TOOLS ? [['compare', 'Compare', GitCompare], ['summary', 'Summary', BarChart3]] : [])]
               ).map(([key, label, Icon]) => (
                 <button key={key} className={`tab ${activeTab === key ? 'active' : ''}`} onClick={() => setActiveTab(key)}>
                   <Icon size={14} />
@@ -3058,9 +3088,11 @@ INSTRUCTIONS:
                             </button>
                           </>
                         )}
-                        <button className="btn btn-primary" title="Full bid build-up: labor, earthwork, indirects, margin — with a review gate" onClick={() => setBidBuilderOpen(true)}>
-                          <FileText size={14} /> Build Bid →
-                        </button>
+                        {PRO_TOOLS && (
+                          <button className="btn btn-primary" title="Full bid build-up: labor, earthwork, indirects, margin — with a review gate" onClick={() => setBidBuilderOpen(true)}>
+                            <FileText size={14} /> Build Bid →
+                          </button>
+                        )}
                       </div>
                     </div>
                   )}
