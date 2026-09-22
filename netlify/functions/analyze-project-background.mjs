@@ -1751,6 +1751,41 @@ function summarizeFirmHistory(firmName, runs, corrCount) {
   }
 }
 
+// ── Jurisdiction detection ────────────────────────────────────────
+// Cover sheets, title blocks, and general notes name the city ("CITY OF
+// BAYTOWN", "per COFW standards"). Regex over the text layer, most-frequent
+// mention wins — deterministic and free. Returns { slug, display, mentions }
+// or null. Texas-first: slugs are '<city>-tx' until other states matter.
+const JURIS_STOP = new Set([
+  'texas', 'tx', 'standard', 'standards', 'specification', 'specifications',
+  'spec', 'specs', 'public', 'water', 'sewer', 'storm', 'department', 'dept',
+  'construction', 'details', 'detail', 'general', 'engineering', 'utility',
+  'utilities', 'and', 'ordinance', 'code', 'requirements', 'inspection',
+])
+const JURIS_ABBREV = { cofw: 'fort worth', cofb: 'fort worth' } // common plan-note shorthand
+function detectJurisdiction(texts) {
+  const counts = new Map()
+  const bump = (city) => counts.set(city, (counts.get(city) || 0) + 1)
+  for (const t of texts) {
+    const s = String(t || '')
+    for (const m of s.matchAll(/\b(?:city|town)\s+of\s+([a-z][a-z.'-]*(?:\s+[a-z][a-z.'-]*){0,2})/gi)) {
+      const words = []
+      for (const raw of m[1].toLowerCase().split(/\s+/)) {
+        const w = raw.replace(/[.,;:)]+$/, '')
+        if (JURIS_STOP.has(w)) break
+        words.push(w)
+      }
+      const city = words.join(' ')
+      if (city.length >= 3 && city.length <= 30) bump(city)
+    }
+    for (const m of s.matchAll(/\b(cofw|cofb)\b/gi)) bump(JURIS_ABBREV[m[1].toLowerCase()])
+  }
+  if (!counts.size) return null
+  const [city, mentions] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]
+  const display = city.split(' ').map(w => (w[0] || '').toUpperCase() + w.slice(1)).join(' ')
+  return { slug: city.replace(/[^a-z0-9]+/g, '-') + '-tx', display: `City of ${display}`, mentions }
+}
+
 async function firmHistoryBlock(firmName, project_id) {
   if (!firmName) return { block: '', history: null }
   try {
@@ -2038,10 +2073,42 @@ export const handler = async (event) => {
       if (state.firm) console.log(`Engineer firm detected: ${state.firm}`)
     }
     const { block: firmBlock, history: firmHistory } = await firmHistoryBlock(state.firm, project_id)
+
+    // ── Jurisdiction detection + spec library ─────────────────
+    // Detected once per run (memoized in batch_state like the firm). If the
+    // library holds digested rules for the city, they ride the brain the way
+    // firm history does — the customer never uploads a spec the library
+    // already knows. Fails open: no match, no table, no problem.
+    if (state.jurisdiction === undefined) {
+      try {
+        const texts = []
+        for (let i = 0; i < Math.min(3, doc.countPages()); i++) texts.push(getPageText(i).runs.map(r => r.text).join(' '))
+        for (const s of sheets.slice(0, 6)) texts.push(getPageText(s.page_number - 1).runs.map(r => r.text).join(' '))
+        state.jurisdiction = detectJurisdiction(texts)   // null = tried, none found
+      } catch (e) {
+        console.error('jurisdiction detection failed:', e.message)
+        state.jurisdiction = null
+      }
+    }
+    let jurisdictionBlock = ''
+    let jurisdictionSpec = null
+    if (state.jurisdiction) {
+      try {
+        const { data: js } = await supabase.from('jurisdiction_specs')
+          .select('slug, display_name, rules_text, effective_date')
+          .eq('slug', state.jurisdiction.slug).maybeSingle()
+        jurisdictionSpec = js || null
+        if (js?.rules_text) {
+          jurisdictionBlock = `\n\n════ JURISDICTION: ${js.display_name} ════\nThis project is in ${js.display_name}. Apply these municipal standards when extracting and flagging — they override generic assumptions${js.effective_date ? ` (spec revision ${js.effective_date})` : ''}:\n${js.rules_text}\n`
+        }
+      } catch (e) {
+        console.error('jurisdiction spec lookup failed:', e.message)   // fail open
+      }
+    }
     await persistState()
 
     // Final brain: static playbook + learned corrections + firm history.
-    const brain = loadBrain() + learnedBlock + firmBlock
+    const brain = loadBrain() + learnedBlock + firmBlock + jurisdictionBlock
 
     const TILE_PASSES = [
       { key: 'pass1', name: 'Pass 1 plan quantities', stage: 'analysis_pass_1', sheets: p1Sheets, task: PASS1_TASK, system: brain, model: M('pass1'), validator: validateItems, resultKey: 'items', maxTokens: 8192 },
@@ -2816,12 +2883,18 @@ export const handler = async (event) => {
       // result_json->>engineer_firm — no schema change needed).
       engineer_firm: state.firm || null,
       firm_history: firmHistory,
+      jurisdiction: state.jurisdiction ? {
+        detected: state.jurisdiction.display,
+        slug: state.jurisdiction.slug,
+        library_match: !!jurisdictionSpec,
+        rules_applied: !!jurisdictionSpec?.rules_text,
+      } : null,
       summary: {
         total_items: items.length,
         high_confidence_count: counts.HIGH,
         medium_confidence_count: counts.MEDIUM,
         low_confidence_count: counts.LOW,
-        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${state.firm ? `Plans by ${state.firm}${firmHistory?.runs ? ` (${firmHistory.runs} prior takeoff${firmHistory.runs === 1 ? '' : 's'} on this firm — historical read: ${firmHistory.reads || 'unknown'})` : ' (first takeoff on this firm)'}. ` : ''}${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${structDupes.length > 0 ? ` ${structDupes.length} structure${structDupes.length === 1 ? '' : 's'} shown on multiple sheets — counted once.` : ''}${pipeFlags.length > 0 ? ` ${pipeFlags.length} possible cross-sheet pipe duplicate${pipeFlags.length === 1 ? '' : 's'} flagged for review.` : ''}${measurement ? ` Measured pipe linework ~${measurement.measured_pipe_lf} LF vs extracted ~${measurement.extracted_pipe_lf} LF${measurementFlag ? ` — ~${measurementFlag.gap_lf} LF gap, possible missed run.` : ' (in range).'}` : ''}${p7Schedule.length > 0 ? ` Structure schedule found (${p7Schedule.length} structures) — used for depths.` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}${completeness ? ` Plan completeness ${completeness.total}/100 (Grade ${completeness.grade})${completeness.gap_counts.critical > 0 ? `, ${completeness.gap_counts.critical} critical gap${completeness.gap_counts.critical === 1 ? '' : 's'}` : ''}.` : ''}`,
+        key_observations: `Tiled multi-pass analysis of ${sheets.length} sheets (${p1Sheets.length} plan, ${p2Sheets.length} plan-profile). ${state.firm ? `Plans by ${state.firm}${firmHistory?.runs ? ` (${firmHistory.runs} prior takeoff${firmHistory.runs === 1 ? '' : 's'} on this firm — historical read: ${firmHistory.reads || 'unknown'})` : ' (first takeoff on this firm)'}. ` : ''}${failedTiles.length > 0 ? `⚠ COVERAGE GAP: ${failedTiles.length} sheet area(s) could not be analyzed after retries — quantities there may be missing. ` : ''}${textMode === 'raster-only' ? 'RASTER-ONLY (scanned) — no PDF text layer; all quantities are vision reads, treat extractability as lower. ' : `Hybrid extraction: PDF text layer used as ground truth (${totalRuns} text runs). `}${reconciliations.length} plan-vs-profile length mismatch${reconciliations.length === 1 ? '' : 'es'} flagged. ${depthSummary.trench_safety_lf > 0 ? `${depthSummary.trench_safety_lf} LF requires OSHA trench protection (≥${TRENCH_SAFETY_FT} ft).` : ''}${structDupes.length > 0 ? ` ${structDupes.length} structure${structDupes.length === 1 ? '' : 's'} shown on multiple sheets — counted once.` : ''}${pipeFlags.length > 0 ? ` ${pipeFlags.length} possible cross-sheet pipe duplicate${pipeFlags.length === 1 ? '' : 's'} flagged for review.` : ''}${measurement ? ` Measured pipe linework ~${measurement.measured_pipe_lf} LF vs extracted ~${measurement.extracted_pipe_lf} LF${measurementFlag ? ` — ~${measurementFlag.gap_lf} LF gap, possible missed run.` : ' (in range).'}` : ''}${p7Schedule.length > 0 ? ` Structure schedule found (${p7Schedule.length} structures) — used for depths.` : ''}${depthSummary.grade_derived_runs > 0 ? ` ${depthSummary.grade_derived_runs} run${depthSummary.grade_derived_runs === 1 ? '' : 's'} had depth derived from the grading plan (rim not on the profile) — verify.` : ''}${depthSummary.geotech?.rock_excavation_total_lf > 0 ? ` ~${depthSummary.geotech.rock_excavation_total_lf} LF est. rock excavation.` : ''} ${engineerRows.length > 0 ? `Engineer quantity table found — ${variance.length} items compared.` : 'No engineer quantity table found on the analyzed sheets.'}${completeness ? ` Plan completeness ${completeness.total}/100 (Grade ${completeness.grade})${completeness.gap_counts.critical > 0 ? `, ${completeness.gap_counts.critical} critical gap${completeness.gap_counts.critical === 1 ? '' : 's'}` : ''}.` : ''}${state.jurisdiction ? ` Jurisdiction: ${state.jurisdiction.display}${jurisdictionSpec?.rules_text ? ' — city spec rules applied.' : ' (no spec library entry yet).'}` : ''}`,
       },
       text_layer: {
         mode: textMode,

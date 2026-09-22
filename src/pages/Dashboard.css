@@ -2649,3 +2649,19 @@
   padding: 0 5px;
   margin-left: 6px;
 }
+
+/* Jurisdiction chip in the Scope & Risk lead */
+.scope-lead-juris {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  padding: 2px 10px;
+  border-radius: 2px;
+  border: 1px dashed var(--titan-border-light);
+  color: var(--titan-text-muted);
+  white-space: nowrap;
+}
+.scope-juris-on {
+  border-style: solid;
+  color: var(--titan-green, #2ECC71);
+  border-color: var(--titan-green, #2ECC71);
+}

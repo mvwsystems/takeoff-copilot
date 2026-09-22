@@ -2919,6 +2919,16 @@ INSTRUCTIONS:
                               Plan completeness {pc.total}/100 · Grade {pc.grade}
                             </span>
                           )}
+                          {result.jurisdiction && (
+                            <span
+                              className={`scope-lead-juris ${result.jurisdiction.rules_applied ? 'scope-juris-on' : ''}`}
+                              title={result.jurisdiction.rules_applied
+                                ? 'This city is in the spec library — its digested municipal standards were applied during analysis.'
+                                : 'Detected from the plans. No spec library entry for this city yet — flag it and we add the city standards, usually within a day.'}
+                            >
+                              {result.jurisdiction.detected}{result.jurisdiction.rules_applied ? ' · city specs applied' : ''}
+                            </span>
+                          )}
                         </div>
                         {rm.top_risks && <div className="scope-lead-risks">{rm.top_risks}</div>}
                         {(gaps.length > 0 || scopeGaps.length > 0) && (
